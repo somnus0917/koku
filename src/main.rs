@@ -100,6 +100,37 @@ impl CategoryKind {
     }
 }
 
+const DEFAULT_CATEGORIES: &[(&str, CategoryKind)] = &[
+    ("工资", CategoryKind::Income),
+    ("奖金", CategoryKind::Income),
+    ("副业", CategoryKind::Income),
+    ("投资收益", CategoryKind::Income),
+    ("利息", CategoryKind::Income),
+    ("报销", CategoryKind::Income),
+    ("礼金", CategoryKind::Income),
+    ("退款", CategoryKind::Income),
+    ("其他收入", CategoryKind::Income),
+    ("餐饮", CategoryKind::Expense),
+    ("交通", CategoryKind::Expense),
+    ("购物", CategoryKind::Expense),
+    ("居家", CategoryKind::Expense),
+    ("娱乐", CategoryKind::Expense),
+    ("医疗保健", CategoryKind::Expense),
+    ("教育", CategoryKind::Expense),
+    ("旅行", CategoryKind::Expense),
+    ("通讯", CategoryKind::Expense),
+    ("水电燃气", CategoryKind::Expense),
+    ("住房", CategoryKind::Expense),
+    ("保险", CategoryKind::Expense),
+    ("数字订阅", CategoryKind::Expense),
+    ("运动健身", CategoryKind::Expense),
+    ("宠物", CategoryKind::Expense),
+    ("人情往来", CategoryKind::Expense),
+    ("家庭", CategoryKind::Expense),
+    ("税费", CategoryKind::Expense),
+    ("其他支出", CategoryKind::Expense),
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionKind {
@@ -392,6 +423,21 @@ impl BookkeepingService {
             params![name, kind.as_str(), timestamp(Utc::now())],
         )?;
         self.category(self.conn.last_insert_rowid())
+    }
+
+    pub fn ensure_default_categories(&mut self) -> Result<()> {
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let created_at = timestamp(Utc::now());
+        for (name, kind) in DEFAULT_CATEGORIES {
+            transaction.execute(
+                "INSERT OR IGNORE INTO categories(name, kind, created_at) VALUES (?1, ?2, ?3)",
+                params![name, kind.as_str(), created_at],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn account(&self, id: i64) -> Result<Account> {
@@ -1369,6 +1415,7 @@ async fn run_server() -> Result<()> {
     }
     let mut service = BookkeepingService::open(&database_path)?;
     seed_demo_data(&mut service)?;
+    service.ensure_default_categories()?;
 
     let port = std::env::var("KOKU_PORT")
         .unwrap_or_else(|_| "8080".to_owned())
@@ -1410,6 +1457,26 @@ mod tests {
 
     fn test_service() -> Result<BookkeepingService> {
         BookkeepingService::in_memory()
+    }
+
+    #[test]
+    fn default_categories_are_rich_and_idempotent() -> Result<()> {
+        let mut service = test_service()?;
+        service.ensure_default_categories()?;
+        service.ensure_default_categories()?;
+
+        let categories = service.categories()?;
+        assert_eq!(categories.len(), DEFAULT_CATEGORIES.len());
+        assert!(categories
+            .iter()
+            .any(|item| { item.name == "奖金" && item.kind == CategoryKind::Income }));
+        assert!(categories
+            .iter()
+            .any(|item| { item.name == "医疗保健" && item.kind == CategoryKind::Expense }));
+        assert!(categories
+            .iter()
+            .any(|item| { item.name == "其他支出" && item.kind == CategoryKind::Expense }));
+        Ok(())
     }
 
     #[test]
