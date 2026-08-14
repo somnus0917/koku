@@ -110,12 +110,12 @@ function accountIcon(account: Account): LucideIcon {
   return WalletCards;
 }
 
-function accountBalances(account: Account) {
-  return account.balances.length ? account.balances : [{ currency: account.currency, balance: account.balance }];
-}
-
-function availableCurrencies(accounts: Account[]): string[] {
-  return [...new Set([...COMMON_CURRENCIES, ...accounts.flatMap((account) => accountBalances(account).map((item) => item.currency))])];
+function availableCurrencies(accounts: Account[], transactions: Transaction[] = []): string[] {
+  return [...new Set([
+    ...COMMON_CURRENCIES,
+    ...accounts.map((account) => account.currency),
+    ...transactions.map((transaction) => transaction.currency)
+  ])];
 }
 
 function App() {
@@ -167,7 +167,7 @@ function App() {
   }, [toast]);
 
   const currencies = useMemo(() => {
-    const values = new Set(data ? availableCurrencies(data.accounts) : COMMON_CURRENCIES);
+    const values = new Set(data ? availableCurrencies(data.accounts, data.transactions) : COMMON_CURRENCIES);
     values.add(currency);
     return [...values];
   }, [currency, data]);
@@ -509,21 +509,13 @@ function TrendChart({ transactions, currency }: { transactions: Transaction[]; c
 
 function AccountMiniCard({ account, hidden, index }: { account: Account; hidden: boolean; index: number }) {
   const Icon = accountIcon(account);
-  const balances = accountBalances(account);
   return (
     <article className={`account-mini tone-${index % 4}`}>
       <div><span className="account-icon"><Icon size={19} /></span><MoreHorizontal size={18} /></div>
       <small>{account.account_type === "asset" ? "资产账户" : "负债账户"}</small>
       <h3>{account.name}</h3>
-      <div className="account-mini-balances">
-        {balances.slice(0, 2).map((item) => (
-          <div key={item.currency}>
-            <strong>{hidden ? "••••••" : formatMoney(item.balance, item.currency)}</strong>
-            <span className="currency-badge">{item.currency}</span>
-          </div>
-        ))}
-        {balances.length > 2 && <small>另有 {balances.length - 2} 个币种</small>}
-      </div>
+      <strong>{hidden ? "••••••" : formatMoney(account.balance, account.currency)}</strong>
+      <span className="currency-badge">{account.currency}</span>
     </article>
   );
 }
@@ -566,18 +558,13 @@ function AccountGroup({ title, subtitle, accounts }: { title: string; subtitle: 
       <div className="account-grid">
         {accounts.map((account, index) => {
           const Icon = accountIcon(account);
-          const balances = accountBalances(account);
           return (
             <article className="account-detail-card" key={account.id}>
               <span className={`large-account-icon tone-${index % 4}`}><Icon size={23} /></span>
               <div className="account-detail-copy">
-                <h3>{account.name}</h3><span>{balances.length} 个币种余额 · 手动账户</span>
+                <h3>{account.name}</h3><span>{account.currency} 结算 · 单一余额</span>
               </div>
-              <div className="account-detail-balances">
-                {balances.map((item) => (
-                  <div key={item.currency}><strong>{formatMoney(item.balance, item.currency)}</strong><span>{item.currency}</span></div>
-                ))}
-              </div>
+              <strong>{formatMoney(account.balance, account.currency)}</strong>
               <button className="bare-button" aria-label={`${account.name}更多操作`}><MoreHorizontal size={19} /></button>
             </article>
           );
@@ -696,6 +683,9 @@ function TransactionRow({
         <strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong>
         {transaction.kind === "transfer" && transaction.target_amount && transaction.target_currency && (
           <span>到账 {formatMoney(transaction.target_amount, transaction.target_currency)}</span>
+        )}
+        {transaction.kind !== "transfer" && account && transaction.currency !== account.currency && (
+          <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
@@ -1055,9 +1045,9 @@ function TransactionModal({
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
   const [sourceCurrency, setSourceCurrency] = useState(accounts[0]?.currency ?? "CNY");
-  const [targetCurrency, setTargetCurrency] = useState(accounts[1]?.currency ?? accounts[0]?.currency ?? "CNY");
   const [categoryId, setCategoryId] = useState(categories.find((item) => item.kind === "expense")?.id ?? 0);
   const [amount, setAmount] = useState("");
+  const [settledAmount, setSettledAmount] = useState("");
   const [targetAmount, setTargetAmount] = useState("");
   const [note, setNote] = useState("");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
@@ -1065,8 +1055,11 @@ function TransactionModal({
   const [formError, setFormError] = useState<string | null>(null);
   const matchingCategories = categories.filter((item) => item.kind === kind);
   const currencyOptions = availableCurrencies(accounts);
-  const crossCurrency = kind === "transfer" && sourceCurrency !== targetCurrency;
-  const sameTransferEndpoint = kind === "transfer" && accountId === targetId && sourceCurrency === targetCurrency;
+  const source = accounts.find((item) => item.id === accountId);
+  const target = accounts.find((item) => item.id === targetId);
+  const foreignTransaction = kind !== "transfer" && Boolean(source) && sourceCurrency !== source?.currency;
+  const crossCurrency = kind === "transfer" && source?.currency !== target?.currency;
+  const sameTransferEndpoint = kind === "transfer" && accountId === targetId;
 
   const changeKind = (nextKind: TransactionKind) => {
     setKind(nextKind);
@@ -1088,15 +1081,25 @@ function TransactionModal({
             from_account_id: accountId,
             to_account_id: targetId,
             source_amount: amount,
-            source_currency: sourceCurrency,
             target_amount: crossCurrency ? targetAmount : amount,
-            target_currency: targetCurrency,
             occurred_at: isoDate,
             note
           }
         });
       } else {
-        await onSubmit({ kind, payload: { kind, account_id: accountId, category_id: categoryId, amount, currency: sourceCurrency, occurred_at: isoDate, note } });
+        await onSubmit({
+          kind,
+          payload: {
+            kind,
+            account_id: accountId,
+            category_id: categoryId,
+            amount,
+            currency: sourceCurrency,
+            settled_amount: foreignTransaction ? settledAmount : amount,
+            occurred_at: isoDate,
+            note
+          }
+        });
       }
     } catch (reason) {
       setFormError(reason instanceof Error ? reason.message : "保存失败");
@@ -1115,25 +1118,25 @@ function TransactionModal({
             </button>
           ))}
         </div>
-        <label className="amount-field"><span>{kind === "income" ? "收入金额" : kind === "transfer" ? "转出金额" : "支出金额"} · {sourceCurrency}</span><div><em>{sourceCurrency === "CNY" ? "¥" : sourceCurrency === "USD" ? "$" : sourceCurrency}</em><input autoFocus required min="0.01" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
+        <label className="amount-field"><span>{kind === "income" ? "收入金额" : kind === "transfer" ? "转出金额" : "支出金额"} · {kind === "transfer" ? source?.currency : sourceCurrency}</span><div><em>{(kind === "transfer" ? source?.currency : sourceCurrency) === "CNY" ? "¥" : (kind === "transfer" ? source?.currency : sourceCurrency) === "USD" ? "$" : kind === "transfer" ? source?.currency : sourceCurrency}</em><input autoFocus required min="0.01" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
         <div className="form-grid">
-          <label><span>{kind === "transfer" ? "转出账户" : "账户"}</span><select value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-          <label><span>{kind === "transfer" ? "转出币种" : "交易币种"}</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+          <label><span>{kind === "transfer" ? "转出账户" : "账户"}</span><select value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           {kind === "transfer" ? (
-            <>
-              <label><span>转入账户</span><select value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-              <label><span>转入币种</span><select value={targetCurrency} onChange={(e) => setTargetCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-            </>
+            <label><span>转入账户</span><select value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>{accounts.filter((item) => item.id !== accountId).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           ) : (
-            <label><span>分类</span><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+            <>
+              <label><span>交易币种</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+              <label><span>分类</span><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+            </>
           )}
-          {crossCurrency && <label><span>转入金额 · {targetCurrency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
+          {foreignTransaction && <label><span>计入账户余额 · {source?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => setSettledAmount(e.target.value)} placeholder="换算后的结算金额" /></label>}
+          {crossCurrency && <label><span>转入金额 · {target?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
           <label><span>时间</span><input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} /></label>
           <label className={kind === "transfer" && crossCurrency ? "" : "span-two"}><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="这笔钱花在了哪里？" /></label>
         </div>
-        {sameTransferEndpoint && <div className="form-error">同一账户内换汇时，转出与转入币种不能相同。</div>}
+        {sameTransferEndpoint && <div className="form-error">转出与转入账户不能相同。</div>}
         {formError && <div className="form-error">{formError}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? "保存中" : "确认记录"}</button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (foreignTransaction && !settledAmount) || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? "保存中" : "确认记录"}</button></div>
       </form>
     </ModalShell>
   );
@@ -1157,8 +1160,8 @@ function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i
         <div className="form-grid">
           <label className="span-two"><span>账户名称</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：储蓄卡" /></label>
           <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}><option value="asset">资产</option><option value="liability">负债</option></select></label>
-          <label><span>初始币种</span><input required maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
-          <label className="span-two"><span>初始币种期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
+          <label><span>账户结算币种</span><input required maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
+          <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建账户</button></div>

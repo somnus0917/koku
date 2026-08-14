@@ -87,6 +87,7 @@ export function createTransaction(input: {
   category_id: number;
   amount: string;
   currency: string;
+  settled_amount?: string;
   occurred_at: string;
   note: string;
 }): Promise<Transaction> {
@@ -100,9 +101,7 @@ export function createTransfer(input: {
   from_account_id: number;
   to_account_id: number;
   source_amount: string;
-  source_currency: string;
   target_amount: string;
-  target_currency: string;
   occurred_at: string;
   note: string;
 }): Promise<Transaction> {

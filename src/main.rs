@@ -175,19 +175,12 @@ impl TransactionKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccountBalance {
-    pub currency: String,
-    pub balance: Decimal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
     pub id: i64,
     pub name: String,
     pub account_type: AccountType,
     pub currency: String,
     pub balance: Decimal,
-    pub balances: Vec<AccountBalance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +199,7 @@ pub struct Transaction {
     pub category_id: Option<i64>,
     pub amount: Decimal,
     pub currency: String,
+    pub settled_amount: Decimal,
     pub target_amount: Option<Decimal>,
     pub target_currency: Option<String>,
     pub occurred_at: DateTime<Utc>,
@@ -293,6 +287,7 @@ struct CreateTransactionRequest {
     category_id: i64,
     amount: Decimal,
     currency: Option<String>,
+    settled_amount: Option<Decimal>,
     occurred_at: Option<DateTime<Utc>>,
     #[serde(default)]
     note: String,
@@ -303,9 +298,7 @@ struct CreateTransferRequest {
     from_account_id: i64,
     to_account_id: i64,
     source_amount: Decimal,
-    source_currency: Option<String>,
     target_amount: Decimal,
-    target_currency: Option<String>,
     occurred_at: Option<DateTime<Utc>>,
     #[serde(default)]
     note: String,
@@ -392,13 +385,6 @@ impl BookkeepingService {
                 UNIQUE(name, kind)
             );
 
-            CREATE TABLE IF NOT EXISTS account_balances (
-                account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-                currency   TEXT NOT NULL,
-                balance    TEXT NOT NULL,
-                PRIMARY KEY (account_id, currency)
-            );
-
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer')),
@@ -407,6 +393,7 @@ impl BookkeepingService {
                 category_id   INTEGER REFERENCES categories(id),
                 amount        TEXT NOT NULL,
                 currency      TEXT,
+                settled_amount TEXT,
                 target_amount TEXT,
                 target_currency TEXT,
                 occurred_at   TEXT NOT NULL,
@@ -436,11 +423,14 @@ impl BookkeepingService {
                 [],
             )?;
         }
+        if !table_has_column(&conn, "transactions", "settled_amount")? {
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN settled_amount TEXT",
+                [],
+            )?;
+        }
         conn.execute_batch(
             r#"
-            INSERT OR IGNORE INTO account_balances(account_id, currency, balance)
-                SELECT id, currency, balance FROM accounts;
-
             UPDATE transactions
             SET currency = (
                 SELECT currency FROM accounts WHERE accounts.id = transactions.account_id
@@ -452,6 +442,10 @@ impl BookkeepingService {
                 SELECT currency FROM accounts WHERE accounts.id = transactions.to_account_id
             )
             WHERE kind = 'transfer' AND target_currency IS NULL;
+
+            UPDATE transactions
+            SET settled_amount = amount
+            WHERE settled_amount IS NULL;
 
             CREATE INDEX IF NOT EXISTS idx_transactions_currency
                 ON transactions(currency, occurred_at, voided_at);
@@ -474,12 +468,7 @@ impl BookkeepingService {
             "INSERT INTO accounts(name, account_type, currency, balance, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![name, account_type.as_str(), currency, decimal_to_db(opening_balance), now],
         )?;
-        let account_id = self.conn.last_insert_rowid();
-        self.conn.execute(
-            "INSERT INTO account_balances(account_id, currency, balance) VALUES (?1, ?2, ?3)",
-            params![account_id, currency, decimal_to_db(opening_balance)],
-        )?;
-        self.account(account_id)
+        self.account(self.conn.last_insert_rowid())
     }
 
     pub fn create_category(
@@ -531,7 +520,7 @@ impl BookkeepingService {
                 entity: "account",
                 id,
             })?;
-        self.account_from_row_with_balances(row)
+        account_from_row(row)
     }
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
@@ -547,45 +536,16 @@ impl BookkeepingService {
                 row.get::<_, String>(4)?,
             ))
         })?;
-        rows.map(|row| self.account_from_row_with_balances(row?))
-            .collect()
-    }
-
-    fn account_from_row_with_balances(&self, row: AccountRow) -> Result<Account> {
-        let account_id = row.0;
-        let mut statement = self.conn.prepare(
-            "SELECT currency, balance FROM account_balances WHERE account_id = ?1 ORDER BY currency",
-        )?;
-        let rows = statement.query_map([account_id], |balance_row| {
-            Ok((
-                balance_row.get::<_, String>(0)?,
-                balance_row.get::<_, String>(1)?,
-            ))
-        })?;
-        let balances = rows
-            .map(|balance_row| {
-                let (currency, balance) = balance_row?;
-                Ok(AccountBalance {
-                    currency,
-                    balance: decimal_from_db(&balance)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        account_from_row(row, balances)
+        rows.map(|row| account_from_row(row?)).collect()
     }
 
     pub fn balance_summary(&self, currency: &str) -> Result<BalanceSummary> {
         let currency = normalize_currency(currency.to_owned())?;
         let mut total_assets = Decimal::ZERO;
         let mut total_liabilities = Decimal::ZERO;
-        let mut statement = self.conn.prepare(
-            r#"
-            SELECT a.account_type, b.balance
-            FROM account_balances b
-            JOIN accounts a ON a.id = b.account_id
-            WHERE b.currency = ?1
-            "#,
-        )?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT account_type, balance FROM accounts WHERE currency = ?1")?;
         let rows = statement.query_map([&currency], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -664,17 +624,20 @@ impl BookkeepingService {
             category_id,
             amount,
             currency,
+            amount,
             occurred_at,
             note,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_expense_in_currency(
         &mut self,
         account_id: i64,
         category_id: i64,
         amount: Decimal,
         currency: impl Into<String>,
+        settled_amount: Decimal,
         occurred_at: DateTime<Utc>,
         note: impl Into<String>,
     ) -> Result<Transaction> {
@@ -684,6 +647,7 @@ impl BookkeepingService {
             category_id,
             amount,
             currency.into(),
+            settled_amount,
             occurred_at,
             note.into(),
         )
@@ -698,15 +662,25 @@ impl BookkeepingService {
         note: impl Into<String>,
     ) -> Result<Transaction> {
         let currency = self.account(account_id)?.currency;
-        self.record_income_in_currency(account_id, category_id, amount, currency, occurred_at, note)
+        self.record_income_in_currency(
+            account_id,
+            category_id,
+            amount,
+            currency,
+            amount,
+            occurred_at,
+            note,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_income_in_currency(
         &mut self,
         account_id: i64,
         category_id: i64,
         amount: Decimal,
         currency: impl Into<String>,
+        settled_amount: Decimal,
         occurred_at: DateTime<Utc>,
         note: impl Into<String>,
     ) -> Result<Transaction> {
@@ -716,6 +690,7 @@ impl BookkeepingService {
             category_id,
             amount,
             currency.into(),
+            settled_amount,
             occurred_at,
             note.into(),
         )
@@ -729,10 +704,12 @@ impl BookkeepingService {
         category_id: i64,
         amount: Decimal,
         currency: String,
+        settled_amount: Decimal,
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
         positive_amount(amount)?;
+        positive_amount(settled_amount)?;
         let currency = normalize_currency(currency)?;
         let expected_category_kind = match kind {
             TransactionKind::Expense => CategoryKind::Expense,
@@ -748,6 +725,11 @@ impl BookkeepingService {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let account = Self::account_in_tx(&tx, account_id)?;
+        if currency == account.currency && amount != settled_amount {
+            return Err(KokuError::InvalidInput(
+                "same-currency transactions must settle for the original amount".to_owned(),
+            ));
+        }
         let category = Self::category_in_tx(&tx, category_id)?;
         if category.kind != expected_category_kind {
             return Err(KokuError::CategoryKindMismatch {
@@ -756,16 +738,20 @@ impl BookkeepingService {
             });
         }
 
-        let current_balance = Self::balance_in_tx(&tx, account_id, &currency)?;
+        let current_balance = account.balance;
         let new_balance = match kind {
-            TransactionKind::Expense => account.account_type.apply_outflow(current_balance, amount),
-            TransactionKind::Income => account.account_type.apply_inflow(current_balance, amount),
+            TransactionKind::Expense => account
+                .account_type
+                .apply_outflow(current_balance, settled_amount),
+            TransactionKind::Income => account
+                .account_type
+                .apply_inflow(current_balance, settled_amount),
             TransactionKind::Transfer => unreachable!("validated above"),
         };
-        Self::set_balance(&tx, account_id, &currency, new_balance)?;
+        Self::set_balance(&tx, account_id, new_balance)?;
         tx.execute(
-            "INSERT INTO transactions(kind, account_id, category_id, amount, currency, occurred_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![kind.as_str(), account_id, category_id, decimal_to_db(amount), currency, timestamp(occurred_at), note],
+            "INSERT INTO transactions(kind, account_id, category_id, amount, currency, settled_amount, occurred_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![kind.as_str(), account_id, category_id, decimal_to_db(amount), currency, decimal_to_db(settled_amount), timestamp(occurred_at), note],
         )?;
         let transaction_id = tx.last_insert_rowid();
         tx.commit()?;
@@ -781,37 +767,9 @@ impl BookkeepingService {
         occurred_at: DateTime<Utc>,
         note: impl Into<String>,
     ) -> Result<Transaction> {
-        let source_currency = self.account(from_account_id)?.currency;
-        let target_currency = self.account(to_account_id)?.currency;
-        self.record_transfer_between_currencies(
-            from_account_id,
-            source_currency,
-            to_account_id,
-            target_currency,
-            source_amount,
-            target_amount,
-            occurred_at,
-            note,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_transfer_between_currencies(
-        &mut self,
-        from_account_id: i64,
-        source_currency: impl Into<String>,
-        to_account_id: i64,
-        target_currency: impl Into<String>,
-        source_amount: Decimal,
-        target_amount: Decimal,
-        occurred_at: DateTime<Utc>,
-        note: impl Into<String>,
-    ) -> Result<Transaction> {
-        let source_currency = normalize_currency(source_currency.into())?;
-        let target_currency = normalize_currency(target_currency.into())?;
-        if from_account_id == to_account_id && source_currency == target_currency {
+        if from_account_id == to_account_id {
             return Err(KokuError::InvalidInput(
-                "source and target must differ by account or currency".to_owned(),
+                "source and target accounts must be different".to_owned(),
             ));
         }
         positive_amount(source_amount)?;
@@ -822,33 +780,29 @@ impl BookkeepingService {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let source = Self::account_in_tx(&tx, from_account_id)?;
         let target = Self::account_in_tx(&tx, to_account_id)?;
-        if source_currency == target_currency && source_amount != target_amount {
+        if source.currency == target.currency && source_amount != target_amount {
             return Err(KokuError::InvalidInput(
                 "same-currency transfers must use equal source and target amounts".to_owned(),
             ));
         }
 
-        let source_balance = Self::balance_in_tx(&tx, from_account_id, &source_currency)?;
-        let target_balance = Self::balance_in_tx(&tx, to_account_id, &target_currency)?;
         Self::set_balance(
             &tx,
             from_account_id,
-            &source_currency,
             source
                 .account_type
-                .apply_outflow(source_balance, source_amount),
+                .apply_outflow(source.balance, source_amount),
         )?;
         Self::set_balance(
             &tx,
             to_account_id,
-            &target_currency,
             target
                 .account_type
-                .apply_inflow(target_balance, target_amount),
+                .apply_inflow(target.balance, target_amount),
         )?;
         tx.execute(
-            "INSERT INTO transactions(kind, account_id, to_account_id, amount, currency, target_amount, target_currency, occurred_at, note) VALUES ('transfer', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![from_account_id, to_account_id, decimal_to_db(source_amount), source_currency, decimal_to_db(target_amount), target_currency, timestamp(occurred_at), note.into()],
+            "INSERT INTO transactions(kind, account_id, to_account_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note) VALUES ('transfer', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![from_account_id, to_account_id, decimal_to_db(source_amount), source.currency, decimal_to_db(source_amount), decimal_to_db(target_amount), target.currency, timestamp(occurred_at), note.into()],
         )?;
         let transaction_id = tx.last_insert_rowid();
         tx.commit()?;
@@ -865,27 +819,23 @@ impl BookkeepingService {
         }
 
         let source = Self::account_in_tx(&tx, transaction.account_id)?;
-        let source_balance =
-            Self::balance_in_tx(&tx, transaction.account_id, &transaction.currency)?;
         match transaction.kind {
             TransactionKind::Expense => {
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
-                    &transaction.currency,
                     source
                         .account_type
-                        .apply_inflow(source_balance, transaction.amount),
+                        .apply_inflow(source.balance, transaction.settled_amount),
                 )?;
             }
             TransactionKind::Income => {
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
-                    &transaction.currency,
                     source
                         .account_type
-                        .apply_outflow(source_balance, transaction.amount),
+                        .apply_outflow(source.balance, transaction.settled_amount),
                 )?;
             }
             TransactionKind::Transfer => {
@@ -895,26 +845,23 @@ impl BookkeepingService {
                 let target_amount = transaction.target_amount.ok_or_else(|| {
                     KokuError::InvalidInput("transfer is missing its target amount".to_owned())
                 })?;
-                let target_currency = transaction.target_currency.as_deref().ok_or_else(|| {
+                transaction.target_currency.as_deref().ok_or_else(|| {
                     KokuError::InvalidInput("transfer is missing its target currency".to_owned())
                 })?;
                 let target = Self::account_in_tx(&tx, target_id)?;
-                let target_balance = Self::balance_in_tx(&tx, target_id, target_currency)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
-                    &transaction.currency,
                     source
                         .account_type
-                        .apply_inflow(source_balance, transaction.amount),
+                        .apply_inflow(source.balance, transaction.settled_amount),
                 )?;
                 Self::set_balance(
                     &tx,
                     target_id,
-                    target_currency,
                     target
                         .account_type
-                        .apply_outflow(target_balance, target_amount),
+                        .apply_outflow(target.balance, target_amount),
                 )?;
             }
         }
@@ -931,7 +878,7 @@ impl BookkeepingService {
         let raw = self
             .conn
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -945,7 +892,7 @@ impl BookkeepingService {
 
     pub fn transactions(&self) -> Result<Vec<Transaction>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, target_amount, target_currency, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT 500",
+            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT 500",
         )?;
         let rows = statement.query_map([], transaction_row)?;
         rows.map(|row| transaction_from_row(row?)).collect()
@@ -1062,25 +1009,7 @@ impl BookkeepingService {
                 entity: "account",
                 id,
             })?;
-        let mut statement = tx.prepare(
-            "SELECT currency, balance FROM account_balances WHERE account_id = ?1 ORDER BY currency",
-        )?;
-        let rows = statement.query_map([id], |balance_row| {
-            Ok((
-                balance_row.get::<_, String>(0)?,
-                balance_row.get::<_, String>(1)?,
-            ))
-        })?;
-        let balances = rows
-            .map(|balance_row| {
-                let (currency, balance) = balance_row?;
-                Ok(AccountBalance {
-                    currency,
-                    balance: decimal_from_db(&balance)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        account_from_row(row, balances)
+        account_from_row(row)
     }
 
     fn category_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Category> {
@@ -1107,7 +1036,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -1119,34 +1048,10 @@ impl BookkeepingService {
         transaction_from_row(raw)
     }
 
-    fn balance_in_tx(tx: &SqlTransaction<'_>, account_id: i64, currency: &str) -> Result<Decimal> {
-        let balance = tx
-            .query_row(
-                "SELECT balance FROM account_balances WHERE account_id = ?1 AND currency = ?2",
-                params![account_id, currency],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        balance
-            .as_deref()
-            .map(decimal_from_db)
-            .transpose()
-            .map(|value| value.unwrap_or(Decimal::ZERO))
-    }
-
-    fn set_balance(
-        tx: &SqlTransaction<'_>,
-        account_id: i64,
-        currency: &str,
-        balance: Decimal,
-    ) -> Result<()> {
+    fn set_balance(tx: &SqlTransaction<'_>, account_id: i64, balance: Decimal) -> Result<()> {
         let changed = tx.execute(
-            r#"
-            INSERT INTO account_balances(account_id, currency, balance)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(account_id, currency) DO UPDATE SET balance = excluded.balance
-            "#,
-            params![account_id, currency, decimal_to_db(balance)],
+            "UPDATE accounts SET balance = ?1 WHERE id = ?2",
+            params![decimal_to_db(balance), account_id],
         )?;
         if changed != 1 {
             return Err(KokuError::NotFound {
@@ -1154,10 +1059,6 @@ impl BookkeepingService {
                 id: account_id,
             });
         }
-        tx.execute(
-            "UPDATE accounts SET balance = ?1 WHERE id = ?2 AND currency = ?3",
-            params![decimal_to_db(balance), account_id, currency],
-        )?;
         Ok(())
     }
 }
@@ -1172,6 +1073,7 @@ type TransactionRow = (
     Option<i64>,
     String,
     String,
+    String,
     Option<String>,
     Option<String>,
     String,
@@ -1179,14 +1081,13 @@ type TransactionRow = (
     Option<String>,
 );
 
-fn account_from_row(row: AccountRow, balances: Vec<AccountBalance>) -> Result<Account> {
+fn account_from_row(row: AccountRow) -> Result<Account> {
     Ok(Account {
         id: row.0,
         name: row.1,
         account_type: AccountType::from_db(&row.2)?,
         currency: row.3,
         balance: decimal_from_db(&row.4)?,
-        balances,
     })
 }
 
@@ -1212,6 +1113,7 @@ fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> 
         row.get(9)?,
         row.get(10)?,
         row.get(11)?,
+        row.get(12)?,
     ))
 }
 
@@ -1224,11 +1126,12 @@ fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         category_id: row.4,
         amount: decimal_from_db(&row.5)?,
         currency: row.6,
-        target_amount: row.7.as_deref().map(decimal_from_db).transpose()?,
-        target_currency: row.8,
-        occurred_at: parse_timestamp(&row.9)?,
-        note: row.10,
-        voided_at: row.11.as_deref().map(parse_timestamp).transpose()?,
+        settled_amount: decimal_from_db(&row.7)?,
+        target_amount: row.8.as_deref().map(decimal_from_db).transpose()?,
+        target_currency: row.9,
+        occurred_at: parse_timestamp(&row.10)?,
+        note: row.11,
+        voided_at: row.12.as_deref().map(parse_timestamp).transpose()?,
     })
 }
 
@@ -1352,18 +1255,12 @@ fn print_demo(accounts: &[Account], summary: &MonthlySummary) -> Result<()> {
     println!("  {:<16} {:<6} {:>18}", "账户", "类型", "余额");
     println!("  ────────────────────────────────────────────");
     for account in accounts {
-        for (index, balance) in account.balances.iter().enumerate() {
-            println!(
-                "  {:<16} {:<6} {:>18}",
-                if index == 0 { &account.name } else { "↳" },
-                if index == 0 {
-                    account.account_type.label()
-                } else {
-                    ""
-                },
-                money(balance.balance, &balance.currency)
-            );
-        }
+        println!(
+            "  {:<16} {:<6} {:>18}",
+            account.name,
+            account.account_type.label(),
+            money(account.balance, &account.currency)
+        );
     }
     println!("└──────────────────────────────────────────────┘");
 
@@ -1427,21 +1324,12 @@ fn run_demo() -> Result<()> {
         "日常消费金",
     )?;
     service.record_expense(alipay.id, transit.id, Decimal::new(1_200, 2), now, "地铁")?;
-    service.record_transfer_between_currencies(
-        cmb.id,
-        "CNY",
-        cmb.id,
-        "USD",
-        Decimal::new(72_000, 2),
-        Decimal::new(10_000, 2),
-        now,
-        "Visa 美元购汇",
-    )?;
     service.record_expense_in_currency(
         cmb.id,
         shopping.id,
         Decimal::new(3_280, 2),
         "USD",
+        Decimal::new(23_616, 2),
         now,
         "海外软件订阅",
     )?;
@@ -1536,21 +1424,12 @@ fn seed_demo_data(service: &mut BookkeepingService) -> Result<()> {
         now,
         "电影",
     )?;
-    service.record_transfer_between_currencies(
-        cmb.id,
-        "CNY",
-        cmb.id,
-        "USD",
-        Decimal::new(72_000, 2),
-        Decimal::new(10_000, 2),
-        now,
-        "Visa 美元购汇",
-    )?;
     service.record_expense_in_currency(
         cmb.id,
         shopping.id,
         Decimal::new(32_80, 2),
         "USD",
+        Decimal::new(23_616, 2),
         now,
         "海外软件订阅",
     )?;
@@ -1623,15 +1502,25 @@ async fn api_create_transaction(
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
     let occurred_at = request.occurred_at.unwrap_or_else(Utc::now);
     let mut service = lock_service(&state)?;
-    let currency = request
-        .currency
-        .unwrap_or(service.account(request.account_id)?.currency);
+    let account = service.account(request.account_id)?;
+    let currency = request.currency.unwrap_or_else(|| account.currency.clone());
+    let settled_amount = match request.settled_amount {
+        Some(amount) => amount,
+        None if currency.eq_ignore_ascii_case(&account.currency) => request.amount,
+        None => {
+            return Err(KokuError::InvalidInput(format!(
+                "settled_amount in {} is required for a {currency} transaction",
+                account.currency
+            )))
+        }
+    };
     let transaction = match request.kind {
         TransactionKind::Expense => service.record_expense_in_currency(
             request.account_id,
             request.category_id,
             request.amount,
             currency,
+            settled_amount,
             occurred_at,
             request.note,
         )?,
@@ -1640,6 +1529,7 @@ async fn api_create_transaction(
             request.category_id,
             request.amount,
             currency,
+            settled_amount,
             occurred_at,
             request.note,
         )?,
@@ -1656,18 +1546,9 @@ async fn api_create_transfer(
     State(state): State<AppState>,
     Json(request): Json<CreateTransferRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let mut service = lock_service(&state)?;
-    let source_currency = request
-        .source_currency
-        .unwrap_or(service.account(request.from_account_id)?.currency);
-    let target_currency = request
-        .target_currency
-        .unwrap_or(service.account(request.to_account_id)?.currency);
-    let transaction = service.record_transfer_between_currencies(
+    let transaction = lock_service(&state)?.record_transfer(
         request.from_account_id,
-        source_currency,
         request.to_account_id,
-        target_currency,
         request.source_amount,
         request.target_amount,
         request.occurred_at.unwrap_or_else(Utc::now),
@@ -1820,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn one_account_keeps_independent_balances_for_each_transaction_currency() -> Result<()> {
+    fn foreign_currency_transaction_updates_one_shared_settlement_balance() -> Result<()> {
         let mut service = test_service()?;
         let visa = service.create_account(
             "CMB Visa",
@@ -1828,7 +1709,6 @@ mod tests {
             "CNY",
             Decimal::from(1000_u32),
         )?;
-        let refund_category = service.create_category("Refund", CategoryKind::Income)?;
         let shopping = service.create_category("Shopping", CategoryKind::Expense)?;
         let at = NaiveDate::from_ymd_opt(2026, 8, 15)
             .and_then(|date| date.and_hms_opt(12, 0, 0))
@@ -1838,99 +1718,30 @@ mod tests {
         let purchase = service.record_expense_in_currency(
             visa.id,
             shopping.id,
-            Decimal::from(200_u32),
+            Decimal::from_str("32.50")?,
             "USD",
+            Decimal::from_str("234.56")?,
             at,
             "USD purchase",
         )?;
-        let refund = service.record_income_in_currency(
-            visa.id,
-            refund_category.id,
-            Decimal::from_str("32.50")?,
-            "USD",
-            at,
-            "USD refund",
-        )?;
 
         let account = service.account(visa.id)?;
-        assert_eq!(account.balances.len(), 2);
-        assert_eq!(
-            account
-                .balances
-                .iter()
-                .find(|item| item.currency == "CNY")
-                .map(|item| item.balance),
-            Some(Decimal::from(1000_u32))
-        );
-        assert_eq!(
-            account
-                .balances
-                .iter()
-                .find(|item| item.currency == "USD")
-                .map(|item| item.balance),
-            Some(Decimal::from_str("167.50")?)
-        );
+        assert_eq!(account.currency, "CNY");
+        assert_eq!(account.balance, Decimal::from_str("1234.56")?);
 
         let summary = service.monthly_summary(2026, 8, "USD")?;
-        assert_eq!(summary.total_income, Decimal::from_str("32.50")?);
-        assert_eq!(summary.total_expense, Decimal::from(200_u32));
+        assert_eq!(summary.total_income, Decimal::ZERO);
+        assert_eq!(summary.total_expense, Decimal::from_str("32.50")?);
         assert_eq!(purchase.currency, "USD");
-
-        service.void_transaction(refund.id)?;
-        let account = service.account(visa.id)?;
+        assert_eq!(purchase.settled_amount, Decimal::from_str("234.56")?);
         assert_eq!(
-            account
-                .balances
-                .iter()
-                .find(|item| item.currency == "USD")
-                .map(|item| item.balance),
-            Some(Decimal::from(200_u32))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn same_account_can_convert_between_currency_balances_atomically() -> Result<()> {
-        let mut service = test_service()?;
-        let visa = service.create_account(
-            "Multi-currency Visa",
-            AccountType::Asset,
-            "CNY",
-            Decimal::from(1000_u32),
-        )?;
-        let transfer = service.record_transfer_between_currencies(
-            visa.id,
-            "CNY",
-            visa.id,
-            "USD",
-            Decimal::from(720_u32),
-            Decimal::from(100_u32),
-            Utc::now(),
-            "FX conversion",
-        )?;
-
-        let account = service.account(visa.id)?;
-        assert_eq!(account.balance, Decimal::from(280_u32));
-        assert_eq!(
-            account
-                .balances
-                .iter()
-                .find(|item| item.currency == "USD")
-                .map(|item| item.balance),
-            Some(Decimal::from(100_u32))
+            service.monthly_summary(2026, 8, "CNY")?.total_expense,
+            Decimal::ZERO
         );
 
-        service.void_transaction(transfer.id)?;
+        service.void_transaction(purchase.id)?;
         let account = service.account(visa.id)?;
         assert_eq!(account.balance, Decimal::from(1000_u32));
-        assert_eq!(
-            account
-                .balances
-                .iter()
-                .find(|item| item.currency == "USD")
-                .map(|item| item.balance),
-            Some(Decimal::ZERO)
-        );
         Ok(())
     }
 
@@ -2016,10 +1827,11 @@ mod tests {
 
         let service = BookkeepingService::from_connection(conn)?;
         let account = service.account(1)?;
-        assert_eq!(account.balances.len(), 1);
-        assert_eq!(account.balances[0].currency, "CNY");
-        assert_eq!(account.balances[0].balance, Decimal::from_str("456.78")?);
-        assert_eq!(service.transaction(1)?.currency, "CNY");
+        assert_eq!(account.currency, "CNY");
+        assert_eq!(account.balance, Decimal::from_str("456.78")?);
+        let transaction = service.transaction(1)?;
+        assert_eq!(transaction.currency, "CNY");
+        assert_eq!(transaction.settled_amount, Decimal::from_str("12.34")?);
         Ok(())
     }
 
