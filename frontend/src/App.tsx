@@ -269,7 +269,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <label className="currency-select">
-              <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
+              <select aria-label="显示币种" value={currency} onChange={(event) => setCurrency(event.target.value)}>
                 {currencies.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
@@ -739,6 +739,42 @@ interface SankeyNode extends SankeyDatum {
   height: number;
 }
 
+function MobileCashFlowGroup({
+  label,
+  nodes,
+  total,
+  currency
+}: {
+  label: string;
+  nodes: SankeyNode[];
+  total: number;
+  currency: string;
+}) {
+  return (
+    <section className="mobile-flow-group">
+      <header><span>{label}</span><small>{nodes.length} 项</small></header>
+      <div className="mobile-flow-list">
+        {nodes.map((node) => (
+          <article className="mobile-flow-item" key={node.id}>
+            <div className="mobile-flow-meta">
+              <span><i style={{ background: node.color }} />{node.name}</span>
+              <strong>{formatMoney(node.amountText, currency)}</strong>
+            </div>
+            <div className="mobile-flow-track">
+              <i
+                style={{
+                  width: `${Math.max(4, total > 0 ? (node.amount / total) * 100 : 0)}%`,
+                  background: node.color
+                }}
+              />
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
   const layout = useMemo(() => {
     const retained = Number(summary.retained);
@@ -895,6 +931,25 @@ function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
             </g>
           ))}
         </svg>
+      </div>
+      <div className="cash-flow-mobile" role="img" aria-label={`${summary.month}月现金流向明细`}>
+        <MobileCashFlowGroup
+          label="收入来源"
+          nodes={layout.sources}
+          total={Number(summary.flow_total)}
+          currency={summary.currency}
+        />
+        <div className="mobile-flow-core">
+          <span>汇入本月现金流</span>
+          <strong>{formatMoney(summary.flow_total, summary.currency)}</strong>
+          <ChevronDown size={17} />
+        </div>
+        <MobileCashFlowGroup
+          label="支出去向与结余"
+          nodes={layout.destinations}
+          total={Number(summary.flow_total)}
+          currency={summary.currency}
+        />
       </div>
       <p className="sankey-caption">
         <ShieldCheck size={14} /> 转账已排除；带宽仅由当前币种下已确认的收入和支出决定。
@@ -1091,7 +1146,22 @@ function CategoryModal({ categories, onClose, onSubmit }: { categories: Category
   };
   return (
     <ModalShell eyebrow="CATEGORIES" title="管理分类" onClose={onClose}>
-      <div className="category-chip-list">{categories.map((item) => <span key={item.id} className={item.kind}><Tags size={14} />{item.name}</span>)}</div>
+      <div className="category-library">
+        {([
+          { kind: "expense" as const, label: "支出分类" },
+          { kind: "income" as const, label: "收入分类" }
+        ]).map((group) => {
+          const items = categories.filter((item) => item.kind === group.kind);
+          return (
+            <section key={group.kind}>
+              <header><strong>{group.label}</strong><small>{items.length} 项</small></header>
+              <div className="category-chip-list">
+                {items.map((item) => <span key={item.id} className={item.kind}><Tags size={14} />{item.name}</span>)}
+              </div>
+            </section>
+          );
+        })}
+      </div>
       <form className="entry-form category-form" onSubmit={submit}>
         <div className="form-grid">
           <label><span>分类类型</span><select value={kind} onChange={(e) => setKind(e.target.value as CategoryKind)}><option value="expense">支出</option><option value="income">收入</option></select></label>
