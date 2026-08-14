@@ -2,12 +2,18 @@ export type AccountType = "asset" | "liability";
 export type CategoryKind = "expense" | "income";
 export type TransactionKind = "expense" | "income" | "transfer";
 
+export interface AccountBalance {
+  currency: string;
+  balance: string;
+}
+
 export interface Account {
   id: number;
   name: string;
   account_type: AccountType;
   currency: string;
   balance: string;
+  balances: AccountBalance[];
 }
 
 export interface Category {
@@ -23,7 +29,9 @@ export interface Transaction {
   to_account_id: number | null;
   category_id: number | null;
   amount: string;
+  currency: string;
   target_amount: string | null;
+  target_currency: string | null;
   occurred_at: string;
   note: string;
   voided_at: string | null;

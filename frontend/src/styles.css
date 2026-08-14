@@ -733,7 +733,7 @@ button:disabled {
   content: "";
 }
 
-.account-mini > div {
+.account-mini > div:first-child {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -757,12 +757,31 @@ button:disabled {
   font-weight: 650;
 }
 
-.account-mini > strong {
+.account-mini-balances {
   position: relative;
   z-index: 1;
-  display: block;
-  font-size: 18px;
+  display: grid;
+  gap: 7px;
+}
+
+.account-mini-balances > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-mini-balances strong {
+  font-size: 16px;
   letter-spacing: -0.025em;
+}
+
+.account-mini-balances .currency-badge {
+  position: static;
+}
+
+.account-mini-balances > small {
+  font-size: 8px;
 }
 
 .currency-badge {
@@ -999,8 +1018,28 @@ button:disabled {
   font-size: 9px;
 }
 
-.account-detail-card > strong {
-  font-size: 14px;
+.account-detail-balances {
+  display: grid;
+  gap: 5px;
+  text-align: right;
+}
+
+.account-detail-balances > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.account-detail-balances strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.account-detail-balances span {
+  color: var(--text-faint);
+  font-size: 8px;
+  font-weight: 700;
 }
 
 .transaction-toolbar {
@@ -1797,7 +1836,7 @@ button:disabled {
   .account-detail-card { grid-template-columns: 43px 1fr auto; padding: 14px; }
   .account-detail-card .bare-button { display: none; }
   .large-account-icon { width: 41px; height: 41px; }
-  .account-detail-card > strong { font-size: 12px; }
+  .account-detail-balances strong { font-size: 11px; }
   .transaction-toolbar { align-items: stretch; flex-direction: column; }
   .search-box { max-width: none; }
   .segmented-filter { overflow-x: auto; }

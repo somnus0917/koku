@@ -1387,6 +1387,7 @@ fn run_demo() -> Result<()> {
     let salary = service.create_category("工资", CategoryKind::Income)?;
     let food = service.create_category("餐饮", CategoryKind::Expense)?;
     let transit = service.create_category("交通", CategoryKind::Expense)?;
+    let shopping = service.create_category("购物", CategoryKind::Expense)?;
     let now = Utc::now();
 
     service.record_income(cmb.id, salary.id, Decimal::new(850_000, 2), now, "八月工资")?;
@@ -1400,6 +1401,24 @@ fn run_demo() -> Result<()> {
         "日常消费金",
     )?;
     service.record_expense(alipay.id, transit.id, Decimal::new(1_200, 2), now, "地铁")?;
+    service.record_transfer_between_currencies(
+        cmb.id,
+        "CNY",
+        cmb.id,
+        "USD",
+        Decimal::new(72_000, 2),
+        Decimal::new(10_000, 2),
+        now,
+        "Visa 美元购汇",
+    )?;
+    service.record_expense_in_currency(
+        cmb.id,
+        shopping.id,
+        Decimal::new(3_280, 2),
+        "USD",
+        now,
+        "海外软件订阅",
+    )?;
 
     let cancelled = service.record_expense(
         alipay.id,
