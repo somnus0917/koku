@@ -179,6 +179,27 @@ pub struct MonthlySummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CashFlowItem {
+    pub category_id: i64,
+    pub category_name: String,
+    pub amount: Decimal,
+    pub percentage: Decimal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CashFlowSummary {
+    pub year: i32,
+    pub month: u32,
+    pub currency: String,
+    pub total_income: Decimal,
+    pub total_expense: Decimal,
+    pub retained: Decimal,
+    pub flow_total: Decimal,
+    pub income_sources: Vec<CashFlowItem>,
+    pub expense_destinations: Vec<CashFlowItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BalanceSummary {
     pub currency: String,
     pub total_assets: Decimal,
@@ -665,33 +686,41 @@ impl BookkeepingService {
     }
 
     pub fn monthly_summary(&self, year: i32, month: u32, currency: &str) -> Result<MonthlySummary> {
-        let start_date = NaiveDate::from_ymd_opt(year, month, 1).ok_or_else(|| {
-            KokuError::InvalidInput(format!("invalid year/month: {year}-{month}"))
-        })?;
-        let (next_year, next_month) = if month == 12 {
-            (year + 1, 1)
-        } else {
-            (year, month + 1)
-        };
-        let end_date = NaiveDate::from_ymd_opt(next_year, next_month, 1).ok_or_else(|| {
-            KokuError::InvalidInput(format!("invalid next month after {year}-{month}"))
-        })?;
-        let start = start_date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| KokuError::InvalidInput("invalid month start".to_owned()))?
-            .and_utc();
-        let end = end_date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| KokuError::InvalidInput("invalid month end".to_owned()))?
-            .and_utc();
-        let currency = normalize_currency(currency.to_owned())?;
+        let cash_flow = self.cash_flow_summary(year, month, currency)?;
+        Ok(MonthlySummary {
+            year,
+            month,
+            currency: cash_flow.currency,
+            total_income: cash_flow.total_income,
+            total_expense: cash_flow.total_expense,
+            net: cash_flow.retained,
+            expenses_by_category: cash_flow
+                .expense_destinations
+                .into_iter()
+                .map(|item| CategoryExpense {
+                    category_id: item.category_id,
+                    category_name: item.category_name,
+                    amount: item.amount,
+                    percentage: item.percentage,
+                })
+                .collect(),
+        })
+    }
 
+    pub fn cash_flow_summary(
+        &self,
+        year: i32,
+        month: u32,
+        currency: &str,
+    ) -> Result<CashFlowSummary> {
+        let (start, end) = month_bounds(year, month)?;
+        let currency = normalize_currency(currency.to_owned())?;
         let mut statement = self.conn.prepare(
             r#"
             SELECT t.kind, t.category_id, c.name, t.amount
             FROM transactions t
             JOIN accounts a ON a.id = t.account_id
-            LEFT JOIN categories c ON c.id = t.category_id
+            JOIN categories c ON c.id = t.category_id
             WHERE t.voided_at IS NULL
               AND t.kind IN ('expense', 'income')
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
@@ -711,15 +740,21 @@ impl BookkeepingService {
 
         let mut total_income = Decimal::ZERO;
         let mut total_expense = Decimal::ZERO;
-        let mut category_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
+        let mut income_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
+        let mut expense_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
         for row in rows {
             let (kind, category_id, category_name, amount_text) = row?;
             let amount = decimal_from_db(&amount_text)?;
             match TransactionKind::from_db(&kind)? {
-                TransactionKind::Income => total_income += amount,
+                TransactionKind::Income => {
+                    total_income += amount;
+                    *income_totals
+                        .entry((category_id, category_name))
+                        .or_insert(Decimal::ZERO) += amount;
+                }
                 TransactionKind::Expense => {
                     total_expense += amount;
-                    *category_totals
+                    *expense_totals
                         .entry((category_id, category_name))
                         .or_insert(Decimal::ZERO) += amount;
                 }
@@ -727,30 +762,18 @@ impl BookkeepingService {
             }
         }
 
-        let hundred = Decimal::from(100_u32);
-        let mut expenses_by_category: Vec<_> = category_totals
-            .into_iter()
-            .map(|((category_id, category_name), amount)| CategoryExpense {
-                category_id,
-                category_name,
-                amount,
-                percentage: if total_expense.is_zero() {
-                    Decimal::ZERO
-                } else {
-                    (amount / total_expense * hundred).round_dp(2)
-                },
-            })
-            .collect();
-        expenses_by_category.sort_by_key(|item| std::cmp::Reverse(item.amount));
-
-        Ok(MonthlySummary {
+        let income_sources = cash_flow_items(income_totals, total_income);
+        let expense_destinations = cash_flow_items(expense_totals, total_expense);
+        Ok(CashFlowSummary {
             year,
             month,
             currency,
             total_income,
             total_expense,
-            net: total_income - total_expense,
-            expenses_by_category,
+            retained: total_income - total_expense,
+            flow_total: total_income.max(total_expense),
+            income_sources,
+            expense_destinations,
         })
     }
 
@@ -907,6 +930,47 @@ fn normalize_currency(value: String) -> Result<String> {
         ));
     }
     Ok(currency)
+}
+
+fn month_bounds(year: i32, month: u32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let start_date = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| KokuError::InvalidInput(format!("invalid year/month: {year}-{month}")))?;
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let end_date = NaiveDate::from_ymd_opt(next_year, next_month, 1).ok_or_else(|| {
+        KokuError::InvalidInput(format!("invalid next month after {year}-{month}"))
+    })?;
+    let start = start_date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| KokuError::InvalidInput("invalid month start".to_owned()))?
+        .and_utc();
+    let end = end_date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| KokuError::InvalidInput("invalid month end".to_owned()))?
+        .and_utc();
+    Ok((start, end))
+}
+
+fn cash_flow_items(totals: BTreeMap<(i64, String), Decimal>, total: Decimal) -> Vec<CashFlowItem> {
+    let hundred = Decimal::from(100_u32);
+    let mut items: Vec<_> = totals
+        .into_iter()
+        .map(|((category_id, category_name), amount)| CashFlowItem {
+            category_id,
+            category_name,
+            amount,
+            percentage: if total.is_zero() {
+                Decimal::ZERO
+            } else {
+                (amount / total * hundred).round_dp(2)
+            },
+        })
+        .collect();
+    items.sort_by_key(|item| std::cmp::Reverse(item.amount));
+    items
 }
 
 fn positive_amount(amount: Decimal) -> Result<()> {
@@ -1247,6 +1311,19 @@ async fn api_monthly_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+async fn api_cash_flow_summary(
+    State(state): State<AppState>,
+    Query(query): Query<MonthlyQuery>,
+) -> Result<Json<ApiResponse<CashFlowSummary>>> {
+    let now = Utc::now();
+    let summary = lock_service(&state)?.cash_flow_summary(
+        query.year.unwrap_or_else(|| now.year()),
+        query.month.unwrap_or_else(|| now.month()),
+        query.currency.as_deref().unwrap_or("CNY"),
+    )?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
 async fn api_balance_summary(
     State(state): State<AppState>,
     Query(query): Query<BalanceQuery>,
@@ -1274,6 +1351,7 @@ fn api_router(state: AppState) -> Router {
             delete(api_void_transaction),
         )
         .route("/api/summary/monthly", get(api_monthly_summary))
+        .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/balance", get(api_balance_summary))
         .layer(
             CorsLayer::new()
@@ -1440,6 +1518,18 @@ mod tests {
             Decimal::from(75_u32)
         );
         assert_eq!(service.account(account.id)?.balance, Decimal::from(800_u32));
+
+        let cash_flow = service.cash_flow_summary(2026, 8, "CNY")?;
+        assert_eq!(cash_flow.flow_total, Decimal::from(1000_u32));
+        assert_eq!(cash_flow.retained, Decimal::from(800_u32));
+        assert_eq!(cash_flow.income_sources.len(), 1);
+        assert_eq!(cash_flow.income_sources[0].category_name, "Salary");
+        assert_eq!(
+            cash_flow.income_sources[0].percentage,
+            Decimal::from(100_u32)
+        );
+        assert_eq!(cash_flow.expense_destinations.len(), 2);
+        assert_eq!(cash_flow.expense_destinations[0].category_name, "Food");
         Ok(())
     }
 
