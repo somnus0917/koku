@@ -2,31 +2,57 @@ import {
   ArrowDownLeft,
   ArrowLeftRight,
   ArrowUpRight,
+  BadgeDollarSign,
   Banknote,
+  BriefcaseBusiness,
+  Building2,
   CalendarDays,
+  Car,
   ChartNoAxesCombined,
+  ChartCandlestick,
   Check,
   ChevronDown,
   CircleDollarSign,
+  CircleEllipsis,
+  Cloud,
   CreditCard,
+  Dumbbell,
   Eye,
   EyeOff,
+  Gamepad2,
+  Gift,
+  GraduationCap,
+  Handshake,
+  HeartPulse,
+  House,
   Landmark,
   LayoutDashboard,
+  Laptop,
   LoaderCircle,
   Menu,
   Moon,
   MoreHorizontal,
   Plus,
+  PawPrint,
+  Percent,
+  Plane,
   ReceiptText,
   RefreshCcw,
+  RotateCcw,
   Search,
   ShieldCheck,
+  Shield,
+  ShoppingBag,
+  Smartphone,
   Sun,
   Tags,
+  Trophy,
   Trash2,
+  Utensils,
+  Users,
   WalletCards,
   X,
+  Zap,
   type LucideIcon
 } from "lucide-react";
 import {
@@ -69,6 +95,59 @@ const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
 
 const CATEGORY_COLORS = ["#274e3f", "#dd8d5b", "#7e95c9", "#d2ad58", "#8f6faf", "#669b92"];
 const COMMON_CURRENCIES = ["CNY", "USD", "HKD", "EUR", "JPY", "GBP"];
+
+const CATEGORY_VISUALS: Record<string, { icon: LucideIcon; color: string }> = {
+  工资: { icon: BriefcaseBusiness, color: "#2c8765" },
+  奖金: { icon: Trophy, color: "#c08a2f" },
+  副业: { icon: Laptop, color: "#5078a5" },
+  投资收益: { icon: ChartCandlestick, color: "#338c78" },
+  利息: { icon: Percent, color: "#7a8f45" },
+  报销: { icon: ReceiptText, color: "#6f76a8" },
+  礼金: { icon: Gift, color: "#b26783" },
+  退款: { icon: RotateCcw, color: "#4c918b" },
+  其他收入: { icon: BadgeDollarSign, color: "#668562" },
+  餐饮: { icon: Utensils, color: "#d0784e" },
+  交通: { icon: Car, color: "#5077a5" },
+  购物: { icon: ShoppingBag, color: "#ad6687" },
+  居家: { icon: House, color: "#a47748" },
+  娱乐: { icon: Gamepad2, color: "#7766a9" },
+  医疗保健: { icon: HeartPulse, color: "#c55f64" },
+  教育: { icon: GraduationCap, color: "#527ea0" },
+  旅行: { icon: Plane, color: "#438b92" },
+  通讯: { icon: Smartphone, color: "#6576a5" },
+  水电燃气: { icon: Zap, color: "#bd8c30" },
+  住房: { icon: Building2, color: "#8b704f" },
+  保险: { icon: Shield, color: "#527d70" },
+  数字订阅: { icon: Cloud, color: "#657fa8" },
+  运动健身: { icon: Dumbbell, color: "#4f8e67" },
+  宠物: { icon: PawPrint, color: "#a77457" },
+  人情往来: { icon: Handshake, color: "#9b6c83" },
+  家庭: { icon: Users, color: "#a06d50" },
+  税费: { icon: Landmark, color: "#7e7165" },
+  其他支出: { icon: CircleEllipsis, color: "#777b75" }
+};
+
+function categoryVisual(name: string) {
+  const preset = CATEGORY_VISUALS[name];
+  if (preset) return preset;
+  const hash = [...name].reduce((value, character) => value + (character.codePointAt(0) ?? 0), 0);
+  return { icon: Tags, color: CATEGORY_COLORS[hash % CATEGORY_COLORS.length] };
+}
+
+function CategoryAvatar({ name, size = "medium", className = "" }: { name: string; size?: "tiny" | "small" | "medium"; className?: string }) {
+  const visual = categoryVisual(name);
+  const Icon = visual.icon;
+  const iconSize = size === "tiny" ? 11 : size === "small" ? 14 : 18;
+  return (
+    <span
+      className={`category-avatar ${size} ${className}`}
+      style={{ "--category-color": visual.color } as CSSProperties}
+      aria-hidden="true"
+    >
+      <Icon size={iconSize} strokeWidth={1.9} />
+    </span>
+  );
+}
 
 function formatMoney(value: string, currency: string, compact = false): string {
   const number = Number(value);
@@ -674,7 +753,11 @@ function TransactionRow({
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
-        <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
+        {transaction.kind === "transfer" ? (
+          <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
+        ) : (
+          <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
+        )}
         <div><strong>{transaction.note || meta.label}</strong><span>{meta.label}{transaction.voided_at ? " · 已撤销" : ""}</span></div>
       </div>
       {!compact && <span className="table-account">{account?.name ?? "未知账户"}{target ? ` → ${target.name}` : ""}</span>}
@@ -721,8 +804,8 @@ function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; cashFlow
               <div><span>总支出</span><strong>{formatMoney(summary.total_expense, summary.currency, true)}</strong></div>
             </div>
             <div className="donut-legend">
-              {summary.expenses_by_category.map((item, index) => (
-                <div key={item.category_id}><i style={{ background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }} /><span>{item.category_name}</span><strong>{item.percentage}%</strong></div>
+              {summary.expenses_by_category.map((item) => (
+                <div key={item.category_id}><CategoryAvatar name={item.category_name} size="small" /><span>{item.category_name}</span><strong>{item.percentage}%</strong></div>
               ))}
             </div>
           </div>
@@ -792,19 +875,19 @@ function MobileCashFlowGroup({
 function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
   const layout = useMemo(() => {
     const retained = Number(summary.retained);
-    const sources: SankeyDatum[] = summary.income_sources.map((item, index) => ({
+    const sources: SankeyDatum[] = summary.income_sources.map((item) => ({
       id: `income-${item.category_id}`,
       name: item.category_name,
       amount: Number(item.amount),
       amountText: item.amount,
-      color: ["#24936a", "#56a87d", "#7bb99a", "#9bc9af"][index % 4]
+      color: categoryVisual(item.category_name).color
     }));
-    const destinations: SankeyDatum[] = summary.expense_destinations.map((item, index) => ({
+    const destinations: SankeyDatum[] = summary.expense_destinations.map((item) => ({
       id: `expense-${item.category_id}`,
       name: item.category_name,
       amount: Number(item.amount),
       amountText: item.amount,
-      color: CATEGORY_COLORS[(index + 1) % CATEGORY_COLORS.length]
+      color: categoryVisual(item.category_name).color
     }));
     if (retained < 0) {
       sources.push({
@@ -993,10 +1076,10 @@ function sankeyRibbonPath(
 function buildDonutGradient(summary: MonthlySummary): string {
   if (!summary.expenses_by_category.length) return "var(--border) 0 100%";
   let cursor = 0;
-  return summary.expenses_by_category.map((item, index) => {
+  return summary.expenses_by_category.map((item) => {
     const start = cursor;
     cursor += Number(item.percentage);
-    return `${CATEGORY_COLORS[index % CATEGORY_COLORS.length]} ${start}% ${cursor}%`;
+    return `${categoryVisual(item.category_name).color} ${start}% ${cursor}%`;
   }).join(", ");
 }
 
@@ -1004,10 +1087,10 @@ function CategoryBars({ summary, detailed = false }: { summary: MonthlySummary; 
   if (!summary.expenses_by_category.length) return <EmptyState title="暂无支出数据" detail="记录支出后会自动生成分类分析。" />;
   return (
     <div className={`category-bars ${detailed ? "detailed" : ""}`}>
-      {summary.expenses_by_category.slice(0, detailed ? 8 : 4).map((item, index) => (
+      {summary.expenses_by_category.slice(0, detailed ? 8 : 4).map((item) => (
         <div className="category-bar" key={item.category_id}>
-          <div><span><i style={{ background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }} />{item.category_name}</span><strong>{formatMoney(item.amount, summary.currency)}</strong></div>
-          <div className="bar-track"><i style={{ width: `${item.percentage}%`, background: CATEGORY_COLORS[index % CATEGORY_COLORS.length] }} /></div>
+          <div><span><CategoryAvatar name={item.category_name} size="small" />{item.category_name}</span><strong>{formatMoney(item.amount, summary.currency)}</strong></div>
+          <div className="bar-track"><i style={{ width: `${item.percentage}%`, background: categoryVisual(item.category_name).color }} /></div>
           {detailed && <small>{item.percentage}% 的本月支出</small>}
         </div>
       ))}
@@ -1054,6 +1137,7 @@ function TransactionModal({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const matchingCategories = categories.filter((item) => item.kind === kind);
+  const selectedCategory = categories.find((item) => item.id === categoryId);
   const currencyOptions = availableCurrencies(accounts);
   const source = accounts.find((item) => item.id === accountId);
   const target = accounts.find((item) => item.id === targetId);
@@ -1126,7 +1210,7 @@ function TransactionModal({
           ) : (
             <>
               <label><span>交易币种</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-              <label><span>分类</span><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+              <label><span>分类</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? "其他支出"} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
             </>
           )}
           {foreignTransaction && <label><span>计入账户余额 · {source?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => setSettledAmount(e.target.value)} placeholder="换算后的结算金额" /></label>}
@@ -1192,7 +1276,7 @@ function CategoryModal({ categories, onClose, onSubmit }: { categories: Category
             <section key={group.kind}>
               <header><strong>{group.label}</strong><small>{items.length} 项</small></header>
               <div className="category-chip-list">
-                {items.map((item) => <span key={item.id} className={item.kind}><Tags size={14} />{item.name}</span>)}
+                {items.map((item) => <span key={item.id} className={item.kind}><CategoryAvatar name={item.name} size="tiny" />{item.name}</span>)}
               </div>
             </section>
           );
