@@ -1,7 +1,14 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction as SqlTransaction, TransactionBehavior,
@@ -9,11 +16,14 @@ use rusqlite::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tower_http::cors::{Any, CorsLayer};
 
 type Result<T> = std::result::Result<T, KokuError>;
 
 #[derive(Debug, Error)]
 pub enum KokuError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("invalid decimal stored in database: {0}")]
@@ -168,6 +178,105 @@ pub struct MonthlySummary {
     pub expenses_by_category: Vec<CategoryExpense>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalanceSummary {
+    pub currency: String,
+    pub total_assets: Decimal,
+    pub total_liabilities: Decimal,
+    pub net_worth: Decimal,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiResponse<T> {
+    data: T,
+}
+
+impl<T> ApiResponse<T> {
+    fn new(data: T) -> Self {
+        Self { data }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateAccountRequest {
+    name: String,
+    account_type: AccountType,
+    currency: String,
+    opening_balance: Decimal,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateCategoryRequest {
+    name: String,
+    kind: CategoryKind,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTransactionRequest {
+    kind: TransactionKind,
+    account_id: i64,
+    category_id: i64,
+    amount: Decimal,
+    occurred_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTransferRequest {
+    from_account_id: i64,
+    to_account_id: i64,
+    source_amount: Decimal,
+    target_amount: Decimal,
+    occurred_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MonthlyQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BalanceQuery {
+    currency: Option<String>,
+}
+
+#[derive(Clone)]
+struct AppState {
+    service: Arc<Mutex<BookkeepingService>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiErrorBody {
+    error: String,
+}
+
+impl IntoResponse for KokuError {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            Self::NotFound { .. } => StatusCode::NOT_FOUND,
+            Self::AlreadyVoided => StatusCode::CONFLICT,
+            Self::InvalidInput(_) | Self::CategoryKindMismatch { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            Self::Database(_) | Self::InvalidDecimal(_) | Self::Io(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        };
+        (
+            status,
+            Json(ApiErrorBody {
+                error: self.to_string(),
+            }),
+        )
+            .into_response()
+    }
+}
+
 pub struct BookkeepingService {
     conn: Connection,
 }
@@ -304,6 +413,37 @@ impl BookkeepingService {
         rows.map(|row| account_from_row(row?)).collect()
     }
 
+    pub fn balance_summary(&self, currency: &str) -> Result<BalanceSummary> {
+        let currency = normalize_currency(currency.to_owned())?;
+        let accounts = self.accounts()?;
+        let mut total_assets = Decimal::ZERO;
+        let mut total_liabilities = Decimal::ZERO;
+        for account in accounts
+            .into_iter()
+            .filter(|account| account.currency == currency)
+        {
+            match account.account_type {
+                AccountType::Asset => total_assets += account.balance,
+                AccountType::Liability => total_liabilities += account.balance,
+            }
+        }
+        Ok(BalanceSummary {
+            currency,
+            total_assets,
+            total_liabilities,
+            net_worth: total_assets - total_liabilities,
+        })
+    }
+
+    pub fn is_empty(&self) -> Result<bool> {
+        let count = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| {
+                row.get::<_, i64>(0)
+            })?;
+        Ok(count == 0)
+    }
+
     pub fn category(&self, id: i64) -> Result<Category> {
         let row = self
             .conn
@@ -324,6 +464,20 @@ impl BookkeepingService {
                 id,
             })?;
         category_from_row(row)
+    }
+
+    pub fn categories(&self) -> Result<Vec<Category>> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, name, kind FROM categories ORDER BY kind, id")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.map(|row| category_from_row(row?)).collect()
     }
 
     pub fn record_expense(
@@ -500,6 +654,14 @@ impl BookkeepingService {
                 id,
             })?;
         transaction_from_row(raw)
+    }
+
+    pub fn transactions(&self) -> Result<Vec<Transaction>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, kind, account_id, to_account_id, category_id, amount, target_amount, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT 500",
+        )?;
+        let rows = statement.query_map([], transaction_row)?;
+        rows.map(|row| transaction_from_row(row?)).collect()
     }
 
     pub fn monthly_summary(&self, year: i32, month: u32, currency: &str) -> Result<MonthlySummary> {
@@ -879,8 +1041,286 @@ fn run_demo() -> Result<()> {
     print_demo(&service.accounts()?, &summary)
 }
 
-fn main() {
-    if let Err(error) = run_demo() {
+fn seed_demo_data(service: &mut BookkeepingService) -> Result<()> {
+    if !service.is_empty()? {
+        return Ok(());
+    }
+
+    let alipay = service.create_account(
+        "支付宝",
+        AccountType::Asset,
+        "CNY",
+        Decimal::new(328_000, 2),
+    )?;
+    let cmb = service.create_account(
+        "招商银行卡",
+        AccountType::Asset,
+        "CNY",
+        Decimal::new(2_856_000, 2),
+    )?;
+    let cash = service.create_account(
+        "现金钱包",
+        AccountType::Asset,
+        "CNY",
+        Decimal::new(56_000, 2),
+    )?;
+    let credit = service.create_account(
+        "信用卡",
+        AccountType::Liability,
+        "CNY",
+        Decimal::new(126_000, 2),
+    )?;
+
+    let salary = service.create_category("工资", CategoryKind::Income)?;
+    let side_job = service.create_category("副业", CategoryKind::Income)?;
+    let food = service.create_category("餐饮", CategoryKind::Expense)?;
+    let transit = service.create_category("交通", CategoryKind::Expense)?;
+    let shopping = service.create_category("购物", CategoryKind::Expense)?;
+    let home = service.create_category("居家", CategoryKind::Expense)?;
+    let entertainment = service.create_category("娱乐", CategoryKind::Expense)?;
+
+    let now = Utc::now();
+    service.record_income(
+        cmb.id,
+        salary.id,
+        Decimal::new(1_280_000, 2),
+        now,
+        "本月工资",
+    )?;
+    service.record_income(
+        alipay.id,
+        side_job.id,
+        Decimal::new(168_000, 2),
+        now,
+        "设计项目尾款",
+    )?;
+    service.record_expense(alipay.id, food.id, Decimal::new(6_850, 2), now, "梧桐小馆")?;
+    service.record_expense(
+        alipay.id,
+        transit.id,
+        Decimal::new(1_200, 2),
+        now,
+        "地铁通勤",
+    )?;
+    service.record_expense(cmb.id, home.id, Decimal::new(280_000, 2), now, "房租")?;
+    service.record_expense(
+        credit.id,
+        shopping.id,
+        Decimal::new(38_900, 2),
+        now,
+        "生活用品",
+    )?;
+    service.record_expense(cash.id, food.id, Decimal::new(2_400, 2), now, "咖啡")?;
+    service.record_expense(
+        alipay.id,
+        entertainment.id,
+        Decimal::new(4_500, 2),
+        now,
+        "电影",
+    )?;
+    service.record_transfer(
+        cmb.id,
+        alipay.id,
+        Decimal::new(100_000, 2),
+        Decimal::new(100_000, 2),
+        now,
+        "日常消费金",
+    )?;
+    Ok(())
+}
+
+fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
+    state
+        .service
+        .lock()
+        .map_err(|_| KokuError::InvalidInput("bookkeeping service lock was poisoned".to_owned()))
+}
+
+async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
+    Json(ApiResponse::new(serde_json::json!({
+        "status": "ok",
+        "service": "koku-api"
+    })))
+}
+
+async fn api_accounts(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Account>>>> {
+    let accounts = lock_service(&state)?.accounts()?;
+    Ok(Json(ApiResponse::new(accounts)))
+}
+
+async fn api_create_account(
+    State(state): State<AppState>,
+    Json(request): Json<CreateAccountRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
+    let account = lock_service(&state)?.create_account(
+        request.name,
+        request.account_type,
+        request.currency,
+        request.opening_balance,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(account))))
+}
+
+async fn api_categories(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Category>>>> {
+    let categories = lock_service(&state)?.categories()?;
+    Ok(Json(ApiResponse::new(categories)))
+}
+
+async fn api_create_category(
+    State(state): State<AppState>,
+    Json(request): Json<CreateCategoryRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Category>>)> {
+    let category = lock_service(&state)?.create_category(request.name, request.kind)?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
+}
+
+async fn api_transactions(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
+    let transactions = lock_service(&state)?.transactions()?;
+    Ok(Json(ApiResponse::new(transactions)))
+}
+
+async fn api_create_transaction(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTransactionRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let occurred_at = request.occurred_at.unwrap_or_else(Utc::now);
+    let mut service = lock_service(&state)?;
+    let transaction = match request.kind {
+        TransactionKind::Expense => service.record_expense(
+            request.account_id,
+            request.category_id,
+            request.amount,
+            occurred_at,
+            request.note,
+        )?,
+        TransactionKind::Income => service.record_income(
+            request.account_id,
+            request.category_id,
+            request.amount,
+            occurred_at,
+            request.note,
+        )?,
+        TransactionKind::Transfer => {
+            return Err(KokuError::InvalidInput(
+                "use /api/transfers for transfer transactions".to_owned(),
+            ))
+        }
+    };
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
+async fn api_create_transfer(
+    State(state): State<AppState>,
+    Json(request): Json<CreateTransferRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let transaction = lock_service(&state)?.record_transfer(
+        request.from_account_id,
+        request.to_account_id,
+        request.source_amount,
+        request.target_amount,
+        request.occurred_at.unwrap_or_else(Utc::now),
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
+async fn api_void_transaction(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Transaction>>> {
+    let transaction = lock_service(&state)?.void_transaction(transaction_id)?;
+    Ok(Json(ApiResponse::new(transaction)))
+}
+
+async fn api_monthly_summary(
+    State(state): State<AppState>,
+    Query(query): Query<MonthlyQuery>,
+) -> Result<Json<ApiResponse<MonthlySummary>>> {
+    let now = Utc::now();
+    let summary = lock_service(&state)?.monthly_summary(
+        query.year.unwrap_or_else(|| now.year()),
+        query.month.unwrap_or_else(|| now.month()),
+        query.currency.as_deref().unwrap_or("CNY"),
+    )?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
+async fn api_balance_summary(
+    State(state): State<AppState>,
+    Query(query): Query<BalanceQuery>,
+) -> Result<Json<ApiResponse<BalanceSummary>>> {
+    let summary =
+        lock_service(&state)?.balance_summary(query.currency.as_deref().unwrap_or("CNY"))?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
+fn api_router(state: AppState) -> Router {
+    Router::new()
+        .route("/api/health", get(api_health))
+        .route("/api/accounts", get(api_accounts).post(api_create_account))
+        .route(
+            "/api/categories",
+            get(api_categories).post(api_create_category),
+        )
+        .route(
+            "/api/transactions",
+            get(api_transactions).post(api_create_transaction),
+        )
+        .route("/api/transfers", post(api_create_transfer))
+        .route(
+            "/api/transactions/{transaction_id}",
+            delete(api_void_transaction),
+        )
+        .route("/api/summary/monthly", get(api_monthly_summary))
+        .route("/api/summary/balance", get(api_balance_summary))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
+        .with_state(state)
+}
+
+async fn run_server() -> Result<()> {
+    let database_path = std::env::var("KOKU_DB_PATH").unwrap_or_else(|_| "data/koku.db".to_owned());
+    if let Some(parent) = Path::new(&database_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut service = BookkeepingService::open(&database_path)?;
+    seed_demo_data(&mut service)?;
+
+    let port = std::env::var("KOKU_PORT")
+        .unwrap_or_else(|_| "8080".to_owned())
+        .parse::<u16>()
+        .map_err(|error| KokuError::InvalidInput(format!("invalid KOKU_PORT: {error}")))?;
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    println!("Koku API is listening on http://{address}");
+
+    let state = AppState {
+        service: Arc::new(Mutex::new(service)),
+    };
+    axum::serve(listener, api_router(state))
+        .with_graceful_shutdown(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                eprintln!("failed to listen for shutdown signal: {error}");
+            }
+        })
+        .await?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let result = if std::env::args().any(|argument| argument == "--demo") {
+        run_demo()
+    } else {
+        run_server().await
+    };
+    if let Err(error) = result {
         eprintln!("Koku failed: {error}");
         std::process::exit(1);
     }
