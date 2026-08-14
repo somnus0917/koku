@@ -72,6 +72,20 @@ impl AccountType {
             Self::Liability => "负债",
         }
     }
+
+    fn apply_inflow(self, balance: Decimal, amount: Decimal) -> Decimal {
+        match self {
+            Self::Asset => balance + amount,
+            Self::Liability => balance - amount,
+        }
+    }
+
+    fn apply_outflow(self, balance: Decimal, amount: Decimal) -> Decimal {
+        match self {
+            Self::Asset => balance - amount,
+            Self::Liability => balance + amount,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -733,7 +747,7 @@ impl BookkeepingService {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::account_in_tx(&tx, account_id)?;
+        let account = Self::account_in_tx(&tx, account_id)?;
         let category = Self::category_in_tx(&tx, category_id)?;
         if category.kind != expected_category_kind {
             return Err(KokuError::CategoryKindMismatch {
@@ -744,8 +758,8 @@ impl BookkeepingService {
 
         let current_balance = Self::balance_in_tx(&tx, account_id, &currency)?;
         let new_balance = match kind {
-            TransactionKind::Expense => current_balance - amount,
-            TransactionKind::Income => current_balance + amount,
+            TransactionKind::Expense => account.account_type.apply_outflow(current_balance, amount),
+            TransactionKind::Income => account.account_type.apply_inflow(current_balance, amount),
             TransactionKind::Transfer => unreachable!("validated above"),
         };
         Self::set_balance(&tx, account_id, &currency, new_balance)?;
@@ -806,8 +820,8 @@ impl BookkeepingService {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::account_in_tx(&tx, from_account_id)?;
-        Self::account_in_tx(&tx, to_account_id)?;
+        let source = Self::account_in_tx(&tx, from_account_id)?;
+        let target = Self::account_in_tx(&tx, to_account_id)?;
         if source_currency == target_currency && source_amount != target_amount {
             return Err(KokuError::InvalidInput(
                 "same-currency transfers must use equal source and target amounts".to_owned(),
@@ -820,13 +834,17 @@ impl BookkeepingService {
             &tx,
             from_account_id,
             &source_currency,
-            source_balance - source_amount,
+            source
+                .account_type
+                .apply_outflow(source_balance, source_amount),
         )?;
         Self::set_balance(
             &tx,
             to_account_id,
             &target_currency,
-            target_balance + target_amount,
+            target
+                .account_type
+                .apply_inflow(target_balance, target_amount),
         )?;
         tx.execute(
             "INSERT INTO transactions(kind, account_id, to_account_id, amount, currency, target_amount, target_currency, occurred_at, note) VALUES ('transfer', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -846,7 +864,7 @@ impl BookkeepingService {
             return Err(KokuError::AlreadyVoided);
         }
 
-        Self::account_in_tx(&tx, transaction.account_id)?;
+        let source = Self::account_in_tx(&tx, transaction.account_id)?;
         let source_balance =
             Self::balance_in_tx(&tx, transaction.account_id, &transaction.currency)?;
         match transaction.kind {
@@ -855,7 +873,9 @@ impl BookkeepingService {
                     &tx,
                     transaction.account_id,
                     &transaction.currency,
-                    source_balance + transaction.amount,
+                    source
+                        .account_type
+                        .apply_inflow(source_balance, transaction.amount),
                 )?;
             }
             TransactionKind::Income => {
@@ -863,7 +883,9 @@ impl BookkeepingService {
                     &tx,
                     transaction.account_id,
                     &transaction.currency,
-                    source_balance - transaction.amount,
+                    source
+                        .account_type
+                        .apply_outflow(source_balance, transaction.amount),
                 )?;
             }
             TransactionKind::Transfer => {
@@ -876,19 +898,23 @@ impl BookkeepingService {
                 let target_currency = transaction.target_currency.as_deref().ok_or_else(|| {
                     KokuError::InvalidInput("transfer is missing its target currency".to_owned())
                 })?;
-                Self::account_in_tx(&tx, target_id)?;
+                let target = Self::account_in_tx(&tx, target_id)?;
                 let target_balance = Self::balance_in_tx(&tx, target_id, target_currency)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
                     &transaction.currency,
-                    source_balance + transaction.amount,
+                    source
+                        .account_type
+                        .apply_inflow(source_balance, transaction.amount),
                 )?;
                 Self::set_balance(
                     &tx,
                     target_id,
                     target_currency,
-                    target_balance - target_amount,
+                    target
+                        .account_type
+                        .apply_outflow(target_balance, target_amount),
                 )?;
             }
         }
@@ -1802,28 +1828,28 @@ mod tests {
             "CNY",
             Decimal::from(1000_u32),
         )?;
-        let refund = service.create_category("Refund", CategoryKind::Income)?;
+        let refund_category = service.create_category("Refund", CategoryKind::Income)?;
         let shopping = service.create_category("Shopping", CategoryKind::Expense)?;
         let at = NaiveDate::from_ymd_opt(2026, 8, 15)
             .and_then(|date| date.and_hms_opt(12, 0, 0))
             .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
             .and_utc();
 
-        service.record_income_in_currency(
-            visa.id,
-            refund.id,
-            Decimal::from(200_u32),
-            "USD",
-            at,
-            "USD refund",
-        )?;
         let purchase = service.record_expense_in_currency(
             visa.id,
             shopping.id,
-            Decimal::from_str("32.50")?,
+            Decimal::from(200_u32),
             "USD",
             at,
             "USD purchase",
+        )?;
+        let refund = service.record_income_in_currency(
+            visa.id,
+            refund_category.id,
+            Decimal::from_str("32.50")?,
+            "USD",
+            at,
+            "USD refund",
         )?;
 
         let account = service.account(visa.id)?;
@@ -1846,11 +1872,11 @@ mod tests {
         );
 
         let summary = service.monthly_summary(2026, 8, "USD")?;
-        assert_eq!(summary.total_income, Decimal::from(200_u32));
-        assert_eq!(summary.total_expense, Decimal::from_str("32.50")?);
+        assert_eq!(summary.total_income, Decimal::from_str("32.50")?);
+        assert_eq!(summary.total_expense, Decimal::from(200_u32));
         assert_eq!(purchase.currency, "USD");
 
-        service.void_transaction(purchase.id)?;
+        service.void_transaction(refund.id)?;
         let account = service.account(visa.id)?;
         assert_eq!(
             account
@@ -1905,6 +1931,45 @@ mod tests {
                 .map(|item| item.balance),
             Some(Decimal::ZERO)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn paying_a_liability_reduces_debt_and_void_restores_it() -> Result<()> {
+        let mut service = test_service()?;
+        let checking = service.create_account(
+            "Checking",
+            AccountType::Asset,
+            "CNY",
+            Decimal::from(1000_u32),
+        )?;
+        let visa = service.create_account(
+            "Visa debt",
+            AccountType::Liability,
+            "CNY",
+            Decimal::from(500_u32),
+        )?;
+
+        let payment = service.record_transfer(
+            checking.id,
+            visa.id,
+            Decimal::from(200_u32),
+            Decimal::from(200_u32),
+            Utc::now(),
+            "card payment",
+        )?;
+        assert_eq!(
+            service.account(checking.id)?.balance,
+            Decimal::from(800_u32)
+        );
+        assert_eq!(service.account(visa.id)?.balance, Decimal::from(300_u32));
+
+        service.void_transaction(payment.id)?;
+        assert_eq!(
+            service.account(checking.id)?.balance,
+            Decimal::from(1000_u32)
+        );
+        assert_eq!(service.account(visa.id)?.balance, Decimal::from(500_u32));
         Ok(())
     }
 
