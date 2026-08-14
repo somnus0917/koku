@@ -1,5 +1,7 @@
 # Koku
 
+[![CI](https://github.com/somnus0917/koku/actions/workflows/ci.yml/badge.svg)](https://github.com/somnus0917/koku/actions/workflows/ci.yml)
+
 Koku 是一个本地优先、前后端分离的个人记账 MVP。设计借鉴了 [Sure](https://github.com/we-promise/sure) 克制、清晰的财务工作台体验，但采用独立的 Koku 视觉语言与 Rust 实现。
 
 ## 功能
@@ -10,6 +12,7 @@ Koku 是一个本地优先、前后端分离的个人记账 MVP。设计借鉴�
 - `rust_decimal` 精确货币计算，API 金额统一序列化为字符串
 - 月度收支、净结余、分类占比与净资产统计
 - 28 个开箱即用的收入/支出分类，并支持自定义补充
+- 每个预设分类拥有独立图标、配色和头像，自定义分类自动生成稳定视觉样式
 - 桌面 Sankey 与手机纵向流量卡片两套现金流视图
 - 响应式桌面/移动界面、底部快捷导航、浅色/深色主题
 - 本地 SQLite 持久化，首次启动自动生成演示账本
@@ -68,6 +71,8 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cd frontend && npm run build
 ```
+
+同样的检查已配置在 [GitHub Actions CI](.github/workflows/ci.yml)，会在推送到 `main` 或创建 Pull Request 时自动运行。
 
 保留原始控制台演示入口：
 
