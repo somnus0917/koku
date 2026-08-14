@@ -1,7 +1,9 @@
 /target/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/*.tsbuildinfo
 /data/
 *.db
 *.db-shm
 *.db-wal
 .DS_Store
-
