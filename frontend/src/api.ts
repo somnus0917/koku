@@ -3,6 +3,7 @@ import type {
   AccountType,
   AppData,
   BalanceSummary,
+  CashFlowSummary,
   Category,
   CategoryKind,
   MonthlySummary,
@@ -47,14 +48,15 @@ export async function loadAppData(
     currency
   });
   const currencyQuery = new URLSearchParams({ currency });
-  const [accounts, categories, transactions, monthly, balance] = await Promise.all([
+  const [accounts, categories, transactions, monthly, cashFlow, balance] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Transaction[]>("/api/transactions"),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
+    request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`)
   ]);
-  return { accounts, categories, transactions, monthly, balance };
+  return { accounts, categories, transactions, monthly, cashFlow, balance };
 }
 
 export function createAccount(input: {
@@ -110,4 +112,3 @@ export function createTransfer(input: {
 export function voidTransaction(id: number): Promise<Transaction> {
   return request(`/api/transactions/${id}`, { method: "DELETE" });
 }
-

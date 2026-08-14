@@ -49,6 +49,7 @@ import type {
   Account,
   AccountType,
   AppData,
+  CashFlowSummary,
   Category,
   CategoryKind,
   MonthlySummary,
@@ -187,7 +188,7 @@ function App() {
           />
         );
       case "insights":
-        return <InsightsPage summary={data.monthly} />;
+        return <InsightsPage summary={data.monthly} cashFlow={data.cashFlow} />;
       default:
         return (
           <Dashboard
@@ -687,7 +688,7 @@ function TransactionRow({
   );
 }
 
-function InsightsPage({ summary }: { summary: MonthlySummary }) {
+function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; cashFlow: CashFlowSummary }) {
   const gradient = buildDonutGradient(summary);
   return (
     <div className="page page-enter">
@@ -697,6 +698,7 @@ function InsightsPage({ summary }: { summary: MonthlySummary }) {
         <SummaryCard label="本月支出" value={summary.total_expense} currency={summary.currency} tone="orange" />
         <SummaryCard label="本月结余" value={summary.net} currency={summary.currency} tone="blue" />
       </section>
+      <CashFlowSankey summary={cashFlow} />
       <section className="insights-grid">
         <article className="panel donut-panel">
           <div className="section-heading compact-heading"><div><span>CATEGORY MIX</span><h2>分类占比</h2></div></div>
@@ -722,6 +724,201 @@ function InsightsPage({ summary }: { summary: MonthlySummary }) {
       </article>
     </div>
   );
+}
+
+interface SankeyDatum {
+  id: string;
+  name: string;
+  amount: number;
+  amountText: string;
+  color: string;
+}
+
+interface SankeyNode extends SankeyDatum {
+  y: number;
+  height: number;
+}
+
+function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
+  const layout = useMemo(() => {
+    const retained = Number(summary.retained);
+    const sources: SankeyDatum[] = summary.income_sources.map((item, index) => ({
+      id: `income-${item.category_id}`,
+      name: item.category_name,
+      amount: Number(item.amount),
+      amountText: item.amount,
+      color: ["#24936a", "#56a87d", "#7bb99a", "#9bc9af"][index % 4]
+    }));
+    const destinations: SankeyDatum[] = summary.expense_destinations.map((item, index) => ({
+      id: `expense-${item.category_id}`,
+      name: item.category_name,
+      amount: Number(item.amount),
+      amountText: item.amount,
+      color: CATEGORY_COLORS[(index + 1) % CATEGORY_COLORS.length]
+    }));
+    if (retained < 0) {
+      sources.push({
+        id: "deficit",
+        name: "动用存量资金",
+        amount: Math.abs(retained),
+        amountText: String(Math.abs(retained)),
+        color: "#c27b58"
+      });
+    } else if (retained > 0) {
+      destinations.push({
+        id: "retained",
+        name: "本月结余",
+        amount: retained,
+        amountText: summary.retained,
+        color: "#3f9d70"
+      });
+    }
+
+    const flowTotal = Number(summary.flow_total);
+    const count = Math.max(sources.length, destinations.length, 1);
+    const height = Math.max(430, count * 76 + 90);
+    const top = 48;
+    const bottom = 44;
+    const gap = 20;
+    const flowArea = height - top - bottom;
+    const position = (items: SankeyDatum[]): SankeyNode[] => {
+      if (!items.length || flowTotal <= 0) return [];
+      const available = Math.max(40, flowArea - gap * Math.max(0, items.length - 1));
+      const minimum = Math.min(7, available / items.length);
+      const proportional = Math.max(0, available - minimum * items.length);
+      let cursor = top;
+      return items.map((item) => {
+        const nodeHeight = minimum + (item.amount / flowTotal) * proportional;
+        const node = { ...item, y: cursor, height: nodeHeight };
+        cursor += nodeHeight + gap;
+        return node;
+      });
+    };
+    const sourceNodes = position(sources);
+    const destinationNodes = position(destinations);
+    const sourceHeight = sourceNodes.reduce((sum, item) => sum + item.height, 0);
+    const destinationHeight = destinationNodes.reduce((sum, item) => sum + item.height, 0);
+    const centerHeight = Math.max(sourceHeight, destinationHeight, 12);
+    return {
+      height,
+      sources: sourceNodes,
+      destinations: destinationNodes,
+      centerY: (height - centerHeight) / 2,
+      centerHeight,
+      empty: flowTotal <= 0
+    };
+  }, [summary]);
+
+  if (layout.empty) {
+    return (
+      <details className="panel cash-flow-panel" open>
+        <summary><span><ChevronDown size={18} />现金流</span><small>收入如何流向支出</small></summary>
+        <EmptyState title="暂无现金流" detail="记录本月收入或支出后，这里会生成资金流向图。" />
+      </details>
+    );
+  }
+
+  let sourceCenterCursor = layout.centerY;
+  const sourceRibbons = layout.sources.map((node) => {
+    const centerY = sourceCenterCursor;
+    sourceCenterCursor += node.height;
+    return { node, centerY };
+  });
+  let destinationCenterCursor = layout.centerY;
+  const destinationRibbons = layout.destinations.map((node) => {
+    const centerY = destinationCenterCursor;
+    destinationCenterCursor += node.height;
+    return { node, centerY };
+  });
+
+  return (
+    <details className="panel cash-flow-panel" open>
+      <summary>
+        <span><ChevronDown size={18} />现金流</span>
+        <small>收入来源 → 可用现金 → 支出去向与结余</small>
+      </summary>
+      <div className="sankey-scroll">
+        <svg
+          className="sankey-canvas"
+          viewBox={`0 0 1080 ${layout.height}`}
+          role="img"
+          aria-label={`${summary.month}月现金流向图`}
+        >
+          <title>{summary.month} 月现金流</title>
+          <desc>左侧为收入分类，中间为本月现金流，右侧为支出分类与结余，连线宽度代表金额。</desc>
+          {sourceRibbons.map(({ node, centerY }) => (
+            <path
+              key={`source-ribbon-${node.id}`}
+              className="sankey-ribbon income-ribbon"
+              d={sankeyRibbonPath(158, node.y, node.height, 522, centerY, node.height)}
+              style={{ fill: node.color }}
+            >
+              <title>{node.name}：{formatMoney(node.amountText, summary.currency)}</title>
+            </path>
+          ))}
+          {destinationRibbons.map(({ node, centerY }) => (
+            <path
+              key={`destination-ribbon-${node.id}`}
+              className="sankey-ribbon expense-ribbon"
+              d={sankeyRibbonPath(546, centerY, node.height, 930, node.y, node.height)}
+              style={{ fill: node.color }}
+            >
+              <title>{node.name}：{formatMoney(node.amountText, summary.currency)}</title>
+            </path>
+          ))}
+
+          {layout.sources.map((node) => (
+            <g className="sankey-node" key={node.id}>
+              <rect x="144" y={node.y} width="14" height={node.height} rx="5" style={{ fill: node.color }} />
+              <text x="132" y={node.y + node.height / 2 - 2} textAnchor="end">
+                <tspan className="node-name">{node.name}</tspan>
+                <tspan className="node-amount" x="132" dy="17">{formatMoney(node.amountText, summary.currency)}</tspan>
+              </text>
+            </g>
+          ))}
+
+          <g className="sankey-center-node">
+            <rect x="522" y={layout.centerY} width="24" height={layout.centerHeight} rx="5" />
+            <text x="558" y={layout.centerY + layout.centerHeight / 2 - 3}>
+              <tspan className="center-name">本月现金流</tspan>
+              <tspan className="center-amount" x="558" dy="20">{formatMoney(summary.flow_total, summary.currency)}</tspan>
+            </text>
+          </g>
+
+          {layout.destinations.map((node) => (
+            <g className="sankey-node" key={node.id}>
+              <rect x="930" y={node.y} width="14" height={node.height} rx="5" style={{ fill: node.color }} />
+              <text x="958" y={node.y + node.height / 2 - 2}>
+                <tspan className="node-name">{node.name}</tspan>
+                <tspan className="node-amount" x="958" dy="17">{formatMoney(node.amountText, summary.currency)}</tspan>
+              </text>
+            </g>
+          ))}
+        </svg>
+      </div>
+      <p className="sankey-caption">
+        <ShieldCheck size={14} /> 转账已排除；带宽仅由当前币种下已确认的收入和支出决定。
+      </p>
+    </details>
+  );
+}
+
+function sankeyRibbonPath(
+  sourceX: number,
+  sourceY: number,
+  sourceHeight: number,
+  targetX: number,
+  targetY: number,
+  targetHeight: number
+): string {
+  const control = (targetX - sourceX) * 0.5;
+  return [
+    `M ${sourceX} ${sourceY}`,
+    `C ${sourceX + control} ${sourceY}, ${targetX - control} ${targetY}, ${targetX} ${targetY}`,
+    `L ${targetX} ${targetY + targetHeight}`,
+    `C ${targetX - control} ${targetY + targetHeight}, ${sourceX + control} ${sourceY + sourceHeight}, ${sourceX} ${sourceY + sourceHeight}`,
+    "Z"
+  ].join(" ");
 }
 
 function buildDonutGradient(summary: MonthlySummary): string {

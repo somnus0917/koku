@@ -1089,6 +1089,117 @@ button:disabled {
   margin-top: 18px;
 }
 
+.cash-flow-panel {
+  margin-top: 18px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.cash-flow-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 19px 23px;
+  border-bottom: 1px solid transparent;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cash-flow-panel[open] > summary {
+  border-bottom-color: var(--border);
+}
+
+.cash-flow-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cash-flow-panel > summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 19px;
+}
+
+.cash-flow-panel > summary svg {
+  transition: transform 160ms ease;
+}
+
+.cash-flow-panel:not([open]) > summary svg {
+  transform: rotate(-90deg);
+}
+
+.cash-flow-panel > summary small {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.sankey-scroll {
+  overflow-x: auto;
+  padding: 8px 18px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.sankey-canvas {
+  display: block;
+  width: 100%;
+  min-width: 780px;
+  height: auto;
+}
+
+.sankey-ribbon {
+  opacity: 0.16;
+  transition: opacity 160ms ease;
+}
+
+.sankey-ribbon.income-ribbon {
+  opacity: 0.2;
+}
+
+.sankey-ribbon:hover {
+  opacity: 0.42;
+}
+
+.sankey-node text,
+.sankey-center-node text {
+  fill: var(--text);
+  pointer-events: none;
+}
+
+.sankey-node .node-name,
+.sankey-center-node .center-name {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.sankey-node .node-amount,
+.sankey-center-node .center-amount {
+  fill: var(--text-soft);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sankey-center-node rect {
+  fill: var(--accent);
+}
+
+.sankey-center-node .center-name {
+  font-size: 14px;
+}
+
+.sankey-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 23px 17px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
 .donut-layout {
   display: grid;
   grid-template-columns: 220px 1fr;
@@ -1564,6 +1675,10 @@ button:disabled {
   .transaction-row .transaction-amount { grid-column: 2; }
   .row-action { grid-column: 3; }
   .donut-layout { grid-template-columns: 1fr; justify-items: center; }
+  .cash-flow-panel > summary { align-items: flex-start; flex-direction: column; padding: 17px; }
+  .sankey-scroll { padding-right: 10px; padding-left: 10px; }
+  .sankey-canvas { min-width: 720px; }
+  .sankey-caption { align-items: flex-start; padding-right: 17px; padding-left: 17px; }
   .donut-legend { width: 100%; }
   .insight-callout { align-items: flex-start; }
   .modal-backdrop { align-items: end; padding: 0; }

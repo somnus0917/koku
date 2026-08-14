@@ -83,7 +83,7 @@ cargo run -- --demo
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支 |
+| `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流 |
 | `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值 |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。
-

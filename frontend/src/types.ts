@@ -46,6 +46,25 @@ export interface MonthlySummary {
   expenses_by_category: CategoryExpense[];
 }
 
+export interface CashFlowItem {
+  category_id: number;
+  category_name: string;
+  amount: string;
+  percentage: string;
+}
+
+export interface CashFlowSummary {
+  year: number;
+  month: number;
+  currency: string;
+  total_income: string;
+  total_expense: string;
+  retained: string;
+  flow_total: string;
+  income_sources: CashFlowItem[];
+  expense_destinations: CashFlowItem[];
+}
+
 export interface BalanceSummary {
   currency: string;
   total_assets: string;
@@ -58,6 +77,6 @@ export interface AppData {
   categories: Category[];
   transactions: Transaction[];
   monthly: MonthlySummary;
+  cashFlow: CashFlowSummary;
   balance: BalanceSummary;
 }
-
