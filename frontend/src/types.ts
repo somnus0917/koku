@@ -13,6 +13,8 @@ export interface Account {
   interest_rate: string | null;
   /** 定期到期日，仅定期存款账户有值 */
   maturity_at: string | null;
+  /** 信用额度，仅信用账户有值 */
+  credit_limit: string | null;
 }
 
 export interface Category {

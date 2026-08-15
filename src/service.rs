@@ -51,7 +51,8 @@ impl BookkeepingService {
                 balance       TEXT NOT NULL,
                 created_at    TEXT NOT NULL,
                 interest_rate TEXT,
-                maturity_at   TEXT
+                maturity_at   TEXT,
+                credit_limit  TEXT
             );
 
             CREATE TABLE IF NOT EXISTS categories (
@@ -153,6 +154,9 @@ impl BookkeepingService {
         }
         if !table_has_column(&conn, "accounts", "maturity_at")? {
             conn.execute("ALTER TABLE accounts ADD COLUMN maturity_at TEXT", [])?;
+        }
+        if !table_has_column(&conn, "accounts", "credit_limit")? {
+            conn.execute("ALTER TABLE accounts ADD COLUMN credit_limit TEXT", [])?;
         }
         if !table_has_column(&conn, "transactions", "loan_id")? {
             conn.execute("ALTER TABLE transactions ADD COLUMN loan_id INTEGER", [])?;
@@ -298,6 +302,15 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
+    /// 设置或清除信用额度（仅对信用账户有意义）。
+    pub fn set_credit_limit(&mut self, id: i64, credit_limit: Option<Decimal>) -> Result<Account> {
+        self.conn.execute(
+            "UPDATE accounts SET credit_limit = ?1 WHERE id = ?2",
+            params![credit_limit.map(decimal_to_db), id],
+        )?;
+        self.account(id)
+    }
+
     pub fn create_category(
         &mut self,
         name: impl Into<String>,
@@ -339,7 +352,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -350,6 +363,7 @@ impl BookkeepingService {
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -363,7 +377,7 @@ impl BookkeepingService {
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts ORDER BY id",
+            "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -374,6 +388,7 @@ impl BookkeepingService {
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         rows.map(|row| account_from_row(row?)).collect()
@@ -934,6 +949,26 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
+    /// 取消"待报销"标记；已发生报销的支出不允许取消。
+    pub fn unmark_reimbursable(&mut self, transaction_id: i64) -> Result<Transaction> {
+        let transaction = self.transaction(transaction_id)?;
+        if transaction.reimbursable_at.is_none() {
+            return Err(KokuError::InvalidInput(
+                "transaction is not marked as reimbursable".to_owned(),
+            ));
+        }
+        if transaction.reimbursed_at.is_some() || !transaction.reimbursed_amount.is_zero() {
+            return Err(KokuError::InvalidInput(
+                "cannot unmark a transaction that already has reimbursements".to_owned(),
+            ));
+        }
+        self.conn.execute(
+            "UPDATE transactions SET reimbursable_at = NULL WHERE id = ?1",
+            [transaction_id],
+        )?;
+        self.transaction(transaction_id)
+    }
+
     /// 报销一笔待报销支出：生成关联的收入流水（可入任意账户），支持部分报销。
     pub fn reimburse(
         &mut self,
@@ -1327,7 +1362,7 @@ impl BookkeepingService {
     fn account_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Account> {
         let row = tx
             .query_row(
-                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -1338,6 +1373,7 @@ impl BookkeepingService {
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -1420,6 +1456,7 @@ type AccountRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 type CategoryRow = (i64, String, String);
 type TransactionRow = (
@@ -1451,6 +1488,7 @@ fn account_from_row(row: AccountRow) -> Result<Account> {
         balance: decimal_from_db(&row.4)?,
         interest_rate: row.5.as_deref().map(decimal_from_db).transpose()?,
         maturity_at: row.6.as_deref().map(parse_timestamp).transpose()?,
+        credit_limit: row.7.as_deref().map(decimal_from_db).transpose()?,
     })
 }
 
@@ -1594,16 +1632,17 @@ fn rebuild_accounts_table(conn: &Connection) -> Result<()> {
             balance       TEXT NOT NULL,
             created_at    TEXT NOT NULL,
             interest_rate TEXT,
-            maturity_at   TEXT
+            maturity_at   TEXT,
+            credit_limit  TEXT
         );
-        INSERT INTO accounts_new(id, name, account_type, currency, balance, created_at, interest_rate, maturity_at)
+        INSERT INTO accounts_new(id, name, account_type, currency, balance, created_at, interest_rate, maturity_at, credit_limit)
             SELECT id, name,
                    CASE account_type
                        WHEN 'asset' THEN 'cash'
                        WHEN 'liability' THEN 'credit'
                        ELSE account_type
                    END,
-                   currency, balance, created_at, interest_rate, maturity_at
+                   currency, balance, created_at, interest_rate, maturity_at, credit_limit
             FROM accounts;
         DROP TABLE accounts;
         ALTER TABLE accounts_new RENAME TO accounts;
@@ -2328,6 +2367,55 @@ mod tests {
         // 已有交易历史时不允许改币种
         assert!(matches!(
             service.update_account(account.id, None, None, Some("USD".to_owned())),
+            Err(KokuError::InvalidInput(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn credit_limit_can_be_set_cleared_and_reimbursable_unmarked() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
+
+        // 设置额度
+        let with_limit = service.set_credit_limit(credit.id, Some(Decimal::from(20000_u32)))?;
+        assert_eq!(with_limit.credit_limit, Some(Decimal::from(20000_u32)));
+        // 清除额度
+        assert_eq!(
+            service.set_credit_limit(credit.id, None)?.credit_limit,
+            None
+        );
+
+        // 报销标记 → 取消 → 再标记 → 报销后不可取消
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "餐费")?;
+
+        service.mark_reimbursable(expense.id)?;
+        assert!(service.transaction(expense.id)?.reimbursable_at.is_some());
+        let unmarked = service.unmark_reimbursable(expense.id)?;
+        assert!(unmarked.reimbursable_at.is_none());
+        assert!(matches!(
+            service.unmark_reimbursable(expense.id),
+            Err(KokuError::InvalidInput(_))
+        ));
+
+        service.mark_reimbursable(expense.id)?;
+        service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(100_u32),
+            "CNY",
+            None,
+            "报销",
+        )?;
+        assert!(matches!(
+            service.unmark_reimbursable(expense.id),
             Err(KokuError::InvalidInput(_))
         ));
         Ok(())

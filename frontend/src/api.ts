@@ -95,6 +95,7 @@ export function createAccount(input: {
   account_type: AccountType;
   currency: string;
   opening_balance: string;
+  credit_limit?: string;
 }): Promise<Account> {
   return request("/api/accounts", {
     method: "POST",
@@ -104,7 +105,7 @@ export function createAccount(input: {
 
 export function updateAccount(
   id: number,
-  input: { name?: string; account_type?: AccountType; currency?: string }
+  input: { name?: string; account_type?: AccountType; currency?: string; credit_limit?: string | null }
 ): Promise<Account> {
   return request(`/api/accounts/${id}`, {
     method: "PATCH",
@@ -172,6 +173,10 @@ export function voidTransaction(id: number): Promise<Transaction> {
 
 export function markReimbursable(id: number): Promise<Transaction> {
   return request(`/api/transactions/${id}/reimbursable`, { method: "POST" });
+}
+
+export function unmarkReimbursable(id: number): Promise<Transaction> {
+  return request(`/api/transactions/${id}/reimbursable`, { method: "DELETE" });
 }
 
 export function reimburse(input: {

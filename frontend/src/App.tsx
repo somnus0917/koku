@@ -85,6 +85,7 @@ import {
   reimburse,
   repayLoan,
   settleDeposit,
+  unmarkReimbursable,
   updateAccount,
   voidTransaction
 } from "./api";
@@ -103,14 +104,13 @@ import type {
   TransactionKind
 } from "./types";
 
-type View = "dashboard" | "accounts" | "transactions" | "loans" | "insights";
+type View = "dashboard" | "accounts" | "transactions" | "insights";
 type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
   { id: "accounts", label: "账户", icon: WalletCards },
   { id: "transactions", label: "交易", icon: ReceiptText },
-  { id: "loans", label: "借贷", icon: Handshake },
   { id: "insights", label: "分析", icon: ChartNoAxesCombined }
 ];
 
@@ -396,6 +396,11 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               setSettleTarget(account);
               setModal("settle");
             }}
+            onCreateLoan={() => setModal("loan")}
+            onRepay={(loan) => {
+              setLoanTarget(loan);
+              setModal("repay");
+            }}
           />
         );
       case "transactions":
@@ -409,21 +414,12 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onMarkReimbursable={(transaction) =>
               void mutate(() => markReimbursable(transaction.id), "已标记为待报销")
             }
+            onUnmarkReimbursable={(transaction) =>
+              void mutate(() => unmarkReimbursable(transaction.id), "已取消待报销标记")
+            }
             onReimburse={(transaction) => {
               setReimburseTarget(transaction);
               setModal("reimburse");
-            }}
-          />
-        );
-      case "loans":
-        return (
-          <LoansPage
-            loans={data.loans}
-            accounts={data.accounts}
-            onCreateLoan={() => setModal("loan")}
-            onRepay={(loan) => {
-              setLoanTarget(loan);
-              setModal("repay");
             }}
           />
         );
@@ -474,13 +470,6 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
         </nav>
 
         <div className="sidebar-spacer" />
-        <div className="privacy-note">
-          <ShieldCheck size={18} />
-          <div>
-            <strong>私有部署</strong>
-            <span>数据保存在你的服务器</span>
-          </div>
-        </div>
         <div className="profile-actions">
           <button className="profile-chip" onClick={() => setModal("category")}>
             <span className="avatar">K</span>
@@ -841,13 +830,17 @@ function AccountsPage({
   onAddAccount,
   onEdit,
   onDeposit,
-  onSettle
+  onSettle,
+  onCreateLoan,
+  onRepay
 }: {
   data: AppData;
   onAddAccount: () => void;
   onEdit: (account: Account) => void;
   onDeposit: (account: Account) => void;
   onSettle: (account: Account) => void;
+  onCreateLoan: () => void;
+  onRepay: (loan: Loan) => void;
 }) {
   const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
   const cash = group("cash");
@@ -881,6 +874,12 @@ function AccountsPage({
       />
       <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} />
       <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} />
+      <LoansSection
+        loans={data.loans}
+        accounts={data.accounts}
+        onCreateLoan={onCreateLoan}
+        onRepay={onRepay}
+      />
     </div>
   );
 }
@@ -926,9 +925,11 @@ function AccountGroup({
                 <h3>{account.name}</h3>
                 <span>
                   {account.currency} 结算 · 单一余额
-                  {account.interest_rate && account.maturity_at
-                    ? ` · 定期 ${account.interest_rate}% · ${formatDate(account.maturity_at)}到期`
-                    : ""}
+                  {account.credit_limit
+                    ? ` · 额度 ${formatMoney(account.credit_limit, account.currency)} · 已用 ${formatMoney(account.balance, account.currency)}`
+                    : account.interest_rate && account.maturity_at
+                      ? ` · 定期 ${account.interest_rate}% · ${formatDate(account.maturity_at)}到期`
+                      : ""}
                 </span>
               </div>
               <strong>{formatMoney(account.balance, account.currency)}</strong>
@@ -948,12 +949,14 @@ function TransactionsPage({
   onAdd,
   onVoid,
   onMarkReimbursable,
+  onUnmarkReimbursable,
   onReimburse
 }: {
   data: AppData;
   onAdd: () => void;
   onVoid: (transaction: Transaction) => void;
   onMarkReimbursable: (transaction: Transaction) => void;
+  onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -994,6 +997,7 @@ function TransactionsPage({
             category={transaction.category_id ? categoriesById.get(transaction.category_id) : undefined}
             onVoid={() => onVoid(transaction)}
             onMarkReimbursable={() => onMarkReimbursable(transaction)}
+            onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
             onReimburse={() => onReimburse(transaction)}
           />
         ))}
@@ -1031,6 +1035,7 @@ function TransactionRow({
   compact = false,
   onVoid,
   onMarkReimbursable,
+  onUnmarkReimbursable,
   onReimburse
 }: {
   transaction: Transaction;
@@ -1040,6 +1045,7 @@ function TransactionRow({
   compact?: boolean;
   onVoid?: () => void;
   onMarkReimbursable?: () => void;
+  onUnmarkReimbursable?: () => void;
   onReimburse?: () => void;
 }) {
   const meta = {
@@ -1093,7 +1099,10 @@ function TransactionRow({
         <div className="row-actions">
           {transaction.kind === "expense" && !transaction.voided_at && (
             reimbursable
-              ? <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
+              ? <>
+                  <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
+                  <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
+                </>
               : !transaction.reimbursed_at && (
                   <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
                 )
@@ -1424,7 +1433,7 @@ function CategoryBars({ summary, detailed = false }: { summary: MonthlySummary; 
   );
 }
 
-function LoansPage({
+function LoansSection({
   loans,
   accounts,
   onCreateLoan,
@@ -1446,60 +1455,53 @@ function LoansPage({
     .reduce((sum, loan) => sum + Number(loan.outstanding), 0);
   const currency = open[0]?.currency ?? "CNY";
   return (
-    <div className="page page-enter">
-      <PageTitle
-        eyebrow="LOANS"
-        title="借入与借出"
-        actions={<button className="primary-button" onClick={onCreateLoan}><Plus size={18} /> 记一笔借款</button>}
-      />
-      <section className="balance-summary-row">
+    <section className="section-block account-group">
+      <div className="section-heading compact-heading">
+        <div><span>LOANS</span><h2>借入与借出</h2></div>
+        <button className="text-button" onClick={onCreateLoan}><Plus size={16} /> 记一笔借款</button>
+      </div>
+      <div className="balance-summary-row">
         <SummaryCard label="借出应收" value={lendOutstanding.toFixed(2)} currency={currency} tone="green" />
         <SummaryCard label="借入应付" value={borrowOutstanding.toFixed(2)} currency={currency} tone="orange" />
-      </section>
-      <section className="section-block account-group">
-        <div className="section-heading compact-heading"><div><span>{open.length} 笔未结清</span><h2>进行中</h2></div></div>
-        <div className="account-grid">
-          {open.map((loan) => (
-            <article className="account-detail-card" key={loan.id}>
-              <span className={`large-account-icon tone-${loan.id % 4}`}><Handshake size={23} /></span>
+      </div>
+      <div className="account-grid">
+        {open.map((loan) => (
+          <article className="account-detail-card" key={loan.id}>
+            <span className={`large-account-icon tone-${loan.id % 4}`}><Handshake size={23} /></span>
+            <div className="account-detail-copy">
+              <h3>
+                {loan.counterparty}
+                <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
+                  {loan.loan_type === "lend" ? "借出" : "借入"}
+                </small>
+              </h3>
+              <span>
+                {loan.currency} · 本金 {formatMoney(loan.principal, loan.currency)} ·{" "}
+                {accountMap.get(loan.account_id)?.name ?? "未知账户"}
+                {loan.note ? ` · ${loan.note}` : ""}
+              </span>
+            </div>
+            <strong>{formatMoney(loan.outstanding, loan.currency)}</strong>
+            <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
+          </article>
+        ))}
+        {open.length === 0 && <EmptyState title="没有进行中的借款" detail="点击“记一笔借款”借出或借入。" />}
+      </div>
+      {closed.length > 0 && (
+        <div className="account-grid closed-loans">
+          {closed.map((loan) => (
+            <article className="account-detail-card muted" key={loan.id}>
+              <span className="large-account-icon"><Handshake size={23} /></span>
               <div className="account-detail-copy">
-                <h3>
-                  {loan.counterparty}
-                  <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
-                    {loan.loan_type === "lend" ? "借出" : "借入"}
-                  </small>
-                </h3>
-                <span>
-                  {loan.currency} · 本金 {formatMoney(loan.principal, loan.currency)} ·{" "}
-                  {accountMap.get(loan.account_id)?.name ?? "未知账户"}
-                  {loan.note ? ` · ${loan.note}` : ""}
-                </span>
+                <h3>{loan.counterparty}<small>{loan.loan_type === "lend" ? "借出" : "借入"}</small></h3>
+                <span>{formatDate(loan.opened_at)} 开立{loan.closed_at ? ` · ${formatDate(loan.closed_at)} 结清` : ""}</span>
               </div>
-              <strong>{formatMoney(loan.outstanding, loan.currency)}</strong>
-              <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
+              <strong>已结清</strong>
             </article>
           ))}
-          {open.length === 0 && <EmptyState title="没有进行中的借款" detail="点击“记一笔借款”借出或借入。" />}
         </div>
-      </section>
-      {closed.length > 0 && (
-        <section className="section-block account-group">
-          <div className="section-heading compact-heading"><div><span>{closed.length} 笔已结清</span><h2>已结清</h2></div></div>
-          <div className="account-grid">
-            {closed.map((loan) => (
-              <article className="account-detail-card muted" key={loan.id}>
-                <span className="large-account-icon"><Handshake size={23} /></span>
-                <div className="account-detail-copy">
-                  <h3>{loan.counterparty}<small>{loan.loan_type === "lend" ? "借出" : "借入"}</small></h3>
-                  <span>{formatDate(loan.opened_at)} 开立{loan.closed_at ? ` · ${formatDate(loan.closed_at)} 结清` : ""}</span>
-                </div>
-                <strong>已结清</strong>
-              </article>
-            ))}
-          </div>
-        </section>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -1912,11 +1914,12 @@ function EditAccountModal({
   account: Account;
   currencies: string[];
   onClose: () => void;
-  onSubmit: (input: { details: { name?: string; account_type?: AccountType; currency?: string }; adjustment?: string }) => Promise<void>;
+  onSubmit: (input: { details: { name?: string; account_type?: AccountType; currency?: string; credit_limit?: string | null }; adjustment?: string }) => Promise<void>;
 }) {
   const [name, setName] = useState(account.name);
   const [type, setType] = useState<AccountType>(account.account_type);
   const [currency, setCurrency] = useState(account.currency);
+  const [creditLimit, setCreditLimit] = useState(account.credit_limit ?? "");
   const [adjustment, setAdjustment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1924,11 +1927,13 @@ function EditAccountModal({
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
+      const limitChanged = creditLimit.trim() !== (account.credit_limit ?? "");
       await onSubmit({
         details: {
           name: name.trim() !== account.name ? name.trim() : undefined,
           account_type: type !== account.account_type ? type : undefined,
-          currency: currency !== account.currency ? currency : undefined
+          currency: currency !== account.currency ? currency : undefined,
+          credit_limit: limitChanged ? (creditLimit.trim() ? creditLimit.trim() : null) : undefined
         },
         adjustment: adjustment ? adjustment : undefined
       });
@@ -1957,6 +1962,9 @@ function EditAccountModal({
           <label className="span-two"><span>余额调整（正数增加 / 负数减少，留空则不调整）</span>
             <input step="0.01" inputMode="decimal" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="0.00" />
           </label>
+          <label className="span-two"><span>信用额度（仅信用账户，留空表示不设置）</span>
+            <input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="例如 20000" />
+          </label>
         </div>
         <p className="category-delete-note">余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。</p>
         {error && <div className="form-error">{error}</div>}
@@ -1974,11 +1982,20 @@ function AccountModal({ currencies, onClose, onSubmit }: { currencies: string[];
   const [type, setType] = useState<AccountType>("cash");
   const [currency, setCurrency] = useState("CNY");
   const [balance, setBalance] = useState("0");
+  const [creditLimit, setCreditLimit] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSubmitting(true); setError(null);
-    try { await onSubmit({ name, account_type: type, currency, opening_balance: balance }); }
+    try {
+      await onSubmit({
+        name,
+        account_type: type,
+        currency,
+        opening_balance: balance,
+        credit_limit: creditLimit.trim() ? creditLimit.trim() : undefined
+      });
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); setSubmitting(false); }
   };
   return (
@@ -1998,6 +2015,9 @@ function AccountModal({ currencies, onClose, onSubmit }: { currencies: string[];
             </select>
           </label>
           <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
+          {type === "credit" && (
+            <label className="span-two"><span>信用额度（可选）</span><input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="例如 20000" /></label>
+          )}
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建账户</button></div>

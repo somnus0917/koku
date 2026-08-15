@@ -178,6 +178,8 @@ pub struct Account {
     pub interest_rate: Option<Decimal>,
     /// 定期到期日；仅定期存款账户有值
     pub maturity_at: Option<DateTime<Utc>>,
+    /// 信用额度；仅信用账户有值
+    pub credit_limit: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

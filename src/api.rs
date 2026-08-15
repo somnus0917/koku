@@ -49,6 +49,8 @@ struct CreateAccountRequest {
     account_type: AccountType,
     currency: String,
     opening_balance: Decimal,
+    /// 信用额度（仅信用账户）
+    credit_limit: Option<Decimal>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +109,8 @@ struct UpdateAccountRequest {
     name: Option<String>,
     account_type: Option<AccountType>,
     currency: Option<String>,
+    #[serde(default)]
+    credit_limit: Option<Option<Decimal>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,12 +277,17 @@ async fn api_create_account(
     State(state): State<AppState>,
     Json(request): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
-    let account = lock_service(&state)?.create_account(
+    let mut service = lock_service(&state)?;
+    let account = service.create_account(
         request.name,
         request.account_type,
         request.currency,
         request.opening_balance,
     )?;
+    let account = match request.credit_limit {
+        Some(limit) => service.set_credit_limit(account.id, Some(limit))?,
+        None => account,
+    };
     Ok((StatusCode::CREATED, Json(ApiResponse::new(account))))
 }
 
@@ -287,12 +296,17 @@ async fn api_update_account(
     AxumPath(account_id): AxumPath<i64>,
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<Json<ApiResponse<Account>>> {
-    let account = lock_service(&state)?.update_account(
+    let mut service = lock_service(&state)?;
+    let account = service.update_account(
         account_id,
         request.name,
         request.account_type,
         request.currency,
     )?;
+    let account = match request.credit_limit {
+        Some(limit) => service.set_credit_limit(account.id, limit)?,
+        None => account,
+    };
     Ok(Json(ApiResponse::new(account)))
 }
 
@@ -450,6 +464,14 @@ async fn api_mark_reimbursable(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+async fn api_unmark_reimbursable(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Transaction>>> {
+    let transaction = lock_service(&state)?.unmark_reimbursable(transaction_id)?;
+    Ok(Json(ApiResponse::new(transaction)))
+}
+
 async fn api_reimburse(
     State(state): State<AppState>,
     Json(request): Json<ReimburseRequest>,
@@ -569,7 +591,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         )
         .route(
             "/api/transactions/{transaction_id}/reimbursable",
-            post(api_mark_reimbursable),
+            post(api_mark_reimbursable).delete(api_unmark_reimbursable),
         )
         .route("/api/reimbursements", post(api_reimburse))
         .route("/api/deposits", post(api_create_deposit))
