@@ -518,6 +518,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       {modal === "loan" && data && (
         <LoanModal
           accounts={data.accounts}
+          counterparties={[...new Set(data.loans.map((loan) => loan.counterparty))]}
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createLoan(input), "借款已记录")}
         />

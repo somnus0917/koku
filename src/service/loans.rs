@@ -33,20 +33,36 @@ impl BookkeepingService {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO loans(loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                loan_type.as_str(),
-                &counterparty,
-                currency,
-                decimal_to_db(amount),
-                decimal_to_db(amount),
-                account_id,
-                timestamp(now),
-                note.into()
-            ],
-        )?;
-        let loan_id = tx.last_insert_rowid();
+        // 同一往来人、同方向、同币种、未结清的借款合并：本金与未结余额累加。
+        let loan_id = if let Some(existing_id) =
+            Self::open_loan_id(&tx, loan_type, &counterparty, &currency)?
+        {
+            let (principal, outstanding) = Self::loan_totals(&tx, existing_id)?;
+            tx.execute(
+                "UPDATE loans SET principal = ?1, outstanding = ?2 WHERE id = ?3",
+                params![
+                    decimal_to_db(principal + amount),
+                    decimal_to_db(outstanding + amount),
+                    existing_id
+                ],
+            )?;
+            existing_id
+        } else {
+            tx.execute(
+                "INSERT INTO loans(loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    loan_type.as_str(),
+                    &counterparty,
+                    currency,
+                    decimal_to_db(amount),
+                    decimal_to_db(amount),
+                    account_id,
+                    timestamp(now),
+                    note.into()
+                ],
+            )?;
+            tx.last_insert_rowid()
+        };
         let new_balance = match loan_type {
             LoanType::Lend => account.account_type.apply_outflow(account.balance, amount),
             LoanType::Borrow => account.account_type.apply_inflow(account.balance, amount),
@@ -66,6 +82,32 @@ impl BookkeepingService {
         )?;
         tx.commit()?;
         self.loan(loan_id)
+    }
+
+    /// 查找同往来人/同方向/同币种且未结清的借款 id。
+    fn open_loan_id(
+        tx: &SqlTransaction<'_>,
+        loan_type: LoanType,
+        counterparty: &str,
+        currency: &str,
+    ) -> Result<Option<i64>> {
+        tx.query_row(
+            "SELECT id FROM loans WHERE loan_type = ?1 AND counterparty = ?2 AND currency = ?3 AND closed_at IS NULL ORDER BY id LIMIT 1",
+            params![loan_type.as_str(), counterparty, currency],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(KokuError::from)
+    }
+
+    /// 读取借款的本金与未结余额（精确 Decimal 累加，避免 SQLite TEXT 转浮点丢精度）。
+    fn loan_totals(tx: &SqlTransaction<'_>, id: i64) -> Result<(Decimal, Decimal)> {
+        let (principal, outstanding) = tx.query_row(
+            "SELECT principal, outstanding FROM loans WHERE id = ?1",
+            [id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        Ok((decimal_from_db(&principal)?, decimal_from_db(&outstanding)?))
     }
 
     /// 还款：资金从任意账户进出，递减借款未结余额，归零自动结清。

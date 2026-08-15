@@ -1314,6 +1314,101 @@ mod tests {
     }
 
     #[test]
+    fn loans_from_same_counterparty_merge_until_settled() -> Result<()> {
+        let mut service = test_service()?;
+        let savings = service.create_account(
+            "储蓄",
+            AccountType::Savings,
+            "CNY",
+            Decimal::from(10000_u32),
+        )?;
+
+        // 两次借出给张三 → 合并为一条，本金/未结 1500
+        let first = service.create_loan(
+            LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(1000_u32),
+            savings.id,
+            "",
+        )?;
+        let second = service.create_loan(
+            LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(500_u32),
+            savings.id,
+            "再借",
+        )?;
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.principal, Decimal::from(1500_u32));
+        assert_eq!(second.outstanding, Decimal::from(1500_u32));
+        assert_eq!(service.loans()?.len(), 1);
+
+        // 部分还款后再次借出：principal 累加，outstanding 只加新本金
+        service.repay_loan(
+            first.id,
+            savings.id,
+            Decimal::from(400_u32),
+            "CNY",
+            None,
+            "",
+        )?;
+        let third = service.create_loan(
+            LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(200_u32),
+            savings.id,
+            "",
+        )?;
+        assert_eq!(third.id, first.id);
+        assert_eq!(third.principal, Decimal::from(1700_u32));
+        assert_eq!(third.outstanding, Decimal::from(1300_u32));
+
+        // 不同方向（借入）、不同人是独立记录
+        service.create_loan(
+            LoanType::Borrow,
+            "张三",
+            "CNY",
+            Decimal::from(300_u32),
+            savings.id,
+            "",
+        )?;
+        service.create_loan(
+            LoanType::Lend,
+            "李四",
+            "CNY",
+            Decimal::from(100_u32),
+            savings.id,
+            "",
+        )?;
+        assert_eq!(service.loans()?.len(), 3);
+
+        // 还清后再次借出 → 另起一条
+        service.repay_loan(
+            first.id,
+            savings.id,
+            Decimal::from(1300_u32),
+            "CNY",
+            None,
+            "结清",
+        )?;
+        assert!(service.loan(first.id)?.closed_at.is_some());
+        let fourth = service.create_loan(
+            LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(50_u32),
+            savings.id,
+            "",
+        )?;
+        assert_ne!(fourth.id, first.id);
+        assert_eq!(fourth.principal, Decimal::from(50_u32));
+        Ok(())
+    }
+
+    #[test]
     fn loans_lend_borrow_and_repay_across_accounts() -> Result<()> {
         let mut service = test_service()?;
         let savings = service.create_account(

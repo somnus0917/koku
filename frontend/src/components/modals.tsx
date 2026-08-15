@@ -182,10 +182,13 @@ export function ReimburseModal({
 
 export function LoanModal({
   accounts,
+  counterparties,
   onClose,
   onSubmit
 }: {
   accounts: Account[];
+  /** 历史往来人（来自已有借款），下拉可选；选中已有的人会合并到未结清的同一方向借款 */
+  counterparties: string[];
   onClose: () => void;
   onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; note?: string }) => Promise<void>;
 }) {
@@ -222,7 +225,12 @@ export function LoanModal({
               <option value="borrow">借入（我向别人借）</option>
             </select>
           </label>
-          <label><span>往来人</span><input required autoFocus value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="例如：张三" /></label>
+          <label><span>往来人</span>
+            <input required autoFocus list="koku-counterparties" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="例如：张三" />
+            <datalist id="koku-counterparties">
+              {counterparties.map((name) => <option key={name} value={name} />)}
+            </datalist>
+          </label>
           <label><span>金额</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
           <label><span>资金账户</span>
             <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
