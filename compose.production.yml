@@ -3,7 +3,10 @@ name: koku
 services:
   api:
     container_name: koku-api
-    image: ${KOKU_API_IMAGE:?KOKU_API_IMAGE is required}
+    image: ${KOKU_API_IMAGE:-koku-api:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
     user: ${KOKU_RUNTIME_UID:-1000}:${KOKU_RUNTIME_GID:-1000}
     restart: unless-stopped
     environment:
@@ -27,7 +30,10 @@ services:
 
   web:
     container_name: koku-web
-    image: ${KOKU_WEB_IMAGE:?KOKU_WEB_IMAGE is required}
+    image: ${KOKU_WEB_IMAGE:-koku-web:local}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     restart: unless-stopped
     read_only: true
     tmpfs:

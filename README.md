@@ -122,7 +122,9 @@ docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 
 该站点块代理到 `koku-web:8080`。认证必须放在现有 Caddy 上，才能同时保护页面和所有写入型 `/api` 接口。
 
-镜像仍会发布到 GHCR 作为可追踪制品。考虑到中国区 CVM 直连 GHCR 容易出现慢速或 `unexpected EOF`，部署任务会在 GitHub Runner 上导出镜像，再通过 SSH/SCP 直接传到服务器；服务器不需要保存 GitHub PAT。
+生产部署采用与 `luopanhacker` 相同的受限 SSH 模式。CI 成功后，Actions 只向服务器发送已经验证过的 40 位 Git commit SHA；服务器下载该不可变源码归档并复用 Docker 层缓存完成构建，不通过 SCP 搬运源码或镜像，也不需要保存 GitHub PAT。
+
+Actions 使用单独的无密码部署密钥。该公钥在服务器上通过 `restrict,command="/usr/local/sbin/koku-ssh-gateway"` 强制进入命令网关，网关只接受 `deploy <40 位 SHA>`，再通过最小化 sudo 规则以 `ubuntu` 身份执行部署脚本。可以复用已加入腾讯云登录告警白名单的 `luopan-deploy` 用户，但必须为 Koku 使用独立密钥和独立强制命令。
 
 腾讯云安全组只需向公网开放 TCP `80/443` 和 UDP `443`；SSH 端口应限制为自己的可信 IP。域名的 A/AAAA 记录必须先指向服务器，Caddy 才能自动申请证书。
 
@@ -144,14 +146,14 @@ docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 
 ### 3. 自动发布过程
 
-推送到 `main` 后，[CI 工作流](.github/workflows/ci.yml) 会依次：
+推送到 `main` 后，[CI 工作流](.github/workflows/ci.yml) 与 [生产部署工作流](.github/workflows/deploy.yml) 会依次：
 
-1. 运行 Rust 测试、格式检查、Clippy 和前端构建。
-2. 构建 `koku-api`、`koku-web` 镜像并以 Git commit SHA 推送到 GHCR。
-3. 把镜像作为短期 Actions Artifact 传给部署任务，并通过 SSH/SCP 直传腾讯云。
-4. 上传 Compose、Caddy 站点模板和部署脚本。
-5. 在线备份现有 SQLite 到 `~/koku/data/backups/`。
-6. 加载并启动新镜像，等待容器健康检查；失败时恢复上一组镜像。
+1. 运行 Rust 测试、格式检查、Clippy、前端构建以及部署配置检查。
+2. 部署工作流确认通过 CI 的 SHA 仍然是 `main` 最新提交，过期结果会被跳过。
+3. Actions 使用受限密钥发送唯一允许的 `deploy <SHA>` 命令。
+4. 服务器下载该 SHA 的源码归档，并同步到 `~/koku`，保留 `.env`、SQLite 与发布状态文件。
+5. 在线备份现有 SQLite，利用服务器 Docker 缓存构建两个镜像。
+6. 启动新镜像并等待健康检查；失败时恢复上一组镜像。
 
 也可以在 GitHub Actions 页面通过 `workflow_dispatch` 手动重新部署 `main`。
 
