@@ -1,5 +1,5 @@
 //! 弹窗组件：新建/编辑账户、交易、分类、定期、报销、借款。
-import { useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import {
   BadgeDollarSign,
   Check,
@@ -12,6 +12,7 @@ import {
   X,
   type LucideIcon
 } from "lucide-react";
+import { rateHint } from "../api";
 import type { createTransaction, createTransfer } from "../api";
 import { availableCurrencies, formatDate, formatMoney, localDateTimeValue } from "../lib";
 import { CategoryAvatar } from "./avatar";
@@ -22,9 +23,93 @@ import type {
   CategoryKind,
   Loan,
   LoanType,
+  RateQuote,
   Transaction,
   TransactionKind
 } from "../types";
+
+/** 参考汇率文本：如 1 USD ≈ 7.1445 CNY（2026-08-14）。 */
+function formatRate(rate: string) {
+  return Number(rate).toFixed(4).replace(/\.?0+$/, "");
+}
+
+/** 跨币种汇率提示：自动拉取 /api/rates（服务端带缓存与多源回退），失败时可手动重试。 */
+function useRateHint(from: string | null, to: string | null) {
+  const [hint, setHint] = useState<RateQuote | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!from || !to || from === to) {
+      setHint(null);
+      setStatus("idle");
+      return;
+    }
+    let cancelled = false;
+    setStatus("loading");
+    rateHint(from, to)
+      .then((quote) => {
+        if (!cancelled) {
+          setHint(quote);
+          setStatus("ok");
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHint(null);
+          setStatus("error");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [from, to, attempt]);
+  const refresh = () => setAttempt((n) => n + 1);
+  return { hint, status, refresh };
+}
+
+function RateHintLine({
+  from,
+  to,
+  status,
+  hint,
+  onRefresh
+}: {
+  from: string;
+  to: string;
+  status: "idle" | "loading" | "ok" | "error";
+  hint: RateQuote | null;
+  onRefresh?: () => void;
+}) {
+  if (status === "loading") {
+    return <p className="fx-hint">正在获取汇率…</p>;
+  }
+  if (status === "ok" && hint) {
+    return (
+      <p className="fx-hint">
+        参考汇率 1 {from} ≈ {formatRate(hint.rate)} {to}（{hint.date}
+        {hint.stale ? "，缓存" : ""}，{hint.source}），可修改
+        {onRefresh && (
+          <button type="button" className="fx-hint-refresh" onClick={onRefresh} title="重新获取汇率" aria-label="重新获取汇率">
+            <RefreshCcw size={11} />
+          </button>
+        )}
+      </p>
+    );
+  }
+  if (status === "error") {
+    return (
+      <p className="fx-hint error">
+        未能获取汇率，请手动填写
+        {onRefresh && (
+          <button type="button" className="fx-hint-refresh" onClick={onRefresh}>
+            重新获取
+          </button>
+        )}
+      </p>
+    );
+  }
+  return null;
+}
 
 export function DepositModal({
   source,
@@ -134,19 +219,51 @@ export function ReimburseModal({
   expense: Transaction;
   accounts: Account[];
   onClose: () => void;
-  onSubmit: (input: { account_id: number; amount: string; note?: string }) => Promise<void>;
+  onSubmit: (input: {
+    account_id: number;
+    amount: string;
+    note?: string;
+    currency?: string;
+    settled_amount?: string;
+  }) => Promise<void>;
 }) {
   const remaining = Math.max(0, Number(expense.amount) - Number(expense.reimbursed_amount)).toFixed(2);
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState(remaining);
+  const [settledAmount, setSettledAmount] = useState("");
+  const [settledTouched, setSettledTouched] = useState(false);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedAccount = accounts.find((account) => account.id === Number(accountId));
+  const crossCurrency = selectedAccount != null && selectedAccount.currency !== expense.currency;
+  const { hint, status, refresh } = useRateHint(
+    crossCurrency ? expense.currency : null,
+    crossCurrency ? selectedAccount?.currency ?? null : null
+  );
+  // 汇率就绪后用真实汇率替换 1:1 预填值（用户手动改过则不覆盖）。
+  useEffect(() => {
+    if (crossCurrency && status === "ok" && hint && !settledTouched) {
+      setSettledAmount((Number(amount) * Number(hint.rate)).toFixed(2));
+    }
+  }, [crossCurrency, status, hint, amount, settledTouched]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
-      await onSubmit({ account_id: Number(accountId), amount, note: note || undefined });
+      const input: {
+        account_id: number;
+        amount: string;
+        note?: string;
+        currency?: string;
+        settled_amount?: string;
+      } = { account_id: Number(accountId), amount, note: note || undefined };
+      // 报销币种始终与支出一致；到账账户币种不同时需要显式给出入账金额。
+      if (crossCurrency) {
+        input.currency = expense.currency;
+        input.settled_amount = settledAmount;
+      }
+      await onSubmit(input);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "操作失败");
       setSubmitting(false);
@@ -160,14 +277,45 @@ export function ReimburseModal({
         </div>
         <div className="form-grid">
           <label><span>报销到账账户</span>
-            <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <select
+              required
+              value={accountId}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                setAccountId(nextId);
+                const next = accounts.find((account) => account.id === Number(nextId));
+                if (next != null && next.currency !== expense.currency && settledAmount === "") {
+                  setSettledAmount(amount);
+                }
+              }}
+            >
               <option value="" disabled>选择账户</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label><span>报销金额</span><input required step="0.01" inputMode="decimal" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label><span>报销金额（{expense.currency}）</span><input required step="0.01" inputMode="decimal" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          {crossCurrency && (
+            <>
+              <label className="span-two"><span>入账金额（{selectedAccount.currency}）</span>
+                <input
+                  required
+                  step="0.01"
+                  inputMode="decimal"
+                  value={settledAmount}
+                  onChange={(e) => {
+                    setSettledTouched(true);
+                    setSettledAmount(e.target.value);
+                  }}
+                  placeholder={`按汇率折算成 ${selectedAccount.currency}`}
+                />
+              </label>
+              <div className="span-two">
+                <RateHintLine from={expense.currency} to={selectedAccount.currency} status={status} hint={hint} onRefresh={refresh} />
+              </div>
+            </>
+          )}
           <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
@@ -261,18 +409,50 @@ export function RepayModal({
   loan: Loan;
   accounts: Account[];
   onClose: () => void;
-  onSubmit: (input: { account_id: number; amount: string; note?: string }) => Promise<void>;
+  onSubmit: (input: {
+    account_id: number;
+    amount: string;
+    note?: string;
+    currency?: string;
+    settled_amount?: string;
+  }) => Promise<void>;
 }) {
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState(loan.outstanding);
+  const [settledAmount, setSettledAmount] = useState("");
+  const [settledTouched, setSettledTouched] = useState(false);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedAccount = accounts.find((account) => account.id === Number(accountId));
+  const crossCurrency = selectedAccount != null && selectedAccount.currency !== loan.currency;
+  const { hint, status, refresh } = useRateHint(
+    crossCurrency ? loan.currency : null,
+    crossCurrency ? selectedAccount?.currency ?? null : null
+  );
+  // 汇率就绪后用真实汇率预填折算金额（用户手动改过则不覆盖）。
+  useEffect(() => {
+    if (crossCurrency && status === "ok" && hint && !settledTouched) {
+      setSettledAmount((Number(amount) * Number(hint.rate)).toFixed(2));
+    }
+  }, [crossCurrency, status, hint, amount, settledTouched]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
-      await onSubmit({ account_id: Number(accountId), amount, note: note || undefined });
+      const input: {
+        account_id: number;
+        amount: string;
+        note?: string;
+        currency?: string;
+        settled_amount?: string;
+      } = { account_id: Number(accountId), amount, note: note || undefined };
+      // 还款币种始终与借款币种一致；资金账户币种不同时需要显式给出入账金额。
+      if (crossCurrency) {
+        input.currency = loan.currency;
+        input.settled_amount = settledAmount;
+      }
+      await onSubmit(input);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "操作失败");
       setSubmitting(false);
@@ -293,7 +473,28 @@ export function RepayModal({
               ))}
             </select>
           </label>
-          <label><span>还款金额</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label><span>还款金额（{loan.currency}）</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          {crossCurrency && (
+            <>
+              <label className="span-two"><span>计入账户余额 · {selectedAccount.currency}</span>
+                <input
+                  required
+                  min="0.01"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={settledAmount}
+                  onChange={(e) => {
+                    setSettledTouched(true);
+                    setSettledAmount(e.target.value);
+                  }}
+                  placeholder={`按汇率折算成 ${selectedAccount.currency}`}
+                />
+              </label>
+              <div className="span-two">
+                <RateHintLine from={loan.currency} to={selectedAccount.currency} status={status} hint={hint} onRefresh={refresh} />
+              </div>
+            </>
+          )}
           <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
@@ -339,6 +540,7 @@ export function TransactionModal({
   const [categoryId, setCategoryId] = useState(categories.find((item) => item.kind === "expense")?.id ?? 0);
   const [amount, setAmount] = useState("");
   const [settledAmount, setSettledAmount] = useState("");
+  const [settledTouched, setSettledTouched] = useState(false);
   const [targetAmount, setTargetAmount] = useState("");
   const [note, setNote] = useState("");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
@@ -352,6 +554,16 @@ export function TransactionModal({
   const foreignTransaction = kind !== "transfer" && Boolean(source) && sourceCurrency !== source?.currency;
   const crossCurrency = kind === "transfer" && source?.currency !== target?.currency;
   const sameTransferEndpoint = kind === "transfer" && accountId === targetId;
+  const { hint, status, refresh } = useRateHint(
+    foreignTransaction ? sourceCurrency : null,
+    foreignTransaction ? source?.currency ?? null : null
+  );
+  // 汇率就绪后用真实汇率预填「计入账户余额」（用户手动改过则不覆盖）。
+  useEffect(() => {
+    if (foreignTransaction && status === "ok" && hint && !settledTouched) {
+      setSettledAmount((Number(amount) * Number(hint.rate)).toFixed(2));
+    }
+  }, [foreignTransaction, status, hint, amount, settledTouched]);
 
   const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment">) => {
     setKind(nextKind);
@@ -421,7 +633,12 @@ export function TransactionModal({
               <label><span>分类</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? "其他支出"} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
             </>
           )}
-          {foreignTransaction && <label><span>计入账户余额 · {source?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => setSettledAmount(e.target.value)} placeholder="换算后的结算金额" /></label>}
+          {foreignTransaction && (
+            <>
+              <label><span>计入账户余额 · {source?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => { setSettledTouched(true); setSettledAmount(e.target.value); }} placeholder="换算后的结算金额" /></label>
+              <RateHintLine from={sourceCurrency} to={source?.currency ?? ""} status={status} hint={hint} onRefresh={refresh} />
+            </>
+          )}
           {crossCurrency && <label><span>转入金额 · {target?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
           <label><span>时间</span><input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} /></label>
           <label className={kind === "transfer" && crossCurrency ? "" : "span-two"}><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="这笔钱花在了哪里？" /></label>

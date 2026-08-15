@@ -317,3 +317,17 @@ pub struct BalanceSummary {
     pub total_liabilities: Decimal,
     pub net_worth: Decimal,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RateQuote {
+    pub from: String,
+    pub to: String,
+    /// 参考汇率：1 from = rate to
+    pub rate: Decimal,
+    /// 汇率生效日期（YYYY-MM-DD，来自数据源）
+    pub date: String,
+    pub source: String,
+    /// 数据源不可达时回退到旧缓存
+    #[serde(default)]
+    pub stale: bool,
+}

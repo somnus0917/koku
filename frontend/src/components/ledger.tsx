@@ -8,6 +8,7 @@ import {
   Banknote,
   ChartNoAxesCombined,
   ChevronDown,
+  CircleCheck,
   CircleDollarSign,
   CreditCard,
   Eye,
@@ -446,10 +447,9 @@ export function TransactionRow({
     : transaction.kind === "adjustment" ? (Number(transaction.amount) > 0 ? "+" : "")
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
-  // 只有可操作的支出行才有报销列（避免其他行多出一段空列）。
   const hasReimburseActions = transaction.kind === "expense" && !transaction.voided_at && !transaction.reimbursed_at;
   return (
-    <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""} ${hasReimburseActions ? "has-reimburse" : ""}`}>
+    <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
         {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
@@ -460,10 +460,11 @@ export function TransactionRow({
           <strong>
             {transaction.note || meta.label}
             {transaction.voided_at ? " · 已撤销" : ""}
-            {reimbursable ? <span className="reimburse-badge">待报销</span> : ""}
-            {transaction.reimbursed_at ? <span className="reimburse-badge done">已报销</span> : ""}
           </strong>
-          <span>{meta.label}</span>
+          <span className="transaction-meta">
+            <span>{meta.label}</span>
+            {reimbursable ? <span className="reimburse-status">待报销</span> : ""}
+          </span>
         </div>
       </div>
       {!compact && <span className="table-account">{account?.name ?? "未知账户"}{target ? ` → ${target.name}` : ""}</span>}
@@ -476,32 +477,36 @@ export function TransactionRow({
         {transaction.kind !== "transfer" && transaction.kind !== "loan" && transaction.kind !== "adjustment" && account && transaction.currency !== account.currency && (
           <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
         )}
-        {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && (
+        {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && !transaction.reimbursed_at && (
           <span>已报销 {formatMoney(transaction.reimbursed_amount, transaction.currency)}</span>
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
-      {!compact && hasReimburseActions && (
-        <div className="row-actions">
-          {reimbursable
-            ? <>
-                <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
-                <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
-              </>
-            : (
-                <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
-              )
-          }
-        </div>
-      )}
       {!compact && (
-        <button
-          className="row-action"
-          disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
-          onClick={onVoid}
-          title="撤销并恢复余额"
-          aria-label="撤销交易"
-        ><Trash2 size={16} /></button>
+        <div className="transaction-actions">
+          {hasReimburseActions && (
+            reimbursable
+              ? <>
+                  <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
+                  <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
+                </>
+              : <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
+          )}
+          {transaction.reimbursed_at && (
+            <span
+              className="reimbursed-indicator"
+              title={`已报销 ${formatMoney(transaction.reimbursed_amount, transaction.currency)}`}
+              aria-label={`已报销 ${formatMoney(transaction.reimbursed_amount, transaction.currency)}`}
+            ><CircleCheck size={16} /></span>
+          )}
+          <button
+            className="row-action"
+            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
+            onClick={onVoid}
+            title="撤销并恢复余额"
+            aria-label="撤销交易"
+          ><Trash2 size={16} /></button>
+        </div>
       )}
     </div>
   );

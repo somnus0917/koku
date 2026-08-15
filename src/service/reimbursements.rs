@@ -127,6 +127,8 @@ impl BookkeepingService {
         }
         let new_balance = account.account_type.apply_inflow(account.balance, settled);
         Self::set_balance(&tx, account_id, new_balance)?;
+        // 报销收入按被报销支出的日期入账：支出与其报销落在同一个月，
+        // 避免跨月报销时历史月份的报表被追溯改写、单月收支不自洽。
         tx.execute(
             "INSERT INTO transactions(kind, account_id, category_id, amount, currency, settled_amount, occurred_at, note) VALUES ('income', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -135,7 +137,7 @@ impl BookkeepingService {
                 decimal_to_db(amount),
                 currency,
                 decimal_to_db(settled),
-                timestamp(now),
+                timestamp(expense.occurred_at),
                 note.into()
             ],
         )?;
@@ -143,7 +145,7 @@ impl BookkeepingService {
         let new_reimbursed = expense.reimbursed_amount + amount;
         let fully_reimbursed = new_reimbursed >= expense.amount;
         let reimbursed_at = if fully_reimbursed {
-            Some(timestamp(Utc::now()))
+            Some(timestamp(now))
         } else {
             None
         };
@@ -153,7 +155,7 @@ impl BookkeepingService {
         )?;
         tx.execute(
             "INSERT INTO reimbursements(expense_id, income_id, amount, reimbursed_at) VALUES (?1, ?2, ?3, ?4)",
-            params![expense_id, income_id, decimal_to_db(amount), timestamp(Utc::now())],
+            params![expense_id, income_id, decimal_to_db(amount), timestamp(now)],
         )?;
         tx.commit()?;
         self.transaction(income_id)

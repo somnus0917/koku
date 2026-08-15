@@ -9,6 +9,7 @@ axum = "0.8"
 bcrypt = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
 getrandom = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rust_decimal = { version = "1.36", features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }

@@ -18,10 +18,11 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, CashFlowSummary, Category, CategoryKind,
-    DepositSettlement, Loan, LoanType, MonthlySummary, Transaction, TransactionKind,
+    DepositSettlement, Loan, LoanType, MonthlySummary, RateQuote, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
-use crate::service::BookkeepingService;
+use crate::rates::{rate_is_fresh, RateClient};
+use crate::service::{normalize_currency, BookkeepingService};
 use crate::throttle::LoginThrottle;
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ pub struct AppState {
     pub service: Arc<Mutex<BookkeepingService>>,
     pub auth: Arc<AuthConfig>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
+    pub rates: Arc<RateClient>,
 }
 
 #[derive(Debug, Serialize)]
@@ -177,6 +179,12 @@ struct RepayLoanRequest {
 #[derive(Debug, Deserialize)]
 struct BalanceQuery {
     currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RateQuery {
+    from: String,
+    to: String,
 }
 
 fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
@@ -592,6 +600,49 @@ async fn api_balance_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+/// 汇率提示：同币种直接返回 1；跨币种优先用当天/近几天的本地缓存，
+/// 未命中则拉取 Frankfurter 并缓存；数据源不可达时回退到旧缓存（标记 stale）。
+async fn api_rate_hint(
+    State(state): State<AppState>,
+    Query(query): Query<RateQuery>,
+) -> Result<Json<ApiResponse<RateQuote>>> {
+    let from = normalize_currency(query.from)?;
+    let to = normalize_currency(query.to)?;
+    if from == to {
+        return Ok(Json(ApiResponse::new(RateQuote {
+            from,
+            to,
+            rate: Decimal::ONE,
+            date: Utc::now().date_naive().to_string(),
+            source: "identity".to_owned(),
+            stale: false,
+        })));
+    }
+
+    let today = Utc::now().date_naive();
+    let mut stale_fallback: Option<RateQuote> = None;
+    if let Some(cached) = lock_service(&state)?.latest_rate(&from, &to)? {
+        if rate_is_fresh(&cached.date, today) {
+            return Ok(Json(ApiResponse::new(cached)));
+        }
+        stale_fallback = Some(cached);
+    }
+    match state.rates.fetch(&from, &to).await {
+        Ok(quote) => {
+            lock_service(&state)?.store_rate(&quote)?;
+            Ok(Json(ApiResponse::new(quote)))
+        }
+        Err(error) => {
+            tracing::warn!(target: "rates", error = %error, "rate fetch failed; falling back to stale cache");
+            if let Some(mut stale) = stale_fallback {
+                stale.stale = true;
+                return Ok(Json(ApiResponse::new(stale)));
+            }
+            Err(error)
+        }
+    }
+}
+
 pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
     let protected = Router::new()
         .route("/api/accounts", get(api_accounts).post(api_create_account))
@@ -629,6 +680,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/summary/monthly", get(api_monthly_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/balance", get(api_balance_summary))
+        .route("/api/rates", get(api_rate_hint))
         .route("/api/auth/session", get(api_auth_session))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let router = Router::new()

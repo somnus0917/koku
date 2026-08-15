@@ -224,8 +224,8 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000） |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
-| `POST` | `/api/transactions/{id}/reimbursable` | 把一笔支出标记为待报销 |
-| `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水） |
+| `POST/DELETE` | `/api/transactions/{id}/reimbursable` | 标记/取消"待报销"（已发生报销的支出不可取消） |
+| `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水；撤销支出会级联撤销报销收入） |
 | `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |
 | `POST` | `/api/deposits/{id}/settle` | 结清定期：按持有天数计息并把本息转回 |
 | `GET/POST` | `/api/loans` | 查询或创建借出/借入 |
@@ -233,6 +233,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支 |
 | `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流 |
 | `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（含未结应收/应付） |
+| `GET` | `/api/rates?from=&to=` | 汇率提示：1 from = rate to（Frankfurter/ECB 参考中间价，本地缓存，源不可达时回退旧缓存） |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。
 

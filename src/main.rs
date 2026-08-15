@@ -16,6 +16,7 @@ mod config;
 mod demo;
 mod domain;
 mod error;
+mod rates;
 mod service;
 mod throttle;
 
@@ -29,6 +30,7 @@ use crate::auth::AuthConfig;
 use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
+use crate::rates::RateClient;
 use crate::service::BookkeepingService;
 use crate::throttle::LoginThrottle;
 
@@ -58,6 +60,7 @@ async fn run_server() -> Result<()> {
         service: Arc::new(Mutex::new(service)),
         auth: Arc::new(AuthConfig::from_env()?),
         login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+        rates: Arc::new(RateClient::new()),
     };
     axum::serve(
         listener,

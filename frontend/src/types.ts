@@ -108,6 +108,18 @@ export interface BalanceSummary {
   net_worth: string;
 }
 
+export interface RateQuote {
+  from: string;
+  to: string;
+  /** 参考汇率：1 from = rate to */
+  rate: string;
+  /** 汇率生效日期（YYYY-MM-DD） */
+  date: string;
+  source: string;
+  /** 数据源不可达时回退到旧缓存 */
+  stale?: boolean;
+}
+
 export interface AppData {
   accounts: Account[];
   categories: Category[];

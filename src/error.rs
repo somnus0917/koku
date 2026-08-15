@@ -39,6 +39,8 @@ pub enum KokuError {
     RateLimited,
     #[error("authentication configuration error: {0}")]
     AuthConfiguration(String),
+    #[error("exchange rate source error: {0}")]
+    RateSource(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +62,7 @@ impl IntoResponse for KokuError {
             | Self::InvalidDecimal(_)
             | Self::Io(_)
             | Self::AuthConfiguration(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::RateSource(_) => StatusCode::BAD_GATEWAY,
         };
         if status == StatusCode::INTERNAL_SERVER_ERROR {
             tracing::error!(error = %self, "internal error");

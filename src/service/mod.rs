@@ -23,6 +23,7 @@ pub struct BookkeepingService {
 
 mod accounts;
 mod loans;
+mod rates;
 mod reimbursements;
 mod summaries;
 mod transactions;
@@ -86,6 +87,15 @@ impl BookkeepingService {
                 income_id     INTEGER NOT NULL REFERENCES transactions(id),
                 amount        TEXT NOT NULL,
                 reimbursed_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS exchange_rates (
+                base   TEXT NOT NULL,
+                quote  TEXT NOT NULL,
+                rate   TEXT NOT NULL,
+                date   TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'frankfurter',
+                PRIMARY KEY (base, quote, date)
             );
 
             CREATE TABLE IF NOT EXISTS transactions (
@@ -335,6 +345,64 @@ impl BookkeepingService {
                 id: account_id,
             });
         }
+        Ok(())
+    }
+
+    /// 某笔支出的全部报销关联：(income_id, 报销金额)。
+    fn reimbursements_for_expense_in_tx(
+        tx: &SqlTransaction<'_>,
+        expense_id: i64,
+    ) -> Result<Vec<(i64, Decimal)>> {
+        let mut statement = tx.prepare(
+            "SELECT income_id, amount FROM reimbursements WHERE expense_id = ?1 ORDER BY id",
+        )?;
+        let rows = statement.query_map([expense_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut links = Vec::new();
+        for row in rows {
+            let (income_id, amount) = row?;
+            links.push((income_id, decimal_from_db(&amount)?));
+        }
+        Ok(links)
+    }
+
+    /// 若某笔收入是报销收入，返回其关联的 (expense_id, 报销金额)。
+    fn reimbursement_for_income_in_tx(
+        tx: &SqlTransaction<'_>,
+        income_id: i64,
+    ) -> Result<Option<(i64, Decimal)>> {
+        let Some((expense_id, amount)) = tx
+            .query_row(
+                "SELECT expense_id, amount FROM reimbursements WHERE income_id = ?1",
+                [income_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((expense_id, decimal_from_db(&amount)?)))
+    }
+
+    /// 撤销一笔报销收入流水：余额反向恢复并置 voided_at；已撤销则跳过。
+    fn void_reimbursement_income_in_tx(tx: &SqlTransaction<'_>, income_id: i64) -> Result<()> {
+        let income = Self::transaction_in_tx(tx, income_id)?;
+        if income.voided_at.is_some() {
+            return Ok(());
+        }
+        let source = Self::account_in_tx(tx, income.account_id)?;
+        Self::set_balance(
+            tx,
+            income.account_id,
+            source
+                .account_type
+                .apply_outflow(source.balance, income.settled_amount),
+        )?;
+        tx.execute(
+            "UPDATE transactions SET voided_at = ?1 WHERE id = ?2 AND voided_at IS NULL",
+            params![timestamp(Utc::now()), income_id],
+        )?;
         Ok(())
     }
 }
@@ -594,7 +662,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn normalize_currency(value: String) -> Result<String> {
+pub(crate) fn normalize_currency(value: String) -> Result<String> {
     let currency = required_text(value, "currency")?.to_uppercase();
     if currency.len() != 3 || !currency.chars().all(|ch| ch.is_ascii_alphabetic()) {
         return Err(KokuError::InvalidInput(
@@ -1225,6 +1293,141 @@ mod tests {
         assert_eq!(summary.total_expense, Decimal::ZERO);
         assert_eq!(summary.total_income, Decimal::from(100_u32));
         assert_eq!(service.account(cash.id)?.balance, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn reimbursement_income_is_backdated_to_the_expense_month() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "出差餐费")?;
+        service.mark_reimbursable(expense.id)?;
+
+        // 报销收入的入账日期跟随支出日期，而不是报销当天。
+        let income = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(100_u32),
+            "CNY",
+            None,
+            "报销",
+        )?;
+        assert_eq!(income.occurred_at, expense.occurred_at);
+
+        // 跨月场景：支出在 8 月，若在 9 月才报销，报表仍按 8 月归集，
+        // 8 月的支出与报销收入同月相抵，9 月不出现追溯改写。
+        let august = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(august.total_expense, Decimal::ZERO);
+        assert_eq!(august.total_income, Decimal::from(100_u32));
+        let september = service.monthly_summary(2026, 9, "CNY")?;
+        assert_eq!(september.total_expense, Decimal::ZERO);
+        assert_eq!(september.total_income, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn voiding_reimbursement_income_writes_back_the_expense() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "出差餐费")?;
+        service.mark_reimbursable(expense.id)?;
+        let income1 = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(40_u32),
+            "CNY",
+            None,
+            "报销首笔",
+        )?;
+        let income2 = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(60_u32),
+            "CNY",
+            None,
+            "报销尾款",
+        )?;
+        assert!(service.transaction(expense.id)?.reimbursed_at.is_some());
+
+        // 撤销首笔报销收入：支出回写为「已报销 60、未全部报销」。
+        service.void_transaction(income1.id)?;
+        let expense_after = service.transaction(expense.id)?;
+        assert_eq!(expense_after.reimbursed_amount, Decimal::from(60_u32));
+        assert!(expense_after.reimbursed_at.is_none());
+        // 余额只扣回被撤销的那一笔。
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(-40_i32));
+
+        // 撤销第二笔：全部报销清零，可重新标记/报销。
+        service.void_transaction(income2.id)?;
+        let expense_done = service.transaction(expense.id)?;
+        assert_eq!(expense_done.reimbursed_amount, Decimal::ZERO);
+        assert!(expense_done.reimbursed_at.is_none());
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(-100_i32));
+        service.unmark_reimbursable(expense.id)?;
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.total_expense, Decimal::from(100_u32));
+        assert_eq!(summary.total_income, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn voiding_reimbursed_expense_cascades_to_its_income_transactions() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "出差餐费")?;
+        service.mark_reimbursable(expense.id)?;
+        let income1 = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(40_u32),
+            "CNY",
+            None,
+            "报销首笔",
+        )?;
+        let income2 = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(60_u32),
+            "CNY",
+            None,
+            "报销尾款",
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::ZERO);
+
+        // 先单独撤销一笔报销收入，再撤销整笔支出：级联跳过已撤销的收入。
+        service.void_transaction(income1.id)?;
+        service.void_transaction(expense.id)?;
+
+        let expense_voided = service.transaction(expense.id)?;
+        assert!(expense_voided.voided_at.is_some());
+        assert_eq!(expense_voided.reimbursed_amount, Decimal::ZERO);
+        assert!(expense_voided.reimbursed_at.is_none());
+        assert!(expense_voided.reimbursable_at.is_none());
+        assert!(service.transaction(income1.id)?.voided_at.is_some());
+        assert!(service.transaction(income2.id)?.voided_at.is_some());
+        // 支出、报销收入全部撤销后余额回到起点，统计清零。
+        assert_eq!(service.account(cash.id)?.balance, Decimal::ZERO);
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.total_expense, Decimal::ZERO);
+        assert_eq!(summary.total_income, Decimal::ZERO);
         Ok(())
     }
 

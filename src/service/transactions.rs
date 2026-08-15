@@ -225,9 +225,23 @@ impl BookkeepingService {
             return Err(KokuError::AlreadyVoided);
         }
 
-        let source = Self::account_in_tx(&tx, transaction.account_id)?;
         match transaction.kind {
             TransactionKind::Expense => {
+                // 撤销已（部分）报销的支出：级联撤销其报销收入流水并清空报销状态，
+                // 避免「余额已按全额恢复、报销收入却仍在账」造成重复入账。
+                let reimbursements = Self::reimbursements_for_expense_in_tx(&tx, transaction_id)?;
+                for (income_id, _) in &reimbursements {
+                    Self::void_reimbursement_income_in_tx(&tx, *income_id)?;
+                }
+                if !reimbursements.is_empty() {
+                    tx.execute(
+                        "UPDATE transactions
+                         SET reimbursed_amount = '0', reimbursed_at = NULL, reimbursable_at = NULL
+                         WHERE id = ?1",
+                        [transaction_id],
+                    )?;
+                }
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
@@ -237,6 +251,28 @@ impl BookkeepingService {
                 )?;
             }
             TransactionKind::Income => {
+                // 若这笔收入是某笔支出的报销，回写支出：扣减累计已报销金额，
+                // 不再全额报销时清除 reimbursed_at；保留待报销标记以便重新报销。
+                if let Some((expense_id, amount)) =
+                    Self::reimbursement_for_income_in_tx(&tx, transaction_id)?
+                {
+                    let expense = Self::transaction_in_tx(&tx, expense_id)?;
+                    let new_reimbursed = (expense.reimbursed_amount - amount).max(Decimal::ZERO);
+                    let reimbursed_at = if new_reimbursed >= expense.amount {
+                        expense.reimbursed_at
+                    } else {
+                        None
+                    };
+                    tx.execute(
+                        "UPDATE transactions SET reimbursed_amount = ?1, reimbursed_at = ?2 WHERE id = ?3",
+                        params![
+                            decimal_to_db(new_reimbursed),
+                            reimbursed_at.map(timestamp),
+                            expense_id
+                        ],
+                    )?;
+                }
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
@@ -256,6 +292,7 @@ impl BookkeepingService {
                     KokuError::InvalidInput("transfer is missing its target currency".to_owned())
                 })?;
                 let target = Self::account_in_tx(&tx, target_id)?;
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
@@ -279,6 +316,7 @@ impl BookkeepingService {
             }
             // 余额调整的撤销：把带符号增量反向应用即可恢复原余额。
             TransactionKind::Adjustment => {
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
                 Self::set_balance(
                     &tx,
                     transaction.account_id,
