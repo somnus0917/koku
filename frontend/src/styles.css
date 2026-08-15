@@ -1134,7 +1134,7 @@ button:disabled {
 
 .transaction-row {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.8fr) 140px minmax(120px, 0.7fr) 34px;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.8fr) 140px minmax(120px, 0.7fr) minmax(34px, auto);
   align-items: center;
   gap: 16px;
   min-height: 72px;
@@ -1400,7 +1400,7 @@ button:disabled {
 
 .table-header {
   display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.8fr) 140px minmax(120px, 0.7fr) 34px;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(145px, 0.8fr) 140px minmax(120px, 0.7fr) minmax(34px, auto);
   gap: 16px;
   padding: 14px 5px;
   border-bottom: 1px solid var(--border);
@@ -2142,7 +2142,7 @@ button:disabled {
   .account-grid { grid-template-columns: 1fr; }
   .insights-grid { grid-template-columns: 1fr; }
   .transaction-row,
-  .table-header { grid-template-columns: minmax(180px, 1.4fr) 130px minmax(100px, 0.7fr) 34px; }
+  .table-header { grid-template-columns: minmax(180px, 1.4fr) 130px minmax(100px, 0.7fr) minmax(34px, auto); }
   .transaction-row .table-date,
   .table-header span:nth-child(3) { display: none; }
   .transaction-row .transaction-amount { grid-column: 3; }
