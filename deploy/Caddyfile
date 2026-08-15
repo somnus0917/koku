@@ -1,29 +1,29 @@
 {$KOKU_DOMAIN} {
-    encode zstd gzip
+	encode zstd gzip
 
-    basic_auth {
-        {$KOKU_AUTH_USER} {$KOKU_AUTH_HASH}
-    }
+	basic_auth {
+		{$KOKU_AUTH_USER} {$KOKU_AUTH_HASH}
+	}
 
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        X-Content-Type-Options "nosniff"
-        Referrer-Policy "no-referrer"
-        X-Frame-Options "DENY"
-        -Server
-    }
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
 
-    @api path /api/*
-    handle @api {
-        reverse_proxy api:8080
-    }
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:8080
+	}
 
-    handle {
-        reverse_proxy web:8080
-    }
+	handle {
+		reverse_proxy web:8080
+	}
 
-    log {
-        output stdout
-        format json
-    }
+	log {
+		output stdout
+		format json
+	}
 }

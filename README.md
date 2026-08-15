@@ -17,6 +17,7 @@ Koku 是一个本地优先、前后端分离的个人记账 MVP。设计借鉴�
 - 响应式桌面/移动界面、底部快捷导航、浅色/深色主题
 - 本地 SQLite 持久化，首次启动自动生成演示账本
 - 旧版单币种 SQLite 数据启动时自动迁移，无需手工转换
+- Docker Compose 生产部署、HTTPS 入口、访问认证与 GitHub Actions 自动发布
 
 ## 工程结构
 
@@ -79,6 +80,95 @@ cd frontend && npm run build
 ```bash
 cargo run -- --demo
 ```
+
+## 腾讯云自动部署
+
+生产环境使用三个独立容器：Caddy 是唯一公网入口并负责 HTTPS 与 Basic Auth，`web` 提供 React 静态文件，`api` 运行 Rust 服务并独占 SQLite 写入。`api` 和 `web` 不向宿主机公开端口。
+
+### 1. 初始化服务器
+
+服务器需要安装 Docker Engine 和 Docker Compose v2。当前镜像由 GitHub 的 x86-64 Runner 构建，因此腾讯云实例应使用 x86-64；ARM 实例需要在工作流中额外配置多架构构建。
+
+为部署用户创建目录：
+
+```bash
+mkdir -p ~/koku/data/backups ~/koku/deploy
+```
+
+将示例配置传到服务器并改名：
+
+```bash
+scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
+```
+
+在服务器生成密码哈希：
+
+```bash
+docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '换成一个强密码'
+```
+
+编辑 `~/koku/.env`：
+
+- `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
+- `KOKU_AUTH_USER`：访问 Koku 时使用的用户名。
+- `KOKU_AUTH_HASH`：上一步生成的哈希，保留单引号，绝不填写明文密码。
+- `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`。
+
+如果 GHCR 镜像保持私有，还需在服务器使用仅有 `read:packages` 权限的 GitHub PAT 登录一次：
+
+```bash
+docker login ghcr.io -u somnus0917
+```
+
+腾讯云安全组只需向公网开放 TCP `80/443` 和 UDP `443`；SSH 端口应限制为自己的可信 IP。域名的 A/AAAA 记录必须先指向服务器，Caddy 才能自动申请证书。
+
+### 2. 配置 GitHub
+
+在仓库的 `Settings → Environments` 新建 `production` Environment，并限制只有 `main` 可以部署。添加变量：
+
+- `KOKU_DOMAIN`：生产域名，用于 Actions 部署页面链接。
+
+添加 Environment Secrets：
+
+- `SERVER_HOST`：腾讯云公网 IP 或主机名。
+- `SERVER_PORT`：SSH 端口，通常为 `22`。
+- `SERVER_USER`：有权运行 Docker 的非 root 部署用户。
+- `SERVER_SSH_KEY`：该用户的 Ed25519 私钥。
+- `SERVER_KNOWN_HOSTS`：预先核验过指纹的 SSH `known_hosts` 条目。
+
+不要在 Actions 中临时信任未经核验的 `ssh-keyscan` 输出。首次连接服务器时应通过腾讯云控制台核验主机指纹，再保存 `known_hosts` 内容。
+
+### 3. 自动发布过程
+
+推送到 `main` 后，[CI 工作流](.github/workflows/ci.yml) 会依次：
+
+1. 运行 Rust 测试、格式检查、Clippy 和前端构建。
+2. 构建 `koku-api`、`koku-web` 镜像并以 Git commit SHA 推送到 GHCR。
+3. 通过 SSH 上传 Compose、Caddy 和部署脚本。
+4. 在线备份现有 SQLite 到 `~/koku/data/backups/`。
+5. 拉取并启动新镜像，等待容器健康检查；失败时恢复上一组镜像。
+
+也可以在 GitHub Actions 页面通过 `workflow_dispatch` 手动重新部署 `main`。
+
+服务器排查命令：
+
+```bash
+cd ~/koku
+docker compose --env-file .env --env-file .release.env -f compose.production.yml ps
+docker compose --env-file .env --env-file .release.env -f compose.production.yml logs --tail=200
+```
+
+SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。容器重建不会删除此目录；不要把数据库或 `.env` 提交到 Git。
+
+## 生产环境变量
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `KOKU_HOST` | `127.0.0.1` | API 监听地址；容器内使用 `0.0.0.0` |
+| `KOKU_PORT` | `8080` | API 监听端口 |
+| `KOKU_DB_PATH` | `data/koku.db` | SQLite 文件路径 |
+| `KOKU_SEED_DEMO` | `true` | 是否为空数据库生成演示账本；生产容器固定为 `false` |
+| `KOKU_ALLOWED_ORIGIN` | 未设置 | 可选的单一跨域来源；同域生产部署无需开启 CORS |
 
 ## REST API
 
