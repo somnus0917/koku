@@ -10,3 +10,4 @@
 /.env
 /.release.env
 /.release.next.env
+/.bench/
