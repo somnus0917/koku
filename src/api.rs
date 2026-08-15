@@ -1,8 +1,9 @@
 //! REST API：请求/响应 DTO、鉴权中间件、处理器与路由。
 
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axum::extract::{Extension, Path as AxumPath, Query, Request, State};
+use axum::extract::{ConnectInfo, Extension, Path as AxumPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -12,6 +13,7 @@ use chrono::{DateTime, Datelike, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
@@ -20,11 +22,13 @@ use crate::domain::{
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
+use crate::throttle::LoginThrottle;
 
 #[derive(Clone)]
 pub struct AppState {
     pub service: Arc<Mutex<BookkeepingService>>,
     pub auth: Arc<AuthConfig>,
+    pub login_throttle: Arc<Mutex<LoginThrottle>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -202,8 +206,23 @@ async fn require_auth(State(state): State<AppState>, mut request: Request, next:
 
 async fn api_login(
     State(state): State<AppState>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response> {
+    let key = LoginThrottle::client_key(&headers, Some(remote.ip()));
+    // 限流检查：同一来源在窗口内失败次数已达上限时直接 429（不执行 bcrypt）。
+    let locked = state
+        .login_throttle
+        .lock()
+        .map_err(|_| KokuError::InvalidInput("login throttle lock was poisoned".to_owned()))?
+        .record(&key, false)
+        .is_err();
+    if locked {
+        tracing::warn!(target: "auth", "login blocked by rate limit from {key}");
+        return Err(KokuError::RateLimited);
+    }
+
     let password = request.password;
     let password_hash = state.auth.password_hash.clone();
     let password_matches =
@@ -214,8 +233,14 @@ async fn api_login(
             })?
             .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
     if request.username != state.auth.username || !password_matches {
+        tracing::warn!(target: "auth", "failed login attempt from {key}");
         return Err(KokuError::InvalidCredentials);
     }
+    // 登录成功：清除该来源的失败计数。
+    if let Ok(mut throttle) = state.login_throttle.lock() {
+        let _ = throttle.record(&key, true);
+    }
+    tracing::info!(target: "auth", "login succeeded from {key}");
 
     let token = lock_service(&state)?
         .create_auth_session(&state.auth.username, state.auth.session_ttl_seconds)?;
@@ -613,14 +638,16 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .merge(protected)
         .with_state(state);
 
-    match allowed_origin {
+    let router = match allowed_origin {
         Some(origin) => router.layer(
             CorsLayer::new()
                 .allow_origin(origin)
-                .allow_methods([Method::GET, Method::POST, Method::DELETE])
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
                 .allow_headers([header::CONTENT_TYPE])
                 .allow_credentials(true),
         ),
         None => router,
-    }
+    };
+    // 请求级 tracing（方法/路径/状态码/耗时），配合 tracing_subscriber 输出。
+    router.layer(TraceLayer::new_for_http())
 }

@@ -22,6 +22,7 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 本地 SQLite 持久化，首次启动自动生成演示账本
 - 旧版 SQLite 数据启动时自动迁移（含 asset/liability → 零钱/信用），无需手工转换
 - Docker Compose 生产部署、HTTPS 入口、访问认证与 GitHub Actions 自动发布
+- 安全：登录失败限流（5 分钟窗口内 5 次即锁定该来源）、结构化日志（登录审计 + 请求级 tracing）、500 错误不回显内部细节
 
 ## 工程结构
 
@@ -205,6 +206,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_AUTH_PASSWORD_HASH_FILE` | 未设置 | bcrypt 哈希文件；生产容器固定为 `/app/data/auth-password.hash` |
 | `KOKU_SESSION_TTL_DAYS` | `30` | 会话有效天数，范围 1–365 |
 | `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
+| `RUST_LOG` | `auth=info,koku=info,tower_http=info` | tracing 日志级别；如 `RUST_LOG=debug` 可看到请求级日志 |
 
 ## REST API
 

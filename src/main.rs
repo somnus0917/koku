@@ -6,6 +6,7 @@
 //! - `api`     REST 处理器、鉴权中间件与路由
 //! - `auth`    登录配置与会话 Cookie/令牌工具
 //! - `config`  环境变量解析
+//! - `throttle` 登录失败限流
 //! - `demo`    控制台演示与演示账本种子
 //! - `error`   统一错误类型与 HTTP 映射
 
@@ -16,6 +17,7 @@ mod demo;
 mod domain;
 mod error;
 mod service;
+mod throttle;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -28,6 +30,7 @@ use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
+use crate::throttle::LoginThrottle;
 
 async fn run_server() -> Result<()> {
     let database_path = std::env::var("KOKU_DB_PATH").unwrap_or_else(|_| "data/koku.db".to_owned());
@@ -54,19 +57,29 @@ async fn run_server() -> Result<()> {
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
         auth: Arc::new(AuthConfig::from_env()?),
+        login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
     };
-    axum::serve(listener, api_router(state, configured_origin()?))
-        .with_graceful_shutdown(async {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                eprintln!("failed to listen for shutdown signal: {error}");
-            }
-        })
-        .await?;
+    axum::serve(
+        listener,
+        api_router(state, configured_origin()?).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            eprintln!("failed to listen for shutdown signal: {error}");
+        }
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "auth=info,koku=info,tower_http=info".into()),
+        )
+        .init();
     let result = if std::env::args().any(|argument| argument == "--demo") {
         demo::run_demo()
     } else {
