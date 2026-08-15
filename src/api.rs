@@ -15,8 +15,8 @@ use tower_http::cors::CorsLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
-    Account, AccountType, BalanceSummary, CashFlowSummary, Category, CategoryKind, MonthlySummary,
-    Transaction, TransactionKind,
+    Account, AccountType, BalanceSummary, CashFlowSummary, Category, CategoryKind,
+    DepositSettlement, Loan, LoanType, MonthlySummary, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
@@ -100,6 +100,55 @@ struct TransactionQuery {
     limit: Option<u32>,
     /// 跳过条数，默认 0。
     offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateDepositRequest {
+    from_account_id: i64,
+    amount: Decimal,
+    currency: Option<String>,
+    /// 利率（百分比，如 2.10 = 2.10%）
+    rate: Decimal,
+    term_days: u32,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SettleDepositRequest {
+    to_account_id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReimburseRequest {
+    expense_id: i64,
+    account_id: i64,
+    amount: Decimal,
+    currency: Option<String>,
+    settled_amount: Option<Decimal>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateLoanRequest {
+    loan_type: LoanType,
+    counterparty: String,
+    currency: Option<String>,
+    amount: Decimal,
+    account_id: i64,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RepayLoanRequest {
+    account_id: i64,
+    amount: Decimal,
+    currency: Option<String>,
+    settled_amount: Option<Decimal>,
+    #[serde(default)]
+    note: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,6 +339,11 @@ async fn api_create_transaction(
                 "use /api/transfers for transfer transactions".to_owned(),
             ))
         }
+        TransactionKind::Loan => {
+            return Err(KokuError::InvalidInput(
+                "use /api/loans for loan transactions".to_owned(),
+            ))
+        }
     };
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
@@ -315,6 +369,101 @@ async fn api_void_transaction(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let transaction = lock_service(&state)?.void_transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
+}
+
+async fn api_create_deposit(
+    State(state): State<AppState>,
+    Json(request): Json<CreateDepositRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
+    let mut service = lock_service(&state)?;
+    let source = service.account(request.from_account_id)?;
+    let currency = request.currency.unwrap_or_else(|| source.currency.clone());
+    let deposit = service.create_fixed_deposit(
+        request.from_account_id,
+        request.amount,
+        currency,
+        request.rate,
+        request.term_days,
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(deposit))))
+}
+
+async fn api_settle_deposit(
+    State(state): State<AppState>,
+    AxumPath(account_id): AxumPath<i64>,
+    Json(request): Json<SettleDepositRequest>,
+) -> Result<Json<ApiResponse<DepositSettlement>>> {
+    let settlement = lock_service(&state)?.settle_deposit(account_id, request.to_account_id)?;
+    Ok(Json(ApiResponse::new(settlement)))
+}
+
+async fn api_mark_reimbursable(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Transaction>>> {
+    let transaction = lock_service(&state)?.mark_reimbursable(transaction_id)?;
+    Ok(Json(ApiResponse::new(transaction)))
+}
+
+async fn api_reimburse(
+    State(state): State<AppState>,
+    Json(request): Json<ReimburseRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let mut service = lock_service(&state)?;
+    let expense = service.transaction(request.expense_id)?;
+    let currency = request.currency.unwrap_or_else(|| expense.currency.clone());
+    let income = service.reimburse(
+        request.expense_id,
+        request.account_id,
+        request.amount,
+        currency,
+        request.settled_amount,
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(income))))
+}
+
+async fn api_loans(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Loan>>>> {
+    let loans = lock_service(&state)?.loans()?;
+    Ok(Json(ApiResponse::new(loans)))
+}
+
+async fn api_create_loan(
+    State(state): State<AppState>,
+    Json(request): Json<CreateLoanRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
+    let mut service = lock_service(&state)?;
+    let account = service.account(request.account_id)?;
+    let currency = request.currency.unwrap_or_else(|| account.currency.clone());
+    let loan = service.create_loan(
+        request.loan_type,
+        request.counterparty,
+        currency,
+        request.amount,
+        request.account_id,
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(loan))))
+}
+
+async fn api_repay_loan(
+    State(state): State<AppState>,
+    AxumPath(loan_id): AxumPath<i64>,
+    Json(request): Json<RepayLoanRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
+    let mut service = lock_service(&state)?;
+    let loan = service.loan(loan_id)?;
+    let currency = request.currency.unwrap_or_else(|| loan.currency.clone());
+    let updated = service.repay_loan(
+        loan_id,
+        request.account_id,
+        request.amount,
+        currency,
+        request.settled_amount,
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(updated))))
 }
 
 async fn api_monthly_summary(
@@ -369,6 +518,18 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             "/api/transactions/{transaction_id}",
             delete(api_void_transaction),
         )
+        .route(
+            "/api/transactions/{transaction_id}/reimbursable",
+            post(api_mark_reimbursable),
+        )
+        .route("/api/reimbursements", post(api_reimburse))
+        .route("/api/deposits", post(api_create_deposit))
+        .route(
+            "/api/deposits/{account_id}/settle",
+            post(api_settle_deposit),
+        )
+        .route("/api/loans", get(api_loans).post(api_create_loan))
+        .route("/api/loans/{loan_id}/repay", post(api_repay_loan))
         .route("/api/summary/monthly", get(api_monthly_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/balance", get(api_balance_summary))

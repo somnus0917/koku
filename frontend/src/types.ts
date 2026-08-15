@@ -1,6 +1,7 @@
-export type AccountType = "asset" | "liability";
+export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
-export type TransactionKind = "expense" | "income" | "transfer";
+export type TransactionKind = "expense" | "income" | "transfer" | "loan";
+export type LoanType = "lend" | "borrow";
 
 export interface Account {
   id: number;
@@ -8,6 +9,10 @@ export interface Account {
   account_type: AccountType;
   currency: string;
   balance: string;
+  /** 定期利率（百分比），仅定期存款账户有值 */
+  interest_rate: string | null;
+  /** 定期到期日，仅定期存款账户有值 */
+  maturity_at: string | null;
 }
 
 export interface Category {
@@ -34,6 +39,28 @@ export interface Transaction {
   occurred_at: string;
   note: string;
   voided_at: string | null;
+  loan_id: number | null;
+  reimbursable_at: string | null;
+  reimbursed_at: string | null;
+  reimbursed_amount: string;
+}
+
+export interface Loan {
+  id: number;
+  loan_type: LoanType;
+  counterparty: string;
+  currency: string;
+  principal: string;
+  outstanding: string;
+  account_id: number;
+  opened_at: string;
+  note: string;
+  closed_at: string | null;
+}
+
+export interface DepositSettlement {
+  interest: string;
+  transfer: Transaction;
 }
 
 export interface CategoryExpense {
@@ -86,4 +113,5 @@ export interface AppData {
   monthly: MonthlySummary;
   cashFlow: CashFlowSummary;
   balance: BalanceSummary;
+  loans: Loan[];
 }

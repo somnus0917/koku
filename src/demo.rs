@@ -68,19 +68,15 @@ fn print_demo(accounts: &[Account], summary: &MonthlySummary) -> Result<()> {
 
 pub fn run_demo() -> Result<()> {
     let mut service = BookkeepingService::in_memory()?;
-    let alipay = service.create_account(
-        "支付宝",
-        AccountType::Asset,
-        "CNY",
-        Decimal::new(120_000, 2),
-    )?;
+    let alipay =
+        service.create_account("支付宝", AccountType::Cash, "CNY", Decimal::new(120_000, 2))?;
     let cmb = service.create_account(
         "招商 Visa",
-        AccountType::Asset,
+        AccountType::Savings,
         "CNY",
         Decimal::new(800_000, 2),
     )?;
-    let _credit = service.create_account("信用卡", AccountType::Liability, "CNY", Decimal::ZERO)?;
+    let _credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
 
     let salary = service.create_category("工资", CategoryKind::Income)?;
     let food = service.create_category("餐饮", CategoryKind::Expense)?;
@@ -128,27 +124,23 @@ pub fn seed_demo_data(service: &mut BookkeepingService) -> Result<()> {
         return Ok(());
     }
 
-    let alipay = service.create_account(
-        "支付宝",
-        AccountType::Asset,
-        "CNY",
-        Decimal::new(328_000, 2),
-    )?;
+    let alipay =
+        service.create_account("支付宝", AccountType::Cash, "CNY", Decimal::new(328_000, 2))?;
     let cmb = service.create_account(
         "招商 Visa",
-        AccountType::Asset,
+        AccountType::Savings,
         "CNY",
         Decimal::new(2_856_000, 2),
     )?;
     let cash = service.create_account(
         "现金钱包",
-        AccountType::Asset,
+        AccountType::Cash,
         "CNY",
         Decimal::new(56_000, 2),
     )?;
     let credit = service.create_account(
         "信用卡",
-        AccountType::Liability,
+        AccountType::Credit,
         "CNY",
         Decimal::new(126_000, 2),
     )?;

@@ -7,6 +7,9 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  DepositSettlement,
+  Loan,
+  LoanType,
   MonthlySummary,
   Transaction,
   TransactionKind
@@ -75,15 +78,16 @@ export async function loadAppData(
     currency
   });
   const currencyQuery = new URLSearchParams({ currency });
-  const [accounts, categories, transactions, monthly, cashFlow, balance] = await Promise.all([
+  const [accounts, categories, transactions, monthly, cashFlow, balance, loans] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Transaction[]>("/api/transactions"),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
-    request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`)
+    request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
+    request<Loan[]>("/api/loans")
   ]);
-  return { accounts, categories, transactions, monthly, cashFlow, balance };
+  return { accounts, categories, transactions, monthly, cashFlow, balance, loans };
 }
 
 export function createAccount(input: {
@@ -144,4 +148,76 @@ export function createTransfer(input: {
 
 export function voidTransaction(id: number): Promise<Transaction> {
   return request(`/api/transactions/${id}`, { method: "DELETE" });
+}
+
+export function markReimbursable(id: number): Promise<Transaction> {
+  return request(`/api/transactions/${id}/reimbursable`, { method: "POST" });
+}
+
+export function reimburse(input: {
+  expense_id: number;
+  account_id: number;
+  amount: string;
+  currency?: string;
+  settled_amount?: string;
+  note?: string;
+}): Promise<Transaction> {
+  return request("/api/reimbursements", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function createDeposit(input: {
+  from_account_id: number;
+  amount: string;
+  currency?: string;
+  rate: string;
+  term_days: number;
+  note?: string;
+}): Promise<Account> {
+  return request("/api/deposits", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function settleDeposit(
+  accountId: number,
+  to_account_id: number
+): Promise<DepositSettlement> {
+  return request(`/api/deposits/${accountId}/settle`, {
+    method: "POST",
+    body: JSON.stringify({ to_account_id })
+  });
+}
+
+export function createLoan(input: {
+  loan_type: LoanType;
+  counterparty: string;
+  currency?: string;
+  amount: string;
+  account_id: number;
+  note?: string;
+}): Promise<Loan> {
+  return request("/api/loans", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function repayLoan(
+  loanId: number,
+  input: {
+    account_id: number;
+    amount: string;
+    currency?: string;
+    settled_amount?: string;
+    note?: string;
+  }
+): Promise<Loan> {
+  return request(`/api/loans/${loanId}/repay`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
 }

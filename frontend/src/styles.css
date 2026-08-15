@@ -2255,9 +2255,9 @@ button:disabled {
     left: 10px;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     height: 67px;
-    padding: 7px 62px 6px 8px;
+    padding: 7px 58px 6px 8px;
     border: 1px solid var(--border);
     border-radius: 20px;
     background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
@@ -2299,4 +2299,56 @@ button:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* —— 定期存款 / 报销 / 借款 —— */
+.reimburse-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--transfer-soft);
+  color: var(--transfer);
+  font-size: 9px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+.reimburse-badge.done {
+  background: var(--income-soft);
+  color: var(--income);
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.row-action.reimburse {
+  color: var(--transfer);
+}
+.row-action.reimburse:hover:not(:disabled) {
+  color: var(--accent-deep);
+}
+
+.deposit-info {
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.deposit-info p { margin: 0; }
+.deposit-info strong { color: var(--text); }
+
+.income-text { color: var(--income); }
+.expense-text { color: var(--expense); }
+
+.account-detail-card.muted {
+  opacity: 0.62;
+}
+.account-detail-card small {
+  margin-left: 6px;
+  font-size: 9px;
+  font-weight: 700;
 }

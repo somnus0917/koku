@@ -7,7 +7,11 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 ## 功能
 
 - 每个账户保持一个结算币种和一个共享余额，每笔交易可独立选择 CNY、USD 等原始币种
+- 账户类型：零钱、储蓄、股票、信用（可负债）
 - 收入、支出、同币种与跨币种转账
+- 定期存款：储蓄转定期（自定义利率与期限），到期按实际持有天数结息并转回
+- 报销：支出可标记待报销，支持部分报销；已报销金额不计入月度支出
+- 借款：借入/借出任意账户（如从储蓄借出、还到零钱），未结应收/应付计入净资产
 - SQLite 原子余额更新与账单撤销
 - `rust_decimal` 精确货币计算，API 金额统一序列化为字符串
 - 月度收支、净结余、分类占比与净资产统计
@@ -16,7 +20,7 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 桌面 Sankey 与手机纵向流量卡片两套现金流视图
 - 响应式桌面/移动界面、底部快捷导航、浅色/深色主题
 - 本地 SQLite 持久化，首次启动自动生成演示账本
-- 旧版单币种 SQLite 数据启动时自动迁移，无需手工转换
+- 旧版 SQLite 数据启动时自动迁移（含 asset/liability → 零钱/信用），无需手工转换
 - Docker Compose 生产部署、HTTPS 入口、访问认证与 GitHub Actions 自动发布
 
 ## 工程结构
@@ -216,9 +220,15 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000） |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
+| `POST` | `/api/transactions/{id}/reimbursable` | 把一笔支出标记为待报销 |
+| `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水） |
+| `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |
+| `POST` | `/api/deposits/{id}/settle` | 结清定期：按持有天数计息并把本息转回 |
+| `GET/POST` | `/api/loans` | 查询或创建借出/借入 |
+| `POST` | `/api/loans/{id}/repay` | 还款（任意账户进出，归零自动结清） |
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支 |
 | `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流 |
-| `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值 |
+| `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（含未结应收/应付） |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。
 

@@ -9,22 +9,32 @@ use crate::error::{KokuError, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountType {
-    Asset,
-    Liability,
+    /// 零钱：日常收支账户
+    Cash,
+    /// 信用：信用卡/花呗等，余额 = 未还欠款（负债）
+    Credit,
+    /// 储蓄：存款与定期
+    Savings,
+    /// 股票：证券账户（按市值/成本记账）
+    Stock,
 }
 
 impl AccountType {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Asset => "asset",
-            Self::Liability => "liability",
+            Self::Cash => "cash",
+            Self::Credit => "credit",
+            Self::Savings => "savings",
+            Self::Stock => "stock",
         }
     }
 
     pub fn from_db(value: &str) -> Result<Self> {
         match value {
-            "asset" => Ok(Self::Asset),
-            "liability" => Ok(Self::Liability),
+            "cash" => Ok(Self::Cash),
+            "credit" => Ok(Self::Credit),
+            "savings" => Ok(Self::Savings),
+            "stock" => Ok(Self::Stock),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown account type in database: {other}"
             ))),
@@ -33,22 +43,31 @@ impl AccountType {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Asset => "资产",
-            Self::Liability => "负债",
+            Self::Cash => "零钱",
+            Self::Credit => "信用",
+            Self::Savings => "储蓄",
+            Self::Stock => "股票",
         }
     }
 
+    /// 只有信用账户是负债，余额方向相反。
+    pub fn is_liability(self) -> bool {
+        matches!(self, Self::Credit)
+    }
+
     pub fn apply_inflow(self, balance: Decimal, amount: Decimal) -> Decimal {
-        match self {
-            Self::Asset => balance + amount,
-            Self::Liability => balance - amount,
+        if self.is_liability() {
+            balance - amount
+        } else {
+            balance + amount
         }
     }
 
     pub fn apply_outflow(self, balance: Decimal, amount: Decimal) -> Decimal {
-        match self {
-            Self::Asset => balance - amount,
-            Self::Liability => balance + amount,
+        if self.is_liability() {
+            balance + amount
+        } else {
+            balance - amount
         }
     }
 }
@@ -85,6 +104,8 @@ pub enum TransactionKind {
     Expense,
     Income,
     Transfer,
+    /// 借款资金移动（借出/借入/还款），不计入收支统计
+    Loan,
 }
 
 impl TransactionKind {
@@ -93,6 +114,7 @@ impl TransactionKind {
             Self::Expense => "expense",
             Self::Income => "income",
             Self::Transfer => "transfer",
+            Self::Loan => "loan",
         }
     }
 
@@ -101,6 +123,7 @@ impl TransactionKind {
             "expense" => Ok(Self::Expense),
             "income" => Ok(Self::Income),
             "transfer" => Ok(Self::Transfer),
+            "loan" => Ok(Self::Loan),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown transaction kind in database: {other}"
             ))),
@@ -147,6 +170,10 @@ pub struct Account {
     pub account_type: AccountType,
     pub currency: String,
     pub balance: Decimal,
+    /// 定期利率（百分比，如 2.10 = 2.10%）；仅定期存款账户有值
+    pub interest_rate: Option<Decimal>,
+    /// 定期到期日；仅定期存款账户有值
+    pub maturity_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +198,70 @@ pub struct Transaction {
     pub occurred_at: DateTime<Utc>,
     pub note: String,
     pub voided_at: Option<DateTime<Utc>>,
+    /// 关联的借款记录（借出/借入/还款流水）
+    pub loan_id: Option<i64>,
+    /// 待报销标记时间
+    pub reimbursable_at: Option<DateTime<Utc>>,
+    /// 全部报销完成时间
+    pub reimbursed_at: Option<DateTime<Utc>>,
+    /// 累计已报销金额（原币种）
+    pub reimbursed_amount: Decimal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoanType {
+    /// 借出（应收）
+    Lend,
+    /// 借入（应付）
+    Borrow,
+}
+
+impl LoanType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lend => "lend",
+            Self::Borrow => "borrow",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "lend" => Ok(Self::Lend),
+            "borrow" => Ok(Self::Borrow),
+            other => Err(KokuError::InvalidInput(format!(
+                "unknown loan type in database: {other}"
+            ))),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lend => "借出",
+            Self::Borrow => "借入",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Loan {
+    pub id: i64,
+    pub loan_type: LoanType,
+    pub counterparty: String,
+    pub currency: String,
+    pub principal: Decimal,
+    pub outstanding: Decimal,
+    /// 首笔资金进出的账户
+    pub account_id: i64,
+    pub opened_at: DateTime<Utc>,
+    pub note: String,
+    pub closed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepositSettlement {
+    pub interest: Decimal,
+    pub transfer: Transaction,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

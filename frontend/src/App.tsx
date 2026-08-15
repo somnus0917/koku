@@ -34,10 +34,11 @@ import {
   Menu,
   Moon,
   MoreHorizontal,
-  Plus,
   PawPrint,
   Percent,
+  PiggyBank,
   Plane,
+  Plus,
   ReceiptText,
   RefreshCcw,
   RotateCcw,
@@ -48,6 +49,7 @@ import {
   Smartphone,
   Sun,
   Tags,
+  TrendingUp,
   Trophy,
   Trash2,
   Utensils,
@@ -69,6 +71,8 @@ import {
   ApiError,
   createAccount,
   createCategory,
+  createDeposit,
+  createLoan,
   createTransaction,
   createTransfer,
   deleteCategory,
@@ -76,6 +80,10 @@ import {
   loadAppData,
   login,
   logout,
+  markReimbursable,
+  reimburse,
+  repayLoan,
+  settleDeposit,
   voidTransaction
 } from "./api";
 import type {
@@ -86,18 +94,21 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  Loan,
+  LoanType,
   MonthlySummary,
   Transaction,
   TransactionKind
 } from "./types";
 
-type View = "dashboard" | "accounts" | "transactions" | "insights";
-type Modal = "transaction" | "account" | "category" | null;
+type View = "dashboard" | "accounts" | "transactions" | "loans" | "insights";
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
   { id: "accounts", label: "账户", icon: WalletCards },
   { id: "transactions", label: "交易", icon: ReceiptText },
+  { id: "loans", label: "借贷", icon: Handshake },
   { id: "insights", label: "分析", icon: ChartNoAxesCombined }
 ];
 
@@ -191,9 +202,10 @@ function localDateTimeValue(): string {
 }
 
 function accountIcon(account: Account): LucideIcon {
-  if (account.account_type === "liability") return CreditCard;
+  if (account.account_type === "savings") return PiggyBank;
+  if (account.account_type === "stock") return TrendingUp;
+  if (account.account_type === "credit") return CreditCard;
   if (account.name.includes("现金")) return Banknote;
-  if (account.name.includes("银行") || account.name.includes("卡")) return Landmark;
   return WalletCards;
 }
 
@@ -303,6 +315,10 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [depositFrom, setDepositFrom] = useState<Account | null>(null);
+  const [settleTarget, setSettleTarget] = useState<Account | null>(null);
+  const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
+  const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
@@ -361,7 +377,20 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
     if (!data) return null;
     switch (activeView) {
       case "accounts":
-        return <AccountsPage data={data} onAddAccount={() => setModal("account")} />;
+        return (
+          <AccountsPage
+            data={data}
+            onAddAccount={() => setModal("account")}
+            onDeposit={(account) => {
+              setDepositFrom(account);
+              setModal("deposit");
+            }}
+            onSettle={(account) => {
+              setSettleTarget(account);
+              setModal("settle");
+            }}
+          />
+        );
       case "transactions":
         return (
           <TransactionsPage
@@ -370,6 +399,25 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onVoid={(transaction) =>
               void mutate(() => voidTransaction(transaction.id), "交易已撤销，余额已恢复")
             }
+            onMarkReimbursable={(transaction) =>
+              void mutate(() => markReimbursable(transaction.id), "已标记为待报销")
+            }
+            onReimburse={(transaction) => {
+              setReimburseTarget(transaction);
+              setModal("reimburse");
+            }}
+          />
+        );
+      case "loans":
+        return (
+          <LoansPage
+            loans={data.loans}
+            accounts={data.accounts}
+            onCreateLoan={() => setModal("loan")}
+            onRepay={(loan) => {
+              setLoanTarget(loan);
+              setModal("repay");
+            }}
           />
         );
       case "insights":
@@ -529,6 +577,64 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             setToast(`“${category.name}”已删除，历史账单保持不变`);
             await refresh(true);
           }}
+        />
+      )}
+      {modal === "deposit" && data && depositFrom && (
+        <DepositModal
+          source={depositFrom}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => createDeposit({ from_account_id: depositFrom.id, ...input }),
+              "已转为定期存款"
+            )
+          }
+        />
+      )}
+      {modal === "settle" && data && settleTarget && (
+        <SettleDepositModal
+          deposit={settleTarget}
+          accounts={data.accounts}
+          onClose={() => setModal(null)}
+          onSubmit={(to_account_id) =>
+            mutate(
+              () => settleDeposit(settleTarget.id, to_account_id),
+              "定期已结清，本息已转回"
+            )
+          }
+        />
+      )}
+      {modal === "reimburse" && data && reimburseTarget && (
+        <ReimburseModal
+          expense={reimburseTarget}
+          accounts={data.accounts}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => reimburse({ expense_id: reimburseTarget.id, ...input }),
+              "报销完成"
+            )
+          }
+        />
+      )}
+      {modal === "loan" && data && (
+        <LoanModal
+          accounts={data.accounts}
+          onClose={() => setModal(null)}
+          onSubmit={(input) => mutate(() => createLoan(input), "借款已记录")}
+        />
+      )}
+      {modal === "repay" && data && loanTarget && (
+        <RepayModal
+          loan={loanTarget}
+          accounts={data.accounts}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => repayLoan(loanTarget.id, input),
+              "还款已入账"
+            )
+          }
         />
       )}
       {toast && (
@@ -696,7 +802,7 @@ function AccountMiniCard({ account, hidden, index }: { account: Account; hidden:
   return (
     <article className={`account-mini tone-${index % 4}`}>
       <div><span className="account-icon"><Icon size={19} /></span><MoreHorizontal size={18} /></div>
-      <small>{account.account_type === "asset" ? "资产账户" : "负债账户"}</small>
+      <small>{account.account_type === "credit" ? "信用（负债）" : ({ cash: "零钱账户", savings: "储蓄账户", stock: "股票账户" } as Record<AccountType, string>)[account.account_type]}</small>
       <h3>{account.name}</h3>
       <strong>{hidden ? "••••••" : formatMoney(account.balance, account.currency)}</strong>
       <span className="currency-badge">{account.currency}</span>
@@ -704,9 +810,22 @@ function AccountMiniCard({ account, hidden, index }: { account: Account; hidden:
   );
 }
 
-function AccountsPage({ data, onAddAccount }: { data: AppData; onAddAccount: () => void }) {
-  const assets = data.accounts.filter((account) => account.account_type === "asset");
-  const liabilities = data.accounts.filter((account) => account.account_type === "liability");
+function AccountsPage({
+  data,
+  onAddAccount,
+  onDeposit,
+  onSettle
+}: {
+  data: AppData;
+  onAddAccount: () => void;
+  onDeposit: (account: Account) => void;
+  onSettle: (account: Account) => void;
+}) {
+  const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
+  const cash = group("cash");
+  const savings = group("savings");
+  const stock = group("stock");
+  const credit = group("credit");
   return (
     <div className="page page-enter">
       <PageTitle
@@ -719,8 +838,19 @@ function AccountsPage({ data, onAddAccount }: { data: AppData; onAddAccount: () 
         <SummaryCard label="总负债" value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
         <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
-      <AccountGroup title="资产账户" subtitle={`${assets.length} 个账户`} accounts={assets} />
-      <AccountGroup title="负债账户" subtitle={`${liabilities.length} 个账户`} accounts={liabilities} />
+      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} />
+      <AccountGroup
+        title="储蓄"
+        subtitle={`${savings.length} 个账户`}
+        accounts={savings}
+        renderAction={(account) => (
+          account.interest_rate
+            ? <button className="row-action" title="结清定期并转回" aria-label="结清定期" onClick={() => onSettle(account)}><RotateCcw size={16} /></button>
+            : <button className="row-action" title="转入定期" aria-label="转入定期" onClick={() => onDeposit(account)}><PiggyBank size={16} /></button>
+        )}
+      />
+      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} />
+      <AccountGroup title="信用" subtitle={`${credit.length} 个账户（负债）`} accounts={credit} />
     </div>
   );
 }
@@ -735,7 +865,17 @@ function SummaryCard({ label, value, currency, tone }: { label: string; value: s
   );
 }
 
-function AccountGroup({ title, subtitle, accounts }: { title: string; subtitle: string; accounts: Account[] }) {
+function AccountGroup({
+  title,
+  subtitle,
+  accounts,
+  renderAction
+}: {
+  title: string;
+  subtitle: string;
+  accounts: Account[];
+  renderAction?: (account: Account) => React.ReactNode;
+}) {
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading"><div><span>{subtitle}</span><h2>{title}</h2></div></div>
@@ -746,10 +886,18 @@ function AccountGroup({ title, subtitle, accounts }: { title: string; subtitle: 
             <article className="account-detail-card" key={account.id}>
               <span className={`large-account-icon tone-${index % 4}`}><Icon size={23} /></span>
               <div className="account-detail-copy">
-                <h3>{account.name}</h3><span>{account.currency} 结算 · 单一余额</span>
+                <h3>{account.name}</h3>
+                <span>
+                  {account.currency} 结算 · 单一余额
+                  {account.interest_rate && account.maturity_at
+                    ? ` · 定期 ${account.interest_rate}% · ${formatDate(account.maturity_at)}到期`
+                    : ""}
+                </span>
               </div>
               <strong>{formatMoney(account.balance, account.currency)}</strong>
-              <button className="bare-button" aria-label={`${account.name}更多操作`}><MoreHorizontal size={19} /></button>
+              {renderAction
+                ? renderAction(account)
+                : <button className="bare-button" aria-label={`${account.name}更多操作`}><MoreHorizontal size={19} /></button>}
             </article>
           );
         })}
@@ -762,11 +910,15 @@ function AccountGroup({ title, subtitle, accounts }: { title: string; subtitle: 
 function TransactionsPage({
   data,
   onAdd,
-  onVoid
+  onVoid,
+  onMarkReimbursable,
+  onReimburse
 }: {
   data: AppData;
   onAdd: () => void;
   onVoid: (transaction: Transaction) => void;
+  onMarkReimbursable: (transaction: Transaction) => void;
+  onReimburse: (transaction: Transaction) => void;
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
@@ -788,9 +940,9 @@ function TransactionsPage({
       <div className="transaction-toolbar">
         <label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索备注、分类或账户" /></label>
         <div className="segmented-filter">
-          {(["all", "expense", "income", "transfer"] as const).map((item) => (
+          {(["all", "expense", "income", "transfer", "loan"] as const).map((item) => (
             <button key={item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>
-              {{ all: "全部", expense: "支出", income: "收入", transfer: "转账" }[item]}
+              {{ all: "全部", expense: "支出", income: "收入", transfer: "转账", loan: "借贷" }[item]}
             </button>
           ))}
         </div>
@@ -805,6 +957,8 @@ function TransactionsPage({
             target={transaction.to_account_id ? accountsById.get(transaction.to_account_id) : undefined}
             category={transaction.category_id ? categoriesById.get(transaction.category_id) : undefined}
             onVoid={() => onVoid(transaction)}
+            onMarkReimbursable={() => onMarkReimbursable(transaction)}
+            onReimburse={() => onReimburse(transaction)}
           />
         ))}
         {filtered.length === 0 && <EmptyState title="没有找到交易" detail="换个关键词，或记录一笔新的交易。" />}
@@ -839,7 +993,9 @@ function TransactionRow({
   target,
   category,
   compact = false,
-  onVoid
+  onVoid,
+  onMarkReimbursable,
+  onReimburse
 }: {
   transaction: Transaction;
   account?: Account;
@@ -847,23 +1003,35 @@ function TransactionRow({
   category?: Category;
   compact?: boolean;
   onVoid?: () => void;
+  onMarkReimbursable?: () => void;
+  onReimburse?: () => void;
 }) {
   const meta = {
     expense: { icon: ArrowUpRight, label: category?.name ?? "支出", className: "expense" },
     income: { icon: ArrowDownLeft, label: category?.name ?? "收入", className: "income" },
-    transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" }
+    transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" },
+    loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" }
   }[transaction.kind];
   const Icon = meta.icon;
   const prefix = transaction.kind === "expense" ? "−" : transaction.kind === "income" ? "+" : "";
+  const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
-        {transaction.kind === "transfer" ? (
+        {transaction.kind === "transfer" || transaction.kind === "loan" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
           <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
         )}
-        <div><strong>{transaction.note || meta.label}</strong><span>{meta.label}{transaction.voided_at ? " · 已撤销" : ""}</span></div>
+        <div>
+          <strong>
+            {transaction.note || meta.label}
+            {transaction.voided_at ? " · 已撤销" : ""}
+            {reimbursable ? <span className="reimburse-badge">待报销</span> : ""}
+            {transaction.reimbursed_at ? <span className="reimburse-badge done">已报销</span> : ""}
+          </strong>
+          <span>{meta.label}</span>
+        </div>
       </div>
       {!compact && <span className="table-account">{account?.name ?? "未知账户"}{target ? ` → ${target.name}` : ""}</span>}
       {!compact && <span className="table-date">{formatDate(transaction.occurred_at)}</span>}
@@ -872,19 +1040,31 @@ function TransactionRow({
         {transaction.kind === "transfer" && transaction.target_amount && transaction.target_currency && (
           <span>到账 {formatMoney(transaction.target_amount, transaction.target_currency)}</span>
         )}
-        {transaction.kind !== "transfer" && account && transaction.currency !== account.currency && (
+        {transaction.kind !== "transfer" && transaction.kind !== "loan" && account && transaction.currency !== account.currency && (
           <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
+        )}
+        {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && (
+          <span>已报销 {formatMoney(transaction.reimbursed_amount, transaction.currency)}</span>
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
       {!compact && (
-        <button
-          className="row-action"
-          disabled={Boolean(transaction.voided_at)}
-          onClick={onVoid}
-          title="撤销并恢复余额"
-          aria-label="撤销交易"
-        ><Trash2 size={16} /></button>
+        <div className="row-actions">
+          {transaction.kind === "expense" && !transaction.voided_at && (
+            reimbursable
+              ? <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
+              : !transaction.reimbursed_at && (
+                  <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
+                )
+          )}
+          <button
+            className="row-action"
+            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
+            onClick={onVoid}
+            title="撤销并恢复余额"
+            aria-label="撤销交易"
+          ><Trash2 size={16} /></button>
+        </div>
       )}
     </div>
   );
@@ -1203,6 +1383,357 @@ function CategoryBars({ summary, detailed = false }: { summary: MonthlySummary; 
   );
 }
 
+function LoansPage({
+  loans,
+  accounts,
+  onCreateLoan,
+  onRepay
+}: {
+  loans: Loan[];
+  accounts: Account[];
+  onCreateLoan: () => void;
+  onRepay: (loan: Loan) => void;
+}) {
+  const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const open = loans.filter((loan) => !loan.closed_at);
+  const closed = loans.filter((loan) => loan.closed_at);
+  const lendOutstanding = open
+    .filter((loan) => loan.loan_type === "lend")
+    .reduce((sum, loan) => sum + Number(loan.outstanding), 0);
+  const borrowOutstanding = open
+    .filter((loan) => loan.loan_type === "borrow")
+    .reduce((sum, loan) => sum + Number(loan.outstanding), 0);
+  const currency = open[0]?.currency ?? "CNY";
+  return (
+    <div className="page page-enter">
+      <PageTitle
+        eyebrow="LOANS"
+        title="借入与借出"
+        actions={<button className="primary-button" onClick={onCreateLoan}><Plus size={18} /> 记一笔借款</button>}
+      />
+      <section className="balance-summary-row">
+        <SummaryCard label="借出应收" value={lendOutstanding.toFixed(2)} currency={currency} tone="green" />
+        <SummaryCard label="借入应付" value={borrowOutstanding.toFixed(2)} currency={currency} tone="orange" />
+      </section>
+      <section className="section-block account-group">
+        <div className="section-heading compact-heading"><div><span>{open.length} 笔未结清</span><h2>进行中</h2></div></div>
+        <div className="account-grid">
+          {open.map((loan) => (
+            <article className="account-detail-card" key={loan.id}>
+              <span className={`large-account-icon tone-${loan.id % 4}`}><Handshake size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>
+                  {loan.counterparty}
+                  <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
+                    {loan.loan_type === "lend" ? "借出" : "借入"}
+                  </small>
+                </h3>
+                <span>
+                  {loan.currency} · 本金 {formatMoney(loan.principal, loan.currency)} ·{" "}
+                  {accountMap.get(loan.account_id)?.name ?? "未知账户"}
+                  {loan.note ? ` · ${loan.note}` : ""}
+                </span>
+              </div>
+              <strong>{formatMoney(loan.outstanding, loan.currency)}</strong>
+              <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
+            </article>
+          ))}
+          {open.length === 0 && <EmptyState title="没有进行中的借款" detail="点击“记一笔借款”借出或借入。" />}
+        </div>
+      </section>
+      {closed.length > 0 && (
+        <section className="section-block account-group">
+          <div className="section-heading compact-heading"><div><span>{closed.length} 笔已结清</span><h2>已结清</h2></div></div>
+          <div className="account-grid">
+            {closed.map((loan) => (
+              <article className="account-detail-card muted" key={loan.id}>
+                <span className="large-account-icon"><Handshake size={23} /></span>
+                <div className="account-detail-copy">
+                  <h3>{loan.counterparty}<small>{loan.loan_type === "lend" ? "借出" : "借入"}</small></h3>
+                  <span>{formatDate(loan.opened_at)} 开立{loan.closed_at ? ` · ${formatDate(loan.closed_at)} 结清` : ""}</span>
+                </div>
+                <strong>已结清</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function DepositModal({
+  source,
+  onClose,
+  onSubmit
+}: {
+  source: Account;
+  onClose: () => void;
+  onSubmit: (input: { amount: string; rate: string; term_days: number; note?: string }) => Promise<void>;
+}) {
+  const [amount, setAmount] = useState("");
+  const [rate, setRate] = useState("");
+  const [termDays, setTermDays] = useState("90");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit({ amount, rate, term_days: Number(termDays), note: note || undefined });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="FIXED DEPOSIT" title="转入定期" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p>从 <strong>{source.name}</strong>（{source.currency} 可用 {formatMoney(source.balance, source.currency)}）转存一笔定期。</p>
+        </div>
+        <div className="form-grid">
+          <label><span>转存金额</span><input required autoFocus step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
+          <label><span>年利率 (%)</span><input required step="0.01" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="例如 2.10" /></label>
+          <label><span>期限（天）</span><input required type="number" min={1} value={termDays} onChange={(e) => setTermDays(e.target.value)} /></label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}存入定期</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function SettleDepositModal({
+  deposit,
+  accounts,
+  onClose,
+  onSubmit
+}: {
+  deposit: Account;
+  accounts: Account[];
+  onClose: () => void;
+  onSubmit: (toAccountId: number) => Promise<void>;
+}) {
+  const [targetId, setTargetId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const targets = accounts.filter((account) => account.id !== deposit.id);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit(Number(targetId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="MATURE DEPOSIT" title="结清定期" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p><strong>{deposit.name}</strong> · 年利率 {deposit.interest_rate}%{deposit.maturity_at ? ` · ${formatDate(deposit.maturity_at)} 到期` : ""}</p>
+          <p>当前本金 {formatMoney(deposit.balance, deposit.currency)}，结清时按实际持有天数计息，本息一并转回。</p>
+        </div>
+        <div className="form-grid">
+          <label className="span-two"><span>转回账户</span>
+            <select required value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              <option value="" disabled>选择目标账户</option>
+              {targets.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}结清并转回</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function ReimburseModal({
+  expense,
+  accounts,
+  onClose,
+  onSubmit
+}: {
+  expense: Transaction;
+  accounts: Account[];
+  onClose: () => void;
+  onSubmit: (input: { account_id: number; amount: string; note?: string }) => Promise<void>;
+}) {
+  const remaining = Math.max(0, Number(expense.amount) - Number(expense.reimbursed_amount)).toFixed(2);
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState(remaining);
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit({ account_id: Number(accountId), amount, note: note || undefined });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="REIMBURSEMENT" title="报销支出" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p>{expense.note || "一笔支出"} · {formatMoney(expense.amount, expense.currency)}，剩余可报销 {formatMoney(remaining, expense.currency)}。</p>
+        </div>
+        <div className="form-grid">
+          <label><span>报销到账账户</span>
+            <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="" disabled>选择账户</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label><span>报销金额</span><input required step="0.01" inputMode="decimal" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认报销</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function LoanModal({
+  accounts,
+  onClose,
+  onSubmit
+}: {
+  accounts: Account[];
+  onClose: () => void;
+  onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; note?: string }) => Promise<void>;
+}) {
+  const [loanType, setLoanType] = useState<LoanType>("lend");
+  const [counterparty, setCounterparty] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit({
+        loan_type: loanType,
+        counterparty,
+        amount,
+        account_id: Number(accountId),
+        note: note || undefined
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="LOAN" title="记一笔借款" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="form-grid">
+          <label><span>方向</span>
+            <select value={loanType} onChange={(e) => setLoanType(e.target.value as LoanType)}>
+              <option value="lend">借出（我借给别人）</option>
+              <option value="borrow">借入（我向别人借）</option>
+            </select>
+          </label>
+          <label><span>往来人</span><input required autoFocus value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="例如：张三" /></label>
+          <label><span>金额</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
+          <label><span>资金账户</span>
+            <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="" disabled>选择账户</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认{loanType === "lend" ? "借出" : "借入"}</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function RepayModal({
+  loan,
+  accounts,
+  onClose,
+  onSubmit
+}: {
+  loan: Loan;
+  accounts: Account[];
+  onClose: () => void;
+  onSubmit: (input: { account_id: number; amount: string; note?: string }) => Promise<void>;
+}) {
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState(loan.outstanding);
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit({ account_id: Number(accountId), amount, note: note || undefined });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="REPAYMENT" title={`${loan.loan_type === "lend" ? "收回" : "偿还"}借款`} onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p>{loan.loan_type === "lend" ? "借出" : "借入"}给 {loan.counterparty}，未结 {formatMoney(loan.outstanding, loan.currency)}。</p>
+        </div>
+        <div className="form-grid">
+          <label><span>资金账户</span>
+            <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="" disabled>选择账户</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label><span>还款金额</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认还款</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
 function ModalShell({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -1229,7 +1760,7 @@ function TransactionModal({
   onClose: () => void;
   onSubmit: (input: TransactionSubmit) => Promise<void>;
 }) {
-  const [kind, setKind] = useState<TransactionKind>("expense");
+  const [kind, setKind] = useState<Exclude<TransactionKind, "loan">>("expense");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
   const [sourceCurrency, setSourceCurrency] = useState(accounts[0]?.currency ?? "CNY");
@@ -1250,7 +1781,7 @@ function TransactionModal({
   const crossCurrency = kind === "transfer" && source?.currency !== target?.currency;
   const sameTransferEndpoint = kind === "transfer" && accountId === targetId;
 
-  const changeKind = (nextKind: TransactionKind) => {
+  const changeKind = (nextKind: Exclude<TransactionKind, "loan">) => {
     setKind(nextKind);
     if (nextKind !== "transfer") {
       setCategoryId(categories.find((item) => item.kind === nextKind)?.id ?? 0);
@@ -1333,7 +1864,7 @@ function TransactionModal({
 
 function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (input: Parameters<typeof createAccount>[0]) => Promise<void> }) {
   const [name, setName] = useState("");
-  const [type, setType] = useState<AccountType>("asset");
+  const [type, setType] = useState<AccountType>("cash");
   const [currency, setCurrency] = useState("CNY");
   const [balance, setBalance] = useState("0");
   const [submitting, setSubmitting] = useState(false);
@@ -1348,7 +1879,12 @@ function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
           <label className="span-two"><span>账户名称</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：储蓄卡" /></label>
-          <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}><option value="asset">资产</option><option value="liability">负债</option></select></label>
+          <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+            <option value="cash">零钱</option>
+            <option value="savings">储蓄</option>
+            <option value="stock">股票</option>
+            <option value="credit">信用（负债）</option>
+          </select></label>
           <label><span>账户结算币种</span><input required maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
           <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
         </div>

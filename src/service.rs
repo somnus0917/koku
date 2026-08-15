@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
 
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction as SqlTransaction, TransactionBehavior,
 };
@@ -14,7 +14,8 @@ use rust_decimal::Decimal;
 use crate::auth::{generate_session_token, session_token_hash};
 use crate::domain::{
     Account, AccountType, BalanceSummary, CashFlowItem, CashFlowSummary, Category, CategoryExpense,
-    CategoryKind, MonthlySummary, Transaction, TransactionKind, DEFAULT_CATEGORIES,
+    CategoryKind, DepositSettlement, Loan, LoanType, MonthlySummary, Transaction, TransactionKind,
+    DEFAULT_CATEGORIES,
 };
 use crate::error::{KokuError, Result};
 
@@ -43,12 +44,14 @@ impl BookkeepingService {
             PRAGMA busy_timeout = 5000;
 
             CREATE TABLE IF NOT EXISTS accounts (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                name         TEXT NOT NULL UNIQUE,
-                account_type TEXT NOT NULL CHECK (account_type IN ('asset', 'liability')),
-                currency     TEXT NOT NULL,
-                balance      TEXT NOT NULL,
-                created_at   TEXT NOT NULL
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT NOT NULL UNIQUE,
+                account_type  TEXT NOT NULL CHECK (account_type IN ('cash', 'credit', 'savings', 'stock')),
+                currency      TEXT NOT NULL,
+                balance       TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                interest_rate TEXT,
+                maturity_at   TEXT
             );
 
             CREATE TABLE IF NOT EXISTS categories (
@@ -60,9 +63,30 @@ impl BookkeepingService {
                 UNIQUE(name, kind)
             );
 
+            CREATE TABLE IF NOT EXISTS loans (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                loan_type    TEXT NOT NULL CHECK (loan_type IN ('lend', 'borrow')),
+                counterparty TEXT NOT NULL,
+                currency     TEXT NOT NULL,
+                principal    TEXT NOT NULL,
+                outstanding  TEXT NOT NULL,
+                account_id   INTEGER NOT NULL REFERENCES accounts(id),
+                opened_at    TEXT NOT NULL,
+                note         TEXT NOT NULL DEFAULT '',
+                closed_at    TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS reimbursements (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                expense_id    INTEGER NOT NULL REFERENCES transactions(id),
+                income_id     INTEGER NOT NULL REFERENCES transactions(id),
+                amount        TEXT NOT NULL,
+                reimbursed_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer')),
+                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan')),
                 account_id    INTEGER NOT NULL REFERENCES accounts(id),
                 to_account_id INTEGER REFERENCES accounts(id),
                 category_id   INTEGER REFERENCES categories(id),
@@ -74,12 +98,19 @@ impl BookkeepingService {
                 occurred_at   TEXT NOT NULL,
                 note          TEXT NOT NULL DEFAULT '',
                 voided_at     TEXT,
+                loan_id       INTEGER REFERENCES loans(id),
+                reimbursable_at TEXT,
+                reimbursed_at   TEXT,
+                reimbursed_amount TEXT NOT NULL DEFAULT '0',
                 CHECK (
                     (kind IN ('expense', 'income') AND category_id IS NOT NULL
                      AND to_account_id IS NULL AND target_amount IS NULL)
                     OR
                     (kind = 'transfer' AND category_id IS NULL
                      AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
+                    OR
+                    (kind = 'loan' AND category_id IS NULL
+                     AND to_account_id IS NULL AND target_amount IS NULL)
                 )
             );
 
@@ -115,6 +146,39 @@ impl BookkeepingService {
                 "ALTER TABLE transactions ADD COLUMN settled_amount TEXT",
                 [],
             )?;
+        }
+        // —— 账户模型扩展（定期/报销/借款）的幂等迁移 ——
+        if !table_has_column(&conn, "accounts", "interest_rate")? {
+            conn.execute("ALTER TABLE accounts ADD COLUMN interest_rate TEXT", [])?;
+        }
+        if !table_has_column(&conn, "accounts", "maturity_at")? {
+            conn.execute("ALTER TABLE accounts ADD COLUMN maturity_at TEXT", [])?;
+        }
+        if !table_has_column(&conn, "transactions", "loan_id")? {
+            conn.execute("ALTER TABLE transactions ADD COLUMN loan_id INTEGER", [])?;
+        }
+        if !table_has_column(&conn, "transactions", "reimbursable_at")? {
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN reimbursable_at TEXT",
+                [],
+            )?;
+        }
+        if !table_has_column(&conn, "transactions", "reimbursed_at")? {
+            conn.execute("ALTER TABLE transactions ADD COLUMN reimbursed_at TEXT", [])?;
+        }
+        if !table_has_column(&conn, "transactions", "reimbursed_amount")? {
+            conn.execute(
+                "ALTER TABLE transactions ADD COLUMN reimbursed_amount TEXT NOT NULL DEFAULT '0'",
+                [],
+            )?;
+        }
+        // SQLite 无法修改 CHECK 约束：旧表按 asset/liability 建模，需要整表重建。
+        // 检测依据：表定义中缺少新类型标记（'cash'/'loan'），无论是否有旧 CHECK。
+        if !table_sql_contains(&conn, "accounts", "'cash'")? {
+            rebuild_accounts_table(&conn)?;
+        }
+        if !table_sql_contains(&conn, "transactions", "'loan'")? {
+            rebuild_transactions_table(&conn)?;
         }
         conn.execute_batch(
             r#"
@@ -199,7 +263,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, account_type, currency, balance FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -208,6 +272,8 @@ impl BookkeepingService {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
@@ -221,7 +287,7 @@ impl BookkeepingService {
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, account_type, currency, balance FROM accounts ORDER BY id",
+            "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -230,6 +296,8 @@ impl BookkeepingService {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })?;
         rows.map(|row| account_from_row(row?)).collect()
@@ -248,9 +316,26 @@ impl BookkeepingService {
         for row in rows {
             let (account_type, balance) = row?;
             let balance = decimal_from_db(&balance)?;
-            match AccountType::from_db(&account_type)? {
-                AccountType::Asset => total_assets += balance,
-                AccountType::Liability => total_liabilities += balance,
+            let account_type = AccountType::from_db(&account_type)?;
+            if account_type.is_liability() {
+                total_liabilities += balance;
+            } else {
+                total_assets += balance;
+            }
+        }
+        // 未结借款纳入净资产：借出 = 应收（资产），借入 = 应付（负债）。
+        let mut statement = self.conn.prepare(
+            "SELECT loan_type, outstanding FROM loans WHERE currency = ?1 AND closed_at IS NULL",
+        )?;
+        let rows = statement.query_map([&currency], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (loan_type, outstanding) = row?;
+            let outstanding = decimal_from_db(&outstanding)?;
+            match LoanType::from_db(&loan_type)? {
+                LoanType::Lend => total_assets += outstanding,
+                LoanType::Borrow => total_liabilities += outstanding,
             }
         }
         Ok(BalanceSummary {
@@ -466,6 +551,11 @@ impl BookkeepingService {
                     "categorized transactions cannot be transfers".to_owned(),
                 ))
             }
+            TransactionKind::Loan => {
+                return Err(KokuError::InvalidInput(
+                    "categorized transactions cannot be loans".to_owned(),
+                ))
+            }
         };
 
         let tx = self
@@ -493,7 +583,7 @@ impl BookkeepingService {
             TransactionKind::Income => account
                 .account_type
                 .apply_inflow(current_balance, settled_amount),
-            TransactionKind::Transfer => unreachable!("validated above"),
+            TransactionKind::Transfer | TransactionKind::Loan => unreachable!("validated above"),
         };
         Self::set_balance(&tx, account_id, new_balance)?;
         tx.execute(
@@ -611,6 +701,12 @@ impl BookkeepingService {
                         .apply_outflow(target.balance, target_amount),
                 )?;
             }
+            TransactionKind::Loan => {
+                return Err(KokuError::InvalidInput(
+                    "loan transactions cannot be voided; repay or adjust the loan instead"
+                        .to_owned(),
+                ))
+            }
         }
 
         tx.execute(
@@ -621,11 +717,402 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
+    /// 把储蓄账户中的一笔钱转为定期：自动创建带利率和到期日的定期账户并原子转账。
+    pub fn create_fixed_deposit(
+        &mut self,
+        from_account_id: i64,
+        amount: Decimal,
+        currency: impl Into<String>,
+        rate: Decimal,
+        term_days: u32,
+        note: impl Into<String>,
+    ) -> Result<Account> {
+        positive_amount(amount)?;
+        if rate < Decimal::ZERO {
+            return Err(KokuError::InvalidInput(
+                "interest rate cannot be negative".to_owned(),
+            ));
+        }
+        if term_days == 0 {
+            return Err(KokuError::InvalidInput(
+                "deposit term must be at least one day".to_owned(),
+            ));
+        }
+        let source = self.account(from_account_id)?;
+        if source.account_type != AccountType::Savings {
+            return Err(KokuError::InvalidInput(
+                "fixed deposits can only be opened from a savings account".to_owned(),
+            ));
+        }
+        let currency = normalize_currency(currency.into())?;
+        if currency != source.currency {
+            return Err(KokuError::InvalidInput(
+                "deposit currency must match the source account currency".to_owned(),
+            ));
+        }
+        let now = Utc::now();
+        let maturity = now + ChronoDuration::days(term_days as i64);
+        let name = format!("定期·{term_days}天 {rate}%");
+        let deposit =
+            self.create_account(name, AccountType::Savings, currency.clone(), Decimal::ZERO)?;
+        self.conn.execute(
+            "UPDATE accounts SET interest_rate = ?1, maturity_at = ?2 WHERE id = ?3",
+            params![decimal_to_db(rate), timestamp(maturity), deposit.id],
+        )?;
+        self.record_transfer(from_account_id, deposit.id, amount, amount, now, note)?;
+        self.account(deposit.id)
+    }
+
+    /// 结清定期：按实际持有天数计算利息（记一笔利息收入），再把本息转回目标账户。
+    pub fn settle_deposit(
+        &mut self,
+        deposit_id: i64,
+        to_account_id: i64,
+    ) -> Result<DepositSettlement> {
+        let deposit = self.account(deposit_id)?;
+        let Some(rate) = deposit.interest_rate else {
+            return Err(KokuError::InvalidInput(
+                "account is not a fixed deposit".to_owned(),
+            ));
+        };
+        if deposit.balance <= Decimal::ZERO {
+            return Err(KokuError::InvalidInput(
+                "deposit has no balance left to settle".to_owned(),
+            ));
+        }
+        let target = self.account(to_account_id)?;
+        if target.currency != deposit.currency {
+            return Err(KokuError::InvalidInput(
+                "settlement target must use the same currency as the deposit".to_owned(),
+            ));
+        }
+        let created_at: String = self.conn.query_row(
+            "SELECT created_at FROM accounts WHERE id = ?1",
+            [deposit_id],
+            |row| row.get(0),
+        )?;
+        let start = parse_timestamp(&created_at)?;
+        let days = (Utc::now() - start).num_days().max(0);
+        let hundred = Decimal::from(100_u32);
+        let year = Decimal::from(365_u32);
+        let interest = (deposit.balance * rate / hundred * Decimal::from(days) / year).round_dp(2);
+        let now = Utc::now();
+        if interest > Decimal::ZERO {
+            let interest_category = self.create_category("利息", CategoryKind::Income)?;
+            self.record_income_in_currency(
+                deposit_id,
+                interest_category.id,
+                interest,
+                deposit.currency.clone(),
+                interest,
+                now,
+                "定期利息",
+            )?;
+        }
+        let final_balance = self.account(deposit_id)?.balance;
+        let transfer = self.record_transfer(
+            deposit_id,
+            to_account_id,
+            final_balance,
+            final_balance,
+            now,
+            "定期到期转回",
+        )?;
+        Ok(DepositSettlement { interest, transfer })
+    }
+
+    /// 给一笔支出打上"待报销"标记。
+    pub fn mark_reimbursable(&mut self, transaction_id: i64) -> Result<Transaction> {
+        let transaction = self.transaction(transaction_id)?;
+        if transaction.kind != TransactionKind::Expense {
+            return Err(KokuError::InvalidInput(
+                "only expenses can be marked as reimbursable".to_owned(),
+            ));
+        }
+        if transaction.voided_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "voided transactions cannot be marked as reimbursable".to_owned(),
+            ));
+        }
+        if transaction.reimbursed_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "fully reimbursed transactions cannot be marked again".to_owned(),
+            ));
+        }
+        if transaction.reimbursable_at.is_none() {
+            self.conn.execute(
+                "UPDATE transactions SET reimbursable_at = ?1 WHERE id = ?2 AND reimbursable_at IS NULL",
+                params![timestamp(Utc::now()), transaction_id],
+            )?;
+        }
+        self.transaction(transaction_id)
+    }
+
+    /// 报销一笔待报销支出：生成关联的收入流水（可入任意账户），支持部分报销。
+    pub fn reimburse(
+        &mut self,
+        expense_id: i64,
+        account_id: i64,
+        amount: Decimal,
+        currency: impl Into<String>,
+        settled_amount: Option<Decimal>,
+        note: impl Into<String>,
+    ) -> Result<Transaction> {
+        positive_amount(amount)?;
+        let expense = self.transaction(expense_id)?;
+        if expense.kind != TransactionKind::Expense {
+            return Err(KokuError::InvalidInput(
+                "reimbursements can only settle expense transactions".to_owned(),
+            ));
+        }
+        if expense.voided_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "voided transactions cannot be reimbursed".to_owned(),
+            ));
+        }
+        if expense.reimbursable_at.is_none() {
+            return Err(KokuError::InvalidInput(
+                "transaction is not marked as reimbursable".to_owned(),
+            ));
+        }
+        if expense.reimbursed_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "transaction is already fully reimbursed".to_owned(),
+            ));
+        }
+        let currency = normalize_currency(currency.into())?;
+        if currency != expense.currency {
+            return Err(KokuError::InvalidInput(format!(
+                "reimbursement must be in the expense currency {}",
+                expense.currency
+            )));
+        }
+        let remaining = expense.amount - expense.reimbursed_amount;
+        if amount > remaining {
+            return Err(KokuError::InvalidInput(format!(
+                "reimbursement amount {amount} exceeds the remaining {remaining}"
+            )));
+        }
+
+        let reimburse_category = self.create_category("报销", CategoryKind::Income)?;
+        let now = Utc::now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let account = Self::account_in_tx(&tx, account_id)?;
+        let category = Self::category_in_tx(&tx, reimburse_category.id)?;
+        let settled = match settled_amount {
+            Some(value) => value,
+            None if currency == account.currency => amount,
+            None => {
+                return Err(KokuError::InvalidInput(format!(
+                    "settled_amount in {} is required for a {currency} reimbursement",
+                    account.currency
+                )))
+            }
+        };
+        if currency == account.currency && settled != amount {
+            return Err(KokuError::InvalidInput(
+                "same-currency reimbursements must settle for the original amount".to_owned(),
+            ));
+        }
+        let new_balance = account.account_type.apply_inflow(account.balance, settled);
+        Self::set_balance(&tx, account_id, new_balance)?;
+        tx.execute(
+            "INSERT INTO transactions(kind, account_id, category_id, amount, currency, settled_amount, occurred_at, note) VALUES ('income', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                account_id,
+                category.id,
+                decimal_to_db(amount),
+                currency,
+                decimal_to_db(settled),
+                timestamp(now),
+                note.into()
+            ],
+        )?;
+        let income_id = tx.last_insert_rowid();
+        let new_reimbursed = expense.reimbursed_amount + amount;
+        let fully_reimbursed = new_reimbursed >= expense.amount;
+        let reimbursed_at = if fully_reimbursed {
+            Some(timestamp(Utc::now()))
+        } else {
+            None
+        };
+        tx.execute(
+            "UPDATE transactions SET reimbursed_amount = ?1, reimbursed_at = ?2 WHERE id = ?3",
+            params![decimal_to_db(new_reimbursed), reimbursed_at, expense_id],
+        )?;
+        tx.execute(
+            "INSERT INTO reimbursements(expense_id, income_id, amount, reimbursed_at) VALUES (?1, ?2, ?3, ?4)",
+            params![expense_id, income_id, decimal_to_db(amount), timestamp(Utc::now())],
+        )?;
+        tx.commit()?;
+        self.transaction(income_id)
+    }
+
+    /// 借出/借入：创建借款记录并从账户划拨本金（借出扣减余额、借入增加余额）。
+    pub fn create_loan(
+        &mut self,
+        loan_type: LoanType,
+        counterparty: impl Into<String>,
+        currency: impl Into<String>,
+        amount: Decimal,
+        account_id: i64,
+        note: impl Into<String>,
+    ) -> Result<Loan> {
+        let counterparty = required_text(counterparty.into(), "counterparty")?;
+        positive_amount(amount)?;
+        let account = self.account(account_id)?;
+        let currency = normalize_currency(currency.into())?;
+        if currency != account.currency {
+            return Err(KokuError::InvalidInput(
+                "loan currency must match the account currency".to_owned(),
+            ));
+        }
+        let now = Utc::now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO loans(loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                loan_type.as_str(),
+                &counterparty,
+                currency,
+                decimal_to_db(amount),
+                decimal_to_db(amount),
+                account_id,
+                timestamp(now),
+                note.into()
+            ],
+        )?;
+        let loan_id = tx.last_insert_rowid();
+        let new_balance = match loan_type {
+            LoanType::Lend => account.account_type.apply_outflow(account.balance, amount),
+            LoanType::Borrow => account.account_type.apply_inflow(account.balance, amount),
+        };
+        Self::set_balance(&tx, account_id, new_balance)?;
+        tx.execute(
+            "INSERT INTO transactions(kind, account_id, amount, currency, settled_amount, loan_id, occurred_at, note) VALUES ('loan', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                account_id,
+                decimal_to_db(amount),
+                currency,
+                decimal_to_db(amount),
+                loan_id,
+                timestamp(now),
+                format!("{} {counterparty}", loan_type.label())
+            ],
+        )?;
+        tx.commit()?;
+        self.loan(loan_id)
+    }
+
+    /// 还款：资金从任意账户进出，递减借款未结余额，归零自动结清。
+    pub fn repay_loan(
+        &mut self,
+        loan_id: i64,
+        account_id: i64,
+        amount: Decimal,
+        currency: impl Into<String>,
+        settled_amount: Option<Decimal>,
+        note: impl Into<String>,
+    ) -> Result<Loan> {
+        positive_amount(amount)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let loan = Self::loan_in_tx(&tx, loan_id)?;
+        if loan.closed_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "loan is already settled".to_owned(),
+            ));
+        }
+        if amount > loan.outstanding {
+            return Err(KokuError::InvalidInput(format!(
+                "repayment {amount} exceeds the outstanding {}",
+                loan.outstanding
+            )));
+        }
+        let account = Self::account_in_tx(&tx, account_id)?;
+        let currency = normalize_currency(currency.into())?;
+        if currency != loan.currency {
+            return Err(KokuError::InvalidInput(
+                "repayment must be in the loan currency".to_owned(),
+            ));
+        }
+        let settled = match settled_amount {
+            Some(value) => value,
+            None if currency == account.currency => amount,
+            None => {
+                return Err(KokuError::InvalidInput(format!(
+                    "settled_amount in {} is required for a {currency} repayment",
+                    account.currency
+                )))
+            }
+        };
+        let new_balance = match loan.loan_type {
+            LoanType::Lend => account.account_type.apply_inflow(account.balance, settled),
+            LoanType::Borrow => account.account_type.apply_outflow(account.balance, settled),
+        };
+        Self::set_balance(&tx, account_id, new_balance)?;
+        let mut txn_note = format!("{}还款 {}", loan.loan_type.label(), loan.counterparty);
+        let note = note.into();
+        if !note.is_empty() {
+            txn_note = format!("{txn_note} · {note}");
+        }
+        tx.execute(
+            "INSERT INTO transactions(kind, account_id, amount, currency, settled_amount, loan_id, occurred_at, note) VALUES ('loan', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                account_id,
+                decimal_to_db(amount),
+                currency,
+                decimal_to_db(settled),
+                loan_id,
+                timestamp(Utc::now()),
+                txn_note
+            ],
+        )?;
+        let outstanding = loan.outstanding - amount;
+        let closed_at = if outstanding.is_zero() {
+            Some(timestamp(Utc::now()))
+        } else {
+            None
+        };
+        tx.execute(
+            "UPDATE loans SET outstanding = ?1, closed_at = ?2 WHERE id = ?3",
+            params![decimal_to_db(outstanding), closed_at, loan_id],
+        )?;
+        tx.commit()?;
+        self.loan(loan_id)
+    }
+
+    pub fn loans(&self) -> Result<Vec<Loan>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans ORDER BY id DESC",
+        )?;
+        let rows = statement.query_map([], loan_row)?;
+        rows.map(|row| loan_from_row(row?)).collect()
+    }
+
+    pub fn loan(&self, id: i64) -> Result<Loan> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans WHERE id = ?1",
+                [id],
+                loan_row,
+            )
+            .optional()?
+            .ok_or(KokuError::NotFound { entity: "loan", id })?;
+        loan_from_row(row)
+    }
+
     pub fn transaction(&self, id: i64) -> Result<Transaction> {
         let raw = self
             .conn
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -645,7 +1132,7 @@ impl BookkeepingService {
             ));
         }
         let mut statement = self.conn.prepare(
-            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2",
+            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2",
         )?;
         let rows = statement.query_map(params![limit, offset], transaction_row)?;
         rows.map(|row| transaction_from_row(row?)).collect()
@@ -683,7 +1170,8 @@ impl BookkeepingService {
         let currency = normalize_currency(currency.to_owned())?;
         let mut statement = self.conn.prepare(
             r#"
-            SELECT t.kind, t.category_id, c.name, SUM(CAST(t.amount AS REAL))
+            SELECT t.kind, t.category_id, c.name,
+                   SUM(CAST(t.amount AS REAL)) - SUM(CAST(COALESCE(t.reimbursed_amount, '0') AS REAL))
             FROM transactions t
             JOIN categories c ON c.id = t.category_id
             WHERE t.voided_at IS NULL
@@ -730,7 +1218,7 @@ impl BookkeepingService {
                         .entry((category_id, category_name))
                         .or_insert(Decimal::ZERO) += amount;
                 }
-                TransactionKind::Transfer => {}
+                TransactionKind::Transfer | TransactionKind::Loan => {}
             }
         }
 
@@ -752,7 +1240,7 @@ impl BookkeepingService {
     fn account_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Account> {
         let row = tx
             .query_row(
-                "SELECT id, name, account_type, currency, balance FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -761,6 +1249,8 @@ impl BookkeepingService {
                         row.get::<_, String>(2)?,
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
@@ -796,7 +1286,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -806,6 +1296,18 @@ impl BookkeepingService {
                 id,
             })?;
         transaction_from_row(raw)
+    }
+
+    fn loan_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Loan> {
+        let row = tx
+            .query_row(
+                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans WHERE id = ?1",
+                [id],
+                loan_row,
+            )
+            .optional()?
+            .ok_or(KokuError::NotFound { entity: "loan", id })?;
+        loan_from_row(row)
     }
 
     fn set_balance(tx: &SqlTransaction<'_>, account_id: i64, balance: Decimal) -> Result<()> {
@@ -823,7 +1325,15 @@ impl BookkeepingService {
     }
 }
 
-type AccountRow = (i64, String, String, String, String);
+type AccountRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 type CategoryRow = (i64, String, String);
 type TransactionRow = (
     i64,
@@ -839,6 +1349,10 @@ type TransactionRow = (
     String,
     String,
     Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    String,
 );
 
 fn account_from_row(row: AccountRow) -> Result<Account> {
@@ -848,6 +1362,8 @@ fn account_from_row(row: AccountRow) -> Result<Account> {
         account_type: AccountType::from_db(&row.2)?,
         currency: row.3,
         balance: decimal_from_db(&row.4)?,
+        interest_rate: row.5.as_deref().map(decimal_from_db).transpose()?,
+        maturity_at: row.6.as_deref().map(parse_timestamp).transpose()?,
     })
 }
 
@@ -874,6 +1390,10 @@ fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> 
         row.get(10)?,
         row.get(11)?,
         row.get(12)?,
+        row.get(13)?,
+        row.get(14)?,
+        row.get(15)?,
+        row.get(16)?,
     ))
 }
 
@@ -892,6 +1412,53 @@ fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         occurred_at: parse_timestamp(&row.10)?,
         note: row.11,
         voided_at: row.12.as_deref().map(parse_timestamp).transpose()?,
+        loan_id: row.13,
+        reimbursable_at: row.14.as_deref().map(parse_timestamp).transpose()?,
+        reimbursed_at: row.15.as_deref().map(parse_timestamp).transpose()?,
+        reimbursed_amount: decimal_from_db(&row.16)?,
+    })
+}
+
+type LoanRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    String,
+    Option<String>,
+);
+
+fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
+    ))
+}
+
+fn loan_from_row(row: LoanRow) -> Result<Loan> {
+    Ok(Loan {
+        id: row.0,
+        loan_type: LoanType::from_db(&row.1)?,
+        counterparty: row.2,
+        currency: row.3,
+        principal: decimal_from_db(&row.4)?,
+        outstanding: decimal_from_db(&row.5)?,
+        account_id: row.6,
+        opened_at: parse_timestamp(&row.7)?,
+        note: row.8,
+        closed_at: row.9.as_deref().map(parse_timestamp).transpose()?,
     })
 }
 
@@ -912,6 +1479,102 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
         }
     }
     Ok(false)
+}
+
+/// 检查表的原始 CREATE 语句是否包含指定片段（用于检测旧版 CHECK 约束）。
+fn table_sql_contains(conn: &Connection, table: &str, needle: &str) -> Result<bool> {
+    let sql = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    Ok(sql.contains(needle))
+}
+
+/// 重建 accounts 表：把旧的 asset/liability CHECK 换成四种新类型，并迁移旧值。
+fn rebuild_accounts_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE accounts_new (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT NOT NULL UNIQUE,
+            account_type  TEXT NOT NULL CHECK (account_type IN ('cash', 'credit', 'savings', 'stock')),
+            currency      TEXT NOT NULL,
+            balance       TEXT NOT NULL,
+            created_at    TEXT NOT NULL,
+            interest_rate TEXT,
+            maturity_at   TEXT
+        );
+        INSERT INTO accounts_new(id, name, account_type, currency, balance, created_at, interest_rate, maturity_at)
+            SELECT id, name,
+                   CASE account_type
+                       WHEN 'asset' THEN 'cash'
+                       WHEN 'liability' THEN 'credit'
+                       ELSE account_type
+                   END,
+                   currency, balance, created_at, interest_rate, maturity_at
+            FROM accounts;
+        DROP TABLE accounts;
+        ALTER TABLE accounts_new RENAME TO accounts;
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
+    Ok(())
+}
+
+/// 重建 transactions 表：扩展 kind CHECK（允许 loan）并带上报销/借款新列。
+fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE transactions_new (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan')),
+            account_id    INTEGER NOT NULL REFERENCES accounts(id),
+            to_account_id INTEGER REFERENCES accounts(id),
+            category_id   INTEGER REFERENCES categories(id),
+            amount        TEXT NOT NULL,
+            currency      TEXT,
+            settled_amount TEXT,
+            target_amount TEXT,
+            target_currency TEXT,
+            occurred_at   TEXT NOT NULL,
+            note          TEXT NOT NULL DEFAULT '',
+            voided_at     TEXT,
+            loan_id       INTEGER REFERENCES loans(id),
+            reimbursable_at TEXT,
+            reimbursed_at   TEXT,
+            reimbursed_amount TEXT NOT NULL DEFAULT '0',
+            CHECK (
+                (kind IN ('expense', 'income') AND category_id IS NOT NULL
+                 AND to_account_id IS NULL AND target_amount IS NULL)
+                OR
+                (kind = 'transfer' AND category_id IS NULL
+                 AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
+                OR
+                (kind = 'loan' AND category_id IS NULL
+                 AND to_account_id IS NULL AND target_amount IS NULL)
+            )
+        );
+        INSERT INTO transactions_new(id, kind, account_id, to_account_id, category_id, amount,
+                                     currency, settled_amount, target_amount, target_currency,
+                                     occurred_at, note, voided_at, loan_id,
+                                     reimbursable_at, reimbursed_at, reimbursed_amount)
+            SELECT id, kind, account_id, to_account_id, category_id, amount,
+                   currency, settled_amount, target_amount, target_currency,
+                   occurred_at, note, voided_at, loan_id,
+                   reimbursable_at, reimbursed_at, COALESCE(reimbursed_amount, '0')
+            FROM transactions;
+        DROP TABLE transactions;
+        ALTER TABLE transactions_new RENAME TO transactions;
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
+    Ok(())
 }
 
 fn normalize_currency(value: String) -> Result<String> {
@@ -995,6 +1658,7 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     fn test_service() -> Result<BookkeepingService> {
         BookkeepingService::in_memory()
@@ -1087,7 +1751,7 @@ mod tests {
     fn deleting_category_preserves_historical_transactions_and_statistics() -> Result<()> {
         let mut service = test_service()?;
         let account =
-            service.create_account("Cash", AccountType::Asset, "CNY", Decimal::from(100_u32))?;
+            service.create_account("Cash", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
         let food = service.create_category("Food", CategoryKind::Expense)?;
         let at = NaiveDate::from_ymd_opt(2026, 8, 15)
             .and_then(|date| date.and_hms_opt(12, 0, 0))
@@ -1114,7 +1778,7 @@ mod tests {
         let mut service = test_service()?;
         let visa = service.create_account(
             "CMB Visa",
-            AccountType::Liability,
+            AccountType::Credit,
             "CNY",
             Decimal::from(1000_u32),
         )?;
@@ -1159,13 +1823,13 @@ mod tests {
         let mut service = test_service()?;
         let checking = service.create_account(
             "Checking",
-            AccountType::Asset,
+            AccountType::Cash,
             "CNY",
             Decimal::from(1000_u32),
         )?;
         let visa = service.create_account(
             "Visa debt",
-            AccountType::Liability,
+            AccountType::Credit,
             "CNY",
             Decimal::from(500_u32),
         )?;
@@ -1249,13 +1913,13 @@ mod tests {
         let mut service = test_service()?;
         let source = service.create_account(
             "Source",
-            AccountType::Asset,
+            AccountType::Cash,
             "CNY",
             Decimal::from_str("1000.10")?,
         )?;
         let target = service.create_account(
             "Target",
-            AccountType::Asset,
+            AccountType::Cash,
             "CNY",
             Decimal::from_str("10.20")?,
         )?;
@@ -1295,9 +1959,9 @@ mod tests {
     fn void_transfer_restores_both_accounts_once() -> Result<()> {
         let mut service = test_service()?;
         let source =
-            service.create_account("Wallet", AccountType::Asset, "CNY", Decimal::from(500_u32))?;
+            service.create_account("Wallet", AccountType::Cash, "CNY", Decimal::from(500_u32))?;
         let target =
-            service.create_account("Bank", AccountType::Asset, "CNY", Decimal::from(100_u32))?;
+            service.create_account("Bank", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
         let transfer = service.record_transfer(
             source.id,
             target.id,
@@ -1323,7 +1987,7 @@ mod tests {
     fn categorized_transactions_and_void_are_reflected_in_monthly_stats() -> Result<()> {
         let mut service = test_service()?;
         let account =
-            service.create_account("Checking", AccountType::Asset, "CNY", Decimal::ZERO)?;
+            service.create_account("Checking", AccountType::Cash, "CNY", Decimal::ZERO)?;
         let salary = service.create_category("Salary", CategoryKind::Income)?;
         let food = service.create_category("Food", CategoryKind::Expense)?;
         let transit = service.create_category("Transit", CategoryKind::Expense)?;
@@ -1370,12 +2034,11 @@ mod tests {
         let mut service = test_service()?;
         let cny = service.create_account(
             "CNY account",
-            AccountType::Asset,
+            AccountType::Cash,
             "CNY",
             Decimal::from(1000_u32),
         )?;
-        let usd =
-            service.create_account("USD account", AccountType::Asset, "USD", Decimal::ZERO)?;
+        let usd = service.create_account("USD account", AccountType::Cash, "USD", Decimal::ZERO)?;
         service.record_transfer(
             cny.id,
             usd.id,
@@ -1392,7 +2055,7 @@ mod tests {
     #[test]
     fn transactions_are_paginated_newest_first_and_limited() -> Result<()> {
         let mut service = test_service()?;
-        let account = service.create_account("Cash", AccountType::Asset, "CNY", Decimal::ZERO)?;
+        let account = service.create_account("Cash", AccountType::Cash, "CNY", Decimal::ZERO)?;
         let food = service.create_category("Food", CategoryKind::Expense)?;
         let at = |day: u32| {
             NaiveDate::from_ymd_opt(2026, 8, day)
@@ -1421,6 +2084,239 @@ mod tests {
             service.transactions(1001, 0),
             Err(KokuError::InvalidInput(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_deposit_earns_interest_and_settles_back_to_savings() -> Result<()> {
+        let mut service = test_service()?;
+        let savings = service.create_account(
+            "储蓄",
+            AccountType::Savings,
+            "CNY",
+            Decimal::from(10000_u32),
+        )?;
+        let deposit = service.create_fixed_deposit(
+            savings.id,
+            Decimal::from(5000_u32),
+            "CNY",
+            Decimal::from_str("2.10")?,
+            365,
+            "一年定期",
+        )?;
+        assert_eq!(deposit.account_type, AccountType::Savings);
+        assert_eq!(deposit.interest_rate, Some(Decimal::from_str("2.10")?));
+        assert!(deposit.maturity_at.is_some());
+        assert_eq!(
+            service.account(savings.id)?.balance,
+            Decimal::from(5000_u32)
+        );
+        assert_eq!(deposit.balance, Decimal::from(5000_u32));
+
+        // 把起存日期拨回 100 天，制造利息
+        let start = Utc::now() - ChronoDuration::days(100);
+        service.conn.execute(
+            "UPDATE accounts SET created_at = ?1 WHERE id = ?2",
+            params![timestamp(start), deposit.id],
+        )?;
+        let settlement = service.settle_deposit(deposit.id, savings.id)?;
+        // 5000 * 2.10% * 100/365 ≈ 28.77
+        assert_eq!(settlement.interest, Decimal::from_str("28.77")?);
+        assert_eq!(settlement.transfer.kind, TransactionKind::Transfer);
+        assert_eq!(
+            service.account(savings.id)?.balance,
+            Decimal::from_str("10028.77")?
+        );
+        assert_eq!(service.account(deposit.id)?.balance, Decimal::ZERO);
+
+        // 已结清的定期不能再结
+        assert!(matches!(
+            service.settle_deposit(deposit.id, savings.id),
+            Err(KokuError::InvalidInput(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn reimbursement_marks_settles_partially_and_drops_from_expenses() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "出差餐费")?;
+
+        // 未标记直接报销 -> 拒绝
+        assert!(matches!(
+            service.reimburse(expense.id, cash.id, Decimal::TEN, "CNY", None, ""),
+            Err(KokuError::InvalidInput(_))
+        ));
+        let marked = service.mark_reimbursable(expense.id)?;
+        assert!(marked.reimbursable_at.is_some());
+
+        // 部分报销 40
+        let income1 = service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(40_u32),
+            "CNY",
+            None,
+            "报销首笔",
+        )?;
+        assert_eq!(income1.kind, TransactionKind::Income);
+        assert_eq!(
+            income1.category_id,
+            Some(
+                service
+                    .categories()?
+                    .iter()
+                    .find(|c| c.name == "报销")
+                    .unwrap()
+                    .id
+            )
+        );
+        let expense_after = service.transaction(expense.id)?;
+        assert_eq!(expense_after.reimbursed_amount, Decimal::from(40_u32));
+        assert!(expense_after.reimbursed_at.is_none());
+        // 支出扣了 100，报销回 40
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(-60_i32));
+
+        // 超额报销 -> 拒绝
+        assert!(matches!(
+            service.reimburse(expense.id, cash.id, Decimal::from(61_u32), "CNY", None, ""),
+            Err(KokuError::InvalidInput(_))
+        ));
+        // 报完剩余 60
+        service.reimburse(
+            expense.id,
+            cash.id,
+            Decimal::from(60_u32),
+            "CNY",
+            None,
+            "报销尾款",
+        )?;
+        let expense_done = service.transaction(expense.id)?;
+        assert_eq!(expense_done.reimbursed_amount, Decimal::from(100_u32));
+        assert!(expense_done.reimbursed_at.is_some());
+
+        // 已报销金额从月度支出剔除，报销收入计入收入
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.total_expense, Decimal::ZERO);
+        assert_eq!(summary.total_income, Decimal::from(100_u32));
+        assert_eq!(service.account(cash.id)?.balance, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn loans_lend_borrow_and_repay_across_accounts() -> Result<()> {
+        let mut service = test_service()?;
+        let savings = service.create_account(
+            "储蓄",
+            AccountType::Savings,
+            "CNY",
+            Decimal::from(10000_u32),
+        )?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+
+        // 借出 1000 给张三（从储蓄出账）
+        let lend = service.create_loan(
+            LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(1000_u32),
+            savings.id,
+            "朋友借款",
+        )?;
+        assert_eq!(lend.outstanding, Decimal::from(1000_u32));
+        assert_eq!(
+            service.account(savings.id)?.balance,
+            Decimal::from(9000_u32)
+        );
+        // 净资产不受影响：9000 余额 + 1000 应收
+        let balance = service.balance_summary("CNY")?;
+        assert_eq!(balance.total_assets, Decimal::from(10000_u32));
+        assert_eq!(balance.net_worth, Decimal::from(10000_u32));
+        // 借出流水不计入收支统计
+        assert_eq!(
+            service
+                .monthly_summary(Utc::now().year(), Utc::now().month(), "CNY")?
+                .total_expense,
+            Decimal::ZERO
+        );
+        assert_eq!(
+            service
+                .transactions(10, 0)?
+                .iter()
+                .filter(|t| t.loan_id == Some(lend.id))
+                .count(),
+            1
+        );
+
+        // 还款 400 到零钱
+        let lend = service.repay_loan(
+            lend.id,
+            cash.id,
+            Decimal::from(400_u32),
+            "CNY",
+            None,
+            "首期还款",
+        )?;
+        assert_eq!(lend.outstanding, Decimal::from(600_u32));
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(400_u32));
+
+        // 借入 2000（银行），到账零钱
+        let borrow = service.create_loan(
+            LoanType::Borrow,
+            "银行",
+            "CNY",
+            Decimal::from(2000_u32),
+            cash.id,
+            "周转",
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(2400_u32));
+        let balance = service.balance_summary("CNY")?;
+        assert_eq!(balance.total_liabilities, Decimal::from(2000_u32));
+
+        // 超额还款 -> 拒绝
+        assert!(matches!(
+            service.repay_loan(borrow.id, cash.id, Decimal::from(2001_u32), "CNY", None, ""),
+            Err(KokuError::InvalidInput(_))
+        ));
+        // 借出流水不能撤销
+        let lend_tx = service
+            .transactions(10, 0)?
+            .into_iter()
+            .find(|t| t.loan_id == Some(lend.id))
+            .unwrap();
+        assert!(matches!(
+            service.void_transaction(lend_tx.id),
+            Err(KokuError::InvalidInput(_))
+        ));
+
+        // 还清借出 + 借入
+        service.repay_loan(
+            lend.id,
+            cash.id,
+            Decimal::from(600_u32),
+            "CNY",
+            None,
+            "结清",
+        )?;
+        assert!(service.loan(lend.id)?.closed_at.is_some());
+        service.repay_loan(
+            borrow.id,
+            cash.id,
+            Decimal::from(2000_u32),
+            "CNY",
+            None,
+            "还清",
+        )?;
+        assert!(service.loan(borrow.id)?.closed_at.is_some());
+        let balance = service.balance_summary("CNY")?;
+        assert_eq!(balance.total_liabilities, Decimal::ZERO);
         Ok(())
     }
 }
