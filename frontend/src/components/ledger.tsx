@@ -442,8 +442,10 @@ export function AccountGroup({
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
-              {renderAction ? renderAction(account) : null}
-              <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
+              <div className="account-card-actions">
+                {renderAction ? renderAction(account) : null}
+                <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
+              </div>
             </article>
           );
         })}

@@ -1330,12 +1330,19 @@ button:disabled {
 
 .account-detail-card {
   display: grid;
-  grid-template-columns: 50px 1fr auto 32px;
+  grid-template-columns: 50px 1fr auto auto;
   align-items: center;
   gap: 14px;
   min-height: 90px;
   padding: 17px;
   border-radius: 16px;
+}
+
+/* 操作按钮（转定期/结清 + 编辑）放进同一格，避免多出的按钮把编辑按钮挤到第二行。 */
+.account-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .large-account-icon {
