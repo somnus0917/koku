@@ -7,6 +7,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
     user: ${KOKU_RUNTIME_UID:-1000}:${KOKU_RUNTIME_GID:-1000}
     restart: unless-stopped
     environment:

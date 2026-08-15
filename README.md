@@ -106,6 +106,7 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 
 - `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
 - `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
+- `DEBIAN_MIRROR`：腾讯云建议使用 `http://mirrors.cloud.tencent.com`；Cargo 构建已固定使用 USTC 稀疏索引并启用缓存。
 
 在服务器生成 Basic Auth 密码哈希：
 
