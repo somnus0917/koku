@@ -1604,6 +1604,13 @@ button:disabled {
   scrollbar-color: var(--border-strong) transparent;
 }
 
+.category-delete-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
 .category-library section > header {
   display: flex;
   align-items: center;
@@ -1633,6 +1640,36 @@ button:disabled {
   padding: 7px 9px;
   border-radius: 999px;
   font-size: 9px;
+}
+
+.category-chip-list > span > span:not(.category-avatar) {
+  white-space: nowrap;
+}
+
+.category-chip-list > span > button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  margin: -3px -4px -3px 1px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: currentColor;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.category-chip-list > span > button:hover,
+.category-chip-list > span > button:focus-visible {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  opacity: 1;
+}
+
+.category-chip-list > span > button:disabled {
+  cursor: wait;
+  opacity: 0.4;
 }
 
 .category-chip-list > .expense { background: var(--expense-soft); color: var(--expense); }

@@ -68,6 +68,7 @@ import {
   createCategory,
   createTransaction,
   createTransfer,
+  deleteCategory,
   loadAppData,
   voidTransaction
 } from "./api";
@@ -424,6 +425,11 @@ function App() {
           categories={data?.categories ?? []}
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createCategory(input), "分类已创建")}
+          onDelete={async (category) => {
+            await deleteCategory(category.id);
+            setToast(`“${category.name}”已删除，历史账单保持不变`);
+            await refresh(true);
+          }}
         />
       )}
       {toast && (
@@ -1254,19 +1260,28 @@ function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i
   );
 }
 
-function CategoryModal({ categories, onClose, onSubmit }: { categories: Category[]; onClose: () => void; onSubmit: (input: Parameters<typeof createCategory>[0]) => Promise<void> }) {
+function CategoryModal({ categories, onClose, onSubmit, onDelete }: { categories: Category[]; onClose: () => void; onSubmit: (input: Parameters<typeof createCategory>[0]) => Promise<void>; onDelete: (category: Category) => Promise<void> }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CategoryKind>("expense");
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSubmitting(true); setError(null);
     try { await onSubmit({ name, kind }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); setSubmitting(false); }
   };
+  const remove = async (category: Category) => {
+    if (!window.confirm(`删除“${category.name}”？历史账单和统计不会受到影响。`)) return;
+    setDeletingId(category.id); setError(null);
+    try { await onDelete(category); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "删除失败"); }
+    finally { setDeletingId(null); }
+  };
   return (
     <ModalShell eyebrow="CATEGORIES" title="管理分类" onClose={onClose}>
       <div className="category-library">
+        <p className="category-delete-note">删除后仅从新交易的可选分类中隐藏，历史账单和统计会完整保留。</p>
         {([
           { kind: "expense" as const, label: "支出分类" },
           { kind: "income" as const, label: "收入分类" }
@@ -1276,7 +1291,7 @@ function CategoryModal({ categories, onClose, onSubmit }: { categories: Category
             <section key={group.kind}>
               <header><strong>{group.label}</strong><small>{items.length} 项</small></header>
               <div className="category-chip-list">
-                {items.map((item) => <span key={item.id} className={item.kind}><CategoryAvatar name={item.name} size="tiny" />{item.name}</span>)}
+                {items.map((item) => <span key={item.id} className={item.kind}><CategoryAvatar name={item.name} size="tiny" /><span>{item.name}</span><button type="button" onClick={() => void remove(item)} disabled={deletingId !== null} aria-label={`删除${item.name}`}>{deletingId === item.id ? <LoaderCircle className="spin" size={11} /> : <X size={11} />}</button></span>)}
               </div>
             </section>
           );

@@ -382,6 +382,7 @@ impl BookkeepingService {
                 name       TEXT NOT NULL,
                 kind       TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
                 created_at TEXT NOT NULL,
+                archived_at TEXT,
                 UNIQUE(name, kind)
             );
 
@@ -416,6 +417,9 @@ impl BookkeepingService {
         )?;
         if !table_has_column(&conn, "transactions", "currency")? {
             conn.execute("ALTER TABLE transactions ADD COLUMN currency TEXT", [])?;
+        }
+        if !table_has_column(&conn, "categories", "archived_at")? {
+            conn.execute("ALTER TABLE categories ADD COLUMN archived_at TEXT", [])?;
         }
         if !table_has_column(&conn, "transactions", "target_currency")? {
             conn.execute(
@@ -478,10 +482,19 @@ impl BookkeepingService {
     ) -> Result<Category> {
         let name = required_text(name.into(), "category name")?;
         self.conn.execute(
-            "INSERT INTO categories(name, kind, created_at) VALUES (?1, ?2, ?3)",
+            r#"
+            INSERT INTO categories(name, kind, created_at, archived_at)
+            VALUES (?1, ?2, ?3, NULL)
+            ON CONFLICT(name, kind) DO UPDATE SET archived_at = NULL
+            "#,
             params![name, kind.as_str(), timestamp(Utc::now())],
         )?;
-        self.category(self.conn.last_insert_rowid())
+        let id = self.conn.query_row(
+            "SELECT id FROM categories WHERE name = ?1 AND kind = ?2",
+            params![name, kind.as_str()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        self.category(id)
     }
 
     pub fn ensure_default_categories(&mut self) -> Result<()> {
@@ -578,7 +591,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, kind FROM categories WHERE id = ?1",
+                "SELECT id, name, kind FROM categories WHERE id = ?1 AND archived_at IS NULL",
                 [id],
                 |row| {
                     Ok((
@@ -597,9 +610,9 @@ impl BookkeepingService {
     }
 
     pub fn categories(&self) -> Result<Vec<Category>> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT id, name, kind FROM categories ORDER BY kind, id")?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, name, kind FROM categories WHERE archived_at IS NULL ORDER BY kind, id",
+        )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -608,6 +621,19 @@ impl BookkeepingService {
             ))
         })?;
         rows.map(|row| category_from_row(row?)).collect()
+    }
+
+    pub fn delete_category(&mut self, id: i64) -> Result<Category> {
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let category = Self::category_in_tx(&transaction, id)?;
+        transaction.execute(
+            "UPDATE categories SET archived_at = ?1 WHERE id = ?2 AND archived_at IS NULL",
+            params![timestamp(Utc::now()), id],
+        )?;
+        transaction.commit()?;
+        Ok(category)
     }
 
     pub fn record_expense(
@@ -1015,7 +1041,7 @@ impl BookkeepingService {
     fn category_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Category> {
         let row = tx
             .query_row(
-                "SELECT id, name, kind FROM categories WHERE id = ?1",
+                "SELECT id, name, kind FROM categories WHERE id = ?1 AND archived_at IS NULL",
                 [id],
                 |row| {
                     Ok((
@@ -1489,6 +1515,14 @@ async fn api_create_category(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
 }
 
+async fn api_delete_category(
+    State(state): State<AppState>,
+    AxumPath(category_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Category>>> {
+    let category = lock_service(&state)?.delete_category(category_id)?;
+    Ok(Json(ApiResponse::new(category)))
+}
+
 async fn api_transactions(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
@@ -1608,6 +1642,7 @@ fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
             "/api/categories",
             get(api_categories).post(api_create_category),
         )
+        .route("/api/categories/{category_id}", delete(api_delete_category))
         .route(
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),
@@ -1753,6 +1788,66 @@ mod tests {
         assert!(categories
             .iter()
             .any(|item| { item.name == "其他支出" && item.kind == CategoryKind::Expense }));
+        Ok(())
+    }
+
+    #[test]
+    fn deleted_category_stays_hidden_and_can_be_restored() -> Result<()> {
+        let mut service = test_service()?;
+        service.ensure_default_categories()?;
+        let travel = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "旅行" && item.kind == CategoryKind::Expense)
+            .ok_or_else(|| KokuError::InvalidInput("旅行 category is missing".to_owned()))?;
+
+        assert_eq!(service.delete_category(travel.id)?, travel);
+        assert!(matches!(
+            service.category(travel.id),
+            Err(KokuError::NotFound {
+                entity: "category",
+                id
+            }) if id == travel.id
+        ));
+
+        service.ensure_default_categories()?;
+        assert!(!service
+            .categories()?
+            .iter()
+            .any(|item| item.id == travel.id));
+
+        let restored = service.create_category("旅行", CategoryKind::Expense)?;
+        assert_eq!(restored.id, travel.id);
+        assert!(service
+            .categories()?
+            .iter()
+            .any(|item| item.id == travel.id));
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_category_preserves_historical_transactions_and_statistics() -> Result<()> {
+        let mut service = test_service()?;
+        let account =
+            service.create_account("Cash", AccountType::Asset, "CNY", Decimal::from(100_u32))?;
+        let food = service.create_category("Food", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let transaction = service.record_expense(account.id, food.id, Decimal::TEN, at, "Lunch")?;
+
+        service.delete_category(food.id)?;
+
+        assert!(!service.categories()?.iter().any(|item| item.id == food.id));
+        assert_eq!(
+            service.transaction(transaction.id)?.category_id,
+            Some(food.id)
+        );
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.total_expense, Decimal::TEN);
+        assert_eq!(summary.expenses_by_category[0].category_name, "Food");
+        assert_eq!(service.account(account.id)?.balance, Decimal::from(90_u32));
         Ok(())
     }
 

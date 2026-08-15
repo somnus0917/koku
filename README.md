@@ -185,6 +185,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。容器�
 | `GET` | `/api/health` | 健康检查 |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
+| `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出 |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |

@@ -81,6 +81,10 @@ export function createCategory(input: {
   });
 }
 
+export function deleteCategory(id: number): Promise<Category> {
+  return request(`/api/categories/${id}`, { method: "DELETE" });
+}
+
 export function createTransaction(input: {
   kind: Exclude<TransactionKind, "transfer">;
   account_id: number;
