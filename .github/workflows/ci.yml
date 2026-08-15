@@ -104,6 +104,22 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+      - name: Export deployment image
+        env:
+          DEPLOY_IMAGE: ghcr.io/${{ github.repository }}-${{ matrix.service }}:${{ github.sha }}
+        run: |
+          docker pull "$DEPLOY_IMAGE"
+          docker save --output "koku-${{ matrix.service }}-image.tar" "$DEPLOY_IMAGE"
+          gzip --fast "koku-${{ matrix.service }}-image.tar"
+
+      - name: Upload deployment image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: koku-${{ matrix.service }}-image
+          path: koku-${{ matrix.service }}-image.tar.gz
+          compression-level: 0
+          retention-days: 1
+
   deploy:
     name: Deploy to Tencent Cloud
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -119,6 +135,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Download deployment images
+        uses: actions/download-artifact@v8
+        with:
+          pattern: koku-*-image
+          path: images
+          merge-multiple: true
+
       - name: Configure SSH
         env:
           SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
@@ -130,17 +153,6 @@ jobs:
           printf '%s\n' "$SERVER_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Authenticate server to GitHub Container Registry
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_PORT: ${{ secrets.SERVER_PORT }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-        run: |
-          printf '%s' "$GHCR_TOKEN" | ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "docker login ghcr.io --username '$GHCR_USER' --password-stdin"
-
       - name: Upload deployment configuration
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -151,6 +163,18 @@ jobs:
           scp -P "$SERVER_PORT" compose.production.yml "$SERVER_USER@$SERVER_HOST:koku/compose.production.yml"
           scp -P "$SERVER_PORT" deploy/Caddyfile.example "$SERVER_USER@$SERVER_HOST:koku/deploy/Caddyfile.example"
           scp -P "$SERVER_PORT" deploy/deploy.sh "$SERVER_USER@$SERVER_HOST:koku/deploy/deploy.sh"
+          scp -P "$SERVER_PORT" images/koku-api-image.tar.gz "$SERVER_USER@$SERVER_HOST:koku/deploy/koku-api-image.tar.gz"
+          scp -P "$SERVER_PORT" images/koku-web-image.tar.gz "$SERVER_USER@$SERVER_HOST:koku/deploy/koku-web-image.tar.gz"
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'chmod 700 ~/koku/deploy/deploy.sh'
+
+      - name: Load deployment images
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'docker load --input ~/koku/deploy/koku-api-image.tar.gz'
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'docker load --input ~/koku/deploy/koku-web-image.tar.gz'
 
       - name: Deploy and verify health
         env:
@@ -161,13 +185,14 @@ jobs:
           WEB_IMAGE: ghcr.io/${{ github.repository }}-web:${{ github.sha }}
         run: |
           ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
-            "chmod 700 ~/koku/deploy/deploy.sh && ~/koku/deploy/deploy.sh '$API_IMAGE' '$WEB_IMAGE'"
+            "KOKU_SKIP_PULL=true ~/koku/deploy/deploy.sh '$API_IMAGE' '$WEB_IMAGE'"
 
-      - name: Remove temporary registry credentials
+      - name: Remove transferred image archives
         if: always()
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
           SERVER_PORT: ${{ secrets.SERVER_PORT }}
           SERVER_USER: ${{ secrets.SERVER_USER }}
         run: |
-          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'docker logout ghcr.io' || true
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            'rm -f ~/koku/deploy/koku-api-image.tar.gz ~/koku/deploy/koku-web-image.tar.gz' || true

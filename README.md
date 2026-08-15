@@ -122,7 +122,7 @@ docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 
 该站点块代理到 `koku-web:8080`。认证必须放在现有 Caddy 上，才能同时保护页面和所有写入型 `/api` 接口。
 
-部署任务会使用当前运行期的 `GITHUB_TOKEN` 临时登录 GHCR，镜像拉取完成后立即退出，因此服务器不需要长期保存 GitHub PAT。
+镜像仍会发布到 GHCR 作为可追踪制品。考虑到中国区 CVM 直连 GHCR 容易出现慢速或 `unexpected EOF`，部署任务会在 GitHub Runner 上导出镜像，再通过 SSH/SCP 直接传到服务器；服务器不需要保存 GitHub PAT。
 
 腾讯云安全组只需向公网开放 TCP `80/443` 和 UDP `443`；SSH 端口应限制为自己的可信 IP。域名的 A/AAAA 记录必须先指向服务器，Caddy 才能自动申请证书。
 
@@ -148,9 +148,10 @@ docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 
 1. 运行 Rust 测试、格式检查、Clippy 和前端构建。
 2. 构建 `koku-api`、`koku-web` 镜像并以 Git commit SHA 推送到 GHCR。
-3. 通过 SSH 上传 Compose、Caddy 站点模板和部署脚本。
-4. 在线备份现有 SQLite 到 `~/koku/data/backups/`。
-5. 拉取并启动新镜像，等待容器健康检查；失败时恢复上一组镜像。
+3. 把镜像作为短期 Actions Artifact 传给部署任务，并通过 SSH/SCP 直传腾讯云。
+4. 上传 Compose、Caddy 站点模板和部署脚本。
+5. 在线备份现有 SQLite 到 `~/koku/data/backups/`。
+6. 加载并启动新镜像，等待容器健康检查；失败时恢复上一组镜像。
 
 也可以在 GitHub Actions 页面通过 `workflow_dispatch` 手动重新部署 `main`。
 

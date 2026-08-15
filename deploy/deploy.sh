@@ -81,9 +81,11 @@ rollback() {
 
 backup_database
 compose_with_release "$candidate_env" config --quiet
-if ! compose_with_release "$candidate_env" pull; then
-    rm -f "$candidate_env"
-    exit 1
+if [[ "${KOKU_SKIP_PULL:-false}" != "true" ]]; then
+    if ! compose_with_release "$candidate_env" pull; then
+        rm -f "$candidate_env"
+        exit 1
+    fi
 fi
 
 if ! compose_with_release "$candidate_env" up \
