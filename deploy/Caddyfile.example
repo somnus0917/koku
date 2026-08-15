@@ -1,0 +1,17 @@
+# Add this block to the existing edge Caddy configuration on tencent-cloud.
+# Replace the domain, user, and bcrypt hash before reloading Caddy.
+koku.example.com {
+	basic_auth {
+		KOKU_USER KOKU_BCRYPT_HASH
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	reverse_proxy koku-web:8080
+}

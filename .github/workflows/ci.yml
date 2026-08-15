@@ -109,6 +109,9 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     environment:
       name: production
       url: https://${{ vars.KOKU_DOMAIN }}
@@ -127,6 +130,17 @@ jobs:
           printf '%s\n' "$SERVER_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+      - name: Authenticate server to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
+            "docker login ghcr.io --username '$GHCR_USER' --password-stdin"
+
       - name: Upload deployment configuration
         env:
           SERVER_HOST: ${{ secrets.SERVER_HOST }}
@@ -135,7 +149,7 @@ jobs:
         run: |
           ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'mkdir -p ~/koku/deploy ~/koku/data/backups'
           scp -P "$SERVER_PORT" compose.production.yml "$SERVER_USER@$SERVER_HOST:koku/compose.production.yml"
-          scp -P "$SERVER_PORT" deploy/Caddyfile "$SERVER_USER@$SERVER_HOST:koku/deploy/Caddyfile"
+          scp -P "$SERVER_PORT" deploy/Caddyfile.example "$SERVER_USER@$SERVER_HOST:koku/deploy/Caddyfile.example"
           scp -P "$SERVER_PORT" deploy/deploy.sh "$SERVER_USER@$SERVER_HOST:koku/deploy/deploy.sh"
 
       - name: Deploy and verify health
@@ -148,3 +162,12 @@ jobs:
         run: |
           ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" \
             "chmod 700 ~/koku/deploy/deploy.sh && ~/koku/deploy/deploy.sh '$API_IMAGE' '$WEB_IMAGE'"
+
+      - name: Remove temporary registry credentials
+        if: always()
+        env:
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_PORT: ${{ secrets.SERVER_PORT }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          ssh -p "$SERVER_PORT" "$SERVER_USER@$SERVER_HOST" 'docker logout ghcr.io' || true

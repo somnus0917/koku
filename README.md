@@ -83,16 +83,17 @@ cargo run -- --demo
 
 ## 腾讯云自动部署
 
-生产环境使用三个独立容器：Caddy 是唯一公网入口并负责 HTTPS 与 Basic Auth，`web` 提供 React 静态文件，`api` 运行 Rust 服务并独占 SQLite 写入。`api` 和 `web` 不向宿主机公开端口。
+这台腾讯云已经运行统一的 `edge-caddy` 并占用 `80/443`，因此 Koku 只启动两个独立容器：`web` 提供 React 静态文件并在内部代理 `/api`，`api` 运行 Rust 服务并独占 SQLite 写入。两个容器都不向宿主机公开端口；`web` 加入现有的外部 `proxy` 网络，由 `edge-caddy` 统一负责域名、HTTPS 与 Basic Auth。
 
 ### 1. 初始化服务器
 
 服务器需要安装 Docker Engine 和 Docker Compose v2。当前镜像由 GitHub 的 x86-64 Runner 构建，因此腾讯云实例应使用 x86-64；ARM 实例需要在工作流中额外配置多架构构建。
 
-为部署用户创建目录：
+为部署用户创建目录，并确认服务器上已经存在共享 `proxy` 网络：
 
 ```bash
 mkdir -p ~/koku/data/backups ~/koku/deploy
+docker network inspect proxy >/dev/null
 ```
 
 将示例配置传到服务器并改名：
@@ -101,24 +102,27 @@ mkdir -p ~/koku/data/backups ~/koku/deploy
 scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 ```
 
-在服务器生成密码哈希：
+编辑 `~/koku/.env`：
+
+- `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
+- `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
+
+在服务器生成 Basic Auth 密码哈希：
 
 ```bash
 docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '换成一个强密码'
 ```
 
-编辑 `~/koku/.env`：
-
-- `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
-- `KOKU_AUTH_USER`：访问 Koku 时使用的用户名。
-- `KOKU_AUTH_HASH`：上一步生成的哈希，保留单引号，绝不填写明文密码。
-- `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`。
-
-如果 GHCR 镜像保持私有，还需在服务器使用仅有 `read:packages` 权限的 GitHub PAT 登录一次：
+参考 [Caddy 站点模板](deploy/Caddyfile.example)，把替换好域名、用户名和密码哈希的站点块加入现有的 `~/caddy/Caddyfile`。随后验证并无中断重载现有入口：
 
 ```bash
-docker login ghcr.io -u somnus0917
+docker exec edge-caddy caddy validate --config /etc/caddy/Caddyfile
+docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 ```
+
+该站点块代理到 `koku-web:8080`。认证必须放在现有 Caddy 上，才能同时保护页面和所有写入型 `/api` 接口。
+
+部署任务会使用当前运行期的 `GITHUB_TOKEN` 临时登录 GHCR，镜像拉取完成后立即退出，因此服务器不需要长期保存 GitHub PAT。
 
 腾讯云安全组只需向公网开放 TCP `80/443` 和 UDP `443`；SSH 端口应限制为自己的可信 IP。域名的 A/AAAA 记录必须先指向服务器，Caddy 才能自动申请证书。
 
@@ -144,7 +148,7 @@ docker login ghcr.io -u somnus0917
 
 1. 运行 Rust 测试、格式检查、Clippy 和前端构建。
 2. 构建 `koku-api`、`koku-web` 镜像并以 Git commit SHA 推送到 GHCR。
-3. 通过 SSH 上传 Compose、Caddy 和部署脚本。
+3. 通过 SSH 上传 Compose、Caddy 站点模板和部署脚本。
 4. 在线备份现有 SQLite 到 `~/koku/data/backups/`。
 5. 拉取并启动新镜像，等待容器健康检查；失败时恢复上一组镜像。
 

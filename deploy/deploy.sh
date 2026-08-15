@@ -26,7 +26,7 @@ if ! docker compose version >/dev/null 2>&1; then
     exit 1
 fi
 
-for required_file in "$compose_file" "$config_env" "$deploy_dir/deploy/Caddyfile"; do
+for required_file in "$compose_file" "$config_env"; do
     if [[ ! -f "$required_file" ]]; then
         echo "required deployment file is missing: $required_file" >&2
         exit 1

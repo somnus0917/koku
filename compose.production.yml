@@ -22,6 +22,8 @@ services:
       - ALL
     expose:
       - "8080"
+    networks:
+      - backend
 
   web:
     container_name: koku-web
@@ -36,31 +38,16 @@ services:
       - ALL
     expose:
       - "8080"
-
-  caddy:
-    container_name: koku-caddy
-    image: caddy:2.10-alpine
-    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
-      web:
-        condition: service_healthy
-    environment:
-      KOKU_DOMAIN: ${KOKU_DOMAIN:?KOKU_DOMAIN is required}
-      KOKU_AUTH_USER: ${KOKU_AUTH_USER:?KOKU_AUTH_USER is required}
-      KOKU_AUTH_HASH: ${KOKU_AUTH_HASH:?KOKU_AUTH_HASH is required}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    security_opt:
-      - no-new-privileges:true
+    networks:
+      - backend
+      - proxy
 
-volumes:
-  caddy_data:
-  caddy_config:
+networks:
+  backend:
+    internal: true
+  proxy:
+    name: proxy
+    external: true
