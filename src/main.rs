@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -16,7 +16,7 @@ use rusqlite::{
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 
 type Result<T> = std::result::Result<T, KokuError>;
 
@@ -1600,8 +1600,8 @@ async fn api_balance_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
-fn api_router(state: AppState) -> Router {
-    Router::new()
+fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
+    let router = Router::new()
         .route("/api/health", get(api_health))
         .route("/api/accounts", get(api_accounts).post(api_create_account))
         .route(
@@ -1620,13 +1620,51 @@ fn api_router(state: AppState) -> Router {
         .route("/api/summary/monthly", get(api_monthly_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/balance", get(api_balance_summary))
-        .layer(
+        .with_state(state);
+
+    match allowed_origin {
+        Some(origin) => router.layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
-        .with_state(state)
+                .allow_origin(origin)
+                .allow_methods([Method::GET, Method::POST, Method::DELETE])
+                .allow_headers([header::CONTENT_TYPE]),
+        ),
+        None => router,
+    }
+}
+
+fn parse_env_bool(name: &str, value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(KokuError::InvalidInput(format!(
+            "{name} must be one of true, false, 1, 0, yes, no, on, or off"
+        ))),
+    }
+}
+
+fn env_bool(name: &str, default: bool) -> Result<bool> {
+    match std::env::var(name) {
+        Ok(value) => parse_env_bool(name, &value),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(KokuError::InvalidInput(format!(
+            "could not read {name}: {error}"
+        ))),
+    }
+}
+
+fn configured_origin() -> Result<Option<HeaderValue>> {
+    match std::env::var("KOKU_ALLOWED_ORIGIN") {
+        Ok(value) if !value.trim().is_empty() => {
+            value.parse::<HeaderValue>().map(Some).map_err(|error| {
+                KokuError::InvalidInput(format!("invalid KOKU_ALLOWED_ORIGIN: {error}"))
+            })
+        }
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(KokuError::InvalidInput(format!(
+            "could not read KOKU_ALLOWED_ORIGIN: {error}"
+        ))),
+    }
 }
 
 async fn run_server() -> Result<()> {
@@ -1635,21 +1673,26 @@ async fn run_server() -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let mut service = BookkeepingService::open(&database_path)?;
-    seed_demo_data(&mut service)?;
+    if env_bool("KOKU_SEED_DEMO", true)? {
+        seed_demo_data(&mut service)?;
+    }
     service.ensure_default_categories()?;
 
+    let host = std::env::var("KOKU_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
+    let host = IpAddr::from_str(&host)
+        .map_err(|error| KokuError::InvalidInput(format!("invalid KOKU_HOST: {error}")))?;
     let port = std::env::var("KOKU_PORT")
         .unwrap_or_else(|_| "8080".to_owned())
         .parse::<u16>()
         .map_err(|error| KokuError::InvalidInput(format!("invalid KOKU_PORT: {error}")))?;
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let address = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("Koku API is listening on http://{address}");
 
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
     };
-    axum::serve(listener, api_router(state))
+    axum::serve(listener, api_router(state, configured_origin()?))
         .with_graceful_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 eprintln!("failed to listen for shutdown signal: {error}");
@@ -1678,6 +1721,19 @@ mod tests {
 
     fn test_service() -> Result<BookkeepingService> {
         BookkeepingService::in_memory()
+    }
+
+    #[test]
+    fn production_boolean_flags_are_strict_and_case_insensitive() -> Result<()> {
+        assert!(parse_env_bool("FLAG", "TRUE")?);
+        assert!(parse_env_bool("FLAG", "yes")?);
+        assert!(!parse_env_bool("FLAG", "0")?);
+        assert!(!parse_env_bool("FLAG", "Off")?);
+        assert!(matches!(
+            parse_env_bool("FLAG", "sometimes"),
+            Err(KokuError::InvalidInput(_))
+        ));
+        Ok(())
     }
 
     #[test]
