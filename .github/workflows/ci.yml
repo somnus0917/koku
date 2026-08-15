@@ -75,4 +75,5 @@ jobs:
         env:
           KOKU_API_IMAGE: koku-api:ci
           KOKU_WEB_IMAGE: koku-web:ci
+          KOKU_AUTH_USERNAME: ci-user
         run: docker compose --file compose.production.yml config --quiet
