@@ -134,3 +134,13 @@ export function localDateTimeValue(): string {
   const offset = now.getTimezoneOffset() * 60_000;
   return new Date(now.getTime() - offset).toISOString().slice(0, 16);
 }
+
+/** 简短日期时间（如 "8月15日 14:30"）。 */
+export function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
