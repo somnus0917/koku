@@ -491,14 +491,16 @@ export function TransactionRow({
                   <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
                 )
           )}
-          <button
-            className="row-action"
-            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
-            onClick={onVoid}
-            title="撤销并恢复余额"
-            aria-label="撤销交易"
-          ><Trash2 size={16} /></button>
         </div>
+      )}
+      {!compact && (
+        <button
+          className="row-action"
+          disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
+          onClick={onVoid}
+          title="撤销并恢复余额"
+          aria-label="撤销交易"
+        ><Trash2 size={16} /></button>
       )}
     </div>
   );
