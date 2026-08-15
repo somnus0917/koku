@@ -2,6 +2,7 @@
 name = "koku"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 description = "A minimal, private, SQLite-backed personal finance MVP"
 
 [dependencies]
