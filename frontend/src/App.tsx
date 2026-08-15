@@ -802,7 +802,7 @@ function AccountMiniCard({ account, hidden, index }: { account: Account; hidden:
   return (
     <article className={`account-mini tone-${index % 4}`}>
       <div><span className="account-icon"><Icon size={19} /></span><MoreHorizontal size={18} /></div>
-      <small>{account.account_type === "credit" ? "信用（负债）" : ({ cash: "零钱账户", savings: "储蓄账户", stock: "股票账户" } as Record<AccountType, string>)[account.account_type]}</small>
+      <small>{account.account_type === "credit" ? "信用" : ({ cash: "零钱账户", savings: "储蓄账户", stock: "股票账户" } as Record<AccountType, string>)[account.account_type]}</small>
       <h3>{account.name}</h3>
       <strong>{hidden ? "••••••" : formatMoney(account.balance, account.currency)}</strong>
       <span className="currency-badge">{account.currency}</span>
@@ -850,7 +850,7 @@ function AccountsPage({
         )}
       />
       <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} />
-      <AccountGroup title="信用" subtitle={`${credit.length} 个账户（负债）`} accounts={credit} />
+      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} />
     </div>
   );
 }
@@ -1883,7 +1883,7 @@ function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i
             <option value="cash">零钱</option>
             <option value="savings">储蓄</option>
             <option value="stock">股票</option>
-            <option value="credit">信用（负债）</option>
+            <option value="credit">信用</option>
           </select></label>
           <label><span>账户结算币种</span><input required maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
           <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
