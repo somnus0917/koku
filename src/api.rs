@@ -95,6 +95,14 @@ struct MonthlyQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct TransactionQuery {
+    /// 返回条数，默认 500，上限 1000（由 service 校验）。
+    limit: Option<u32>,
+    /// 跳过条数，默认 0。
+    offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct BalanceQuery {
     currency: Option<String>,
 }
@@ -233,8 +241,10 @@ async fn api_delete_category(
 
 async fn api_transactions(
     State(state): State<AppState>,
+    Query(query): Query<TransactionQuery>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
-    let transactions = lock_service(&state)?.transactions()?;
+    let transactions = lock_service(&state)?
+        .transactions(query.limit.unwrap_or(500), query.offset.unwrap_or(0))?;
     Ok(Json(ApiResponse::new(transactions)))
 }
 

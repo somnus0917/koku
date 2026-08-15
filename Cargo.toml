@@ -17,3 +17,8 @@ sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# bundled SQLite 是 C 代码，dev 模式默认 opt-level=0 会让 SQL 慢数倍；
+# 这里对依赖开 O2，让本地 `cargo run` 预览也有接近生产的性能。
+[profile.dev.package."*"]
+opt-level = 2

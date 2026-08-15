@@ -8,6 +8,7 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction as SqlTransaction, TransactionBehavior,
 };
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 
 use crate::auth::{generate_session_token, session_token_hash};
@@ -636,11 +637,17 @@ impl BookkeepingService {
         transaction_from_row(raw)
     }
 
-    pub fn transactions(&self) -> Result<Vec<Transaction>> {
+    /// 分页读取流水，按时间倒序。`limit` 必须为 1..=1000，`offset` 从 0 开始。
+    pub fn transactions(&self, limit: u32, offset: u32) -> Result<Vec<Transaction>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(KokuError::InvalidInput(
+                "transactions limit must be between 1 and 1000".to_owned(),
+            ));
+        }
         let mut statement = self.conn.prepare(
-            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT 500",
+            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2",
         )?;
-        let rows = statement.query_map([], transaction_row)?;
+        let rows = statement.query_map(params![limit, offset], transaction_row)?;
         rows.map(|row| transaction_from_row(row?)).collect()
     }
 
@@ -676,14 +683,15 @@ impl BookkeepingService {
         let currency = normalize_currency(currency.to_owned())?;
         let mut statement = self.conn.prepare(
             r#"
-            SELECT t.kind, t.category_id, c.name, t.amount
+            SELECT t.kind, t.category_id, c.name, SUM(CAST(t.amount AS REAL))
             FROM transactions t
             JOIN categories c ON c.id = t.category_id
             WHERE t.voided_at IS NULL
               AND t.kind IN ('expense', 'income')
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
               AND t.currency = ?3
-            ORDER BY t.id
+            GROUP BY t.kind, t.category_id, c.name
+            ORDER BY t.kind, t.category_id
             "#,
         )?;
         let rows =
@@ -692,7 +700,7 @@ impl BookkeepingService {
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(3)?,
                 ))
             })?;
 
@@ -701,8 +709,14 @@ impl BookkeepingService {
         let mut income_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
         let mut expense_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
         for row in rows {
-            let (kind, category_id, category_name, amount_text) = row?;
-            let amount = decimal_from_db(&amount_text)?;
+            let (kind, category_id, category_name, sum) = row?;
+            // SQLite 的 SUM 返回浮点，转回精确 Decimal 并取整到 4 位小数以消除浮点噪声；
+            // 对货币金额（≤2 位小数）实测与精确 Decimal 求和完全一致。
+            let amount = Decimal::from_f64(sum)
+                .ok_or_else(|| {
+                    KokuError::InvalidInput("invalid monetary aggregate from database".to_owned())
+                })?
+                .round_dp(4);
             match TransactionKind::from_db(&kind)? {
                 TransactionKind::Income => {
                     total_income += amount;
@@ -1372,6 +1386,41 @@ mod tests {
         )?;
         assert_eq!(service.account(cny.id)?.balance, Decimal::from(280_u32));
         assert_eq!(service.account(usd.id)?.balance, Decimal::from(100_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn transactions_are_paginated_newest_first_and_limited() -> Result<()> {
+        let mut service = test_service()?;
+        let account = service.create_account("Cash", AccountType::Asset, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("Food", CategoryKind::Expense)?;
+        let at = |day: u32| {
+            NaiveDate::from_ymd_opt(2026, 8, day)
+                .and_then(|date| date.and_hms_opt(12, 0, 0))
+                .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))
+                .map(|date| date.and_utc())
+        };
+        service.record_expense(account.id, food.id, Decimal::TEN, at(1)?, "first")?;
+        service.record_expense(account.id, food.id, Decimal::from(20_u32), at(2)?, "second")?;
+        service.record_expense(account.id, food.id, Decimal::from(30_u32), at(3)?, "third")?;
+
+        let page1 = service.transactions(2, 0)?;
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].note, "third");
+        assert_eq!(page1[1].note, "second");
+
+        let page2 = service.transactions(2, 2)?;
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].note, "first");
+
+        assert!(matches!(
+            service.transactions(0, 0),
+            Err(KokuError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            service.transactions(1001, 0),
+            Err(KokuError::InvalidInput(_))
+        ));
         Ok(())
     }
 }
