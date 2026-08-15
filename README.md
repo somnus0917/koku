@@ -230,9 +230,9 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/deposits/{id}/settle` | 结清定期：按持有天数计息并把本息转回 |
 | `GET/POST` | `/api/loans` | 查询或创建借出/借入 |
 | `POST` | `/api/loans/{id}/repay` | 还款（任意账户进出，归零自动结清） |
-| `GET` | `/api/summary/monthly` | 按年月与币种查询收支 |
-| `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流 |
-| `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（含未结应收/应付） |
+| `GET` | `/api/summary/monthly` | 按年月与币种查询收支；所有币种的流水统一按汇率折算到该币种 |
+| `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流（多币种按汇率折算） |
+| `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（所有币种账户与未结借款按汇率折算） |
 | `GET` | `/api/rates?from=&to=` | 汇率提示：1 from = rate to（Frankfurter/ECB 参考中间价，本地缓存，源不可达时回退旧缓存） |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。

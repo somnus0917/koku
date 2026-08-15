@@ -156,14 +156,19 @@ fn parse_currency_api(payload: CurrencyApiResponse, from: &str, to: &str) -> Res
     })
 }
 
-/// 缓存是否仍然新鲜：ECB 仅在交易日更新，周末/节假日沿用最近一个工作日的汇率，
-/// 因此只要缓存日期与今天相差不超过 4 天就认为可复用。
-pub fn rate_is_fresh(date: &str, today: NaiveDate) -> bool {
+/// 缓存新鲜度：rate_date 与 today 相差不超过 `max_age_days` 天。
+pub fn rate_is_recent(date: &str, today: NaiveDate, max_age_days: i64) -> bool {
     let Ok(rate_date) = NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
         return false;
     };
     let age = (today - rate_date).num_days();
-    (0..=4).contains(&age)
+    (0..=max_age_days).contains(&age)
+}
+
+/// 提示用新鲜度：ECB 仅在交易日更新，周末/节假日沿用最近一个工作日的汇率，
+/// 因此只要缓存日期与今天相差不超过 4 天就认为可复用。
+pub fn rate_is_fresh(date: &str, today: NaiveDate) -> bool {
+    rate_is_recent(date, today, 4)
 }
 
 #[cfg(test)]
@@ -216,5 +221,14 @@ mod tests {
         assert!(rate_is_fresh("2026-08-17", today));
         assert!(!rate_is_fresh("2026-08-10", today)); // 超过 4 天
         assert!(!rate_is_fresh("not-a-date", today));
+    }
+
+    #[test]
+    fn rate_recentness_honors_an_explicit_max_age() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 20).unwrap();
+        assert!(rate_is_recent("2026-09-15", today, 30));
+        assert!(rate_is_recent("2026-08-21", today, 30)); // 恰好 30 天
+        assert!(!rate_is_recent("2026-08-20", today, 30)); // 超过 30 天
+        assert!(!rate_is_recent("not-a-date", today, 30));
     }
 }

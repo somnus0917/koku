@@ -197,19 +197,30 @@ impl BookkeepingService {
         rows.map(|row| account_from_row(row?)).collect()
     }
 
+    /// 资产负债汇总：`currency` 为显示币种，所有币种的账户余额与未结借款统一折算。
     pub fn balance_summary(&self, currency: &str) -> Result<BalanceSummary> {
         let currency = normalize_currency(currency.to_owned())?;
+        let today = Utc::now().date_naive();
         let mut total_assets = Decimal::ZERO;
         let mut total_liabilities = Decimal::ZERO;
         let mut statement = self
             .conn
-            .prepare("SELECT account_type, balance FROM accounts WHERE currency = ?1")?;
-        let rows = statement.query_map([&currency], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            .prepare("SELECT account_type, currency, balance FROM accounts")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
         for row in rows {
-            let (account_type, balance) = row?;
-            let balance = decimal_from_db(&balance)?;
+            let (account_type, account_currency, balance) = row?;
+            let balance = self.convert_amount(
+                decimal_from_db(&balance)?,
+                &account_currency,
+                &currency,
+                today,
+            )?;
             let account_type = AccountType::from_db(&account_type)?;
             if account_type.is_liability() {
                 total_liabilities += balance;
@@ -217,16 +228,25 @@ impl BookkeepingService {
                 total_assets += balance;
             }
         }
-        // 未结借款纳入净资产：借出 = 应收（资产），借入 = 应付（负债）。
+        // 未结借款纳入净资产：借出 = 应收（资产），借入 = 应付（负债），同样按汇率折算。
         let mut statement = self.conn.prepare(
-            "SELECT loan_type, outstanding FROM loans WHERE currency = ?1 AND closed_at IS NULL",
+            "SELECT loan_type, currency, outstanding FROM loans WHERE closed_at IS NULL",
         )?;
-        let rows = statement.query_map([&currency], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
         for row in rows {
-            let (loan_type, outstanding) = row?;
-            let outstanding = decimal_from_db(&outstanding)?;
+            let (loan_type, loan_currency, outstanding) = row?;
+            let outstanding = self.convert_amount(
+                decimal_from_db(&outstanding)?,
+                &loan_currency,
+                &currency,
+                today,
+            )?;
             match LoanType::from_db(&loan_type)? {
                 LoanType::Lend => total_assets += outstanding,
                 LoanType::Borrow => total_liabilities += outstanding,
@@ -238,6 +258,21 @@ impl BookkeepingService {
             total_liabilities,
             net_worth: total_assets - total_liabilities,
         })
+    }
+
+    /// 资产负债涉及的所有币种（账户币种 ∪ 未结借款币种），供调用方确保折算汇率可用。
+    pub fn balance_currencies(&self) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT DISTINCT currency FROM accounts
+             UNION
+             SELECT DISTINCT currency FROM loans WHERE closed_at IS NULL",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut currencies = Vec::new();
+        for row in rows {
+            currencies.push(row?);
+        }
+        Ok(currencies)
     }
 
     pub fn is_empty(&self) -> Result<bool> {

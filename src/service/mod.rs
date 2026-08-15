@@ -743,7 +743,7 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DEFAULT_CATEGORIES;
+    use crate::domain::{RateQuote, DEFAULT_CATEGORIES};
     use chrono::{Datelike, Duration as ChronoDuration};
 
     fn test_service() -> Result<BookkeepingService> {
@@ -888,19 +888,102 @@ mod tests {
         assert_eq!(account.currency, "CNY");
         assert_eq!(account.balance, Decimal::from_str("1234.56")?);
 
-        let summary = service.monthly_summary(2026, 8, "USD")?;
-        assert_eq!(summary.total_income, Decimal::ZERO);
-        assert_eq!(summary.total_expense, Decimal::from_str("32.50")?);
+        // 新语义：汇总按显示币种折算所有币种金额。缓存 USD→CNY 汇率后，
+        // 32.50 USD 折算进 CNY 汇总 ≈ 234.56（结算金额）。
+        service.store_rate(&RateQuote {
+            from: "USD".to_owned(),
+            to: "CNY".to_owned(),
+            rate: Decimal::from_str("7.2172")?,
+            date: "2026-08-14".to_owned(),
+            source: "frankfurter".to_owned(),
+            stale: false,
+        })?;
+        let summary_usd = service.monthly_summary(2026, 8, "USD")?;
+        assert_eq!(summary_usd.total_income, Decimal::ZERO);
+        assert_eq!(summary_usd.total_expense, Decimal::from_str("32.50")?);
+        let summary_cny = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(
+            summary_cny.total_expense.round_dp(2),
+            Decimal::from_str("234.56")?
+        );
         assert_eq!(purchase.currency, "USD");
         assert_eq!(purchase.settled_amount, Decimal::from_str("234.56")?);
-        assert_eq!(
-            service.monthly_summary(2026, 8, "CNY")?.total_expense,
-            Decimal::ZERO
-        );
 
         service.void_transaction(purchase.id)?;
         let account = service.account(visa.id)?;
         assert_eq!(account.balance, Decimal::from(1000_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn monthly_summary_converts_mixed_currency_transactions_to_the_display_currency() -> Result<()>
+    {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let usd = service.create_account("美元储蓄", AccountType::Savings, "USD", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "中餐")?;
+        service.record_expense_in_currency(
+            usd.id,
+            food.id,
+            Decimal::from(10_u32),
+            "USD",
+            Decimal::from(10_u32),
+            at,
+            "美餐",
+        )?;
+        service.store_rate(&RateQuote {
+            from: "USD".to_owned(),
+            to: "CNY".to_owned(),
+            rate: Decimal::from(7_u32),
+            date: "2026-08-14".to_owned(),
+            source: "frankfurter".to_owned(),
+            stale: false,
+        })?;
+
+        // 显示 CNY：100 CNY + 10 USD×7 = 170。
+        let cny = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(cny.total_expense, Decimal::from(170_u32));
+        // 显示 USD：100 CNY ÷ 7 + 10 USD = 24.29（反向折算）。
+        let usd_summary = service.monthly_summary(2026, 8, "USD")?;
+        assert_eq!(
+            usd_summary.total_expense.round_dp(2),
+            Decimal::from_str("24.29")?
+        );
+        // 缺汇率的币种会报错而不是被静默漏算。
+        service.conn.execute("DELETE FROM exchange_rates", [])?;
+        assert!(service.monthly_summary(2026, 8, "CNY").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn balance_summary_converts_all_account_and_loan_currencies() -> Result<()> {
+        let mut service = test_service()?;
+        service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        service.create_account("美元卡", AccountType::Credit, "USD", Decimal::from(20_u32))?;
+        service.store_rate(&RateQuote {
+            from: "USD".to_owned(),
+            to: "CNY".to_owned(),
+            rate: Decimal::from(7_u32),
+            date: "2026-08-14".to_owned(),
+            source: "frankfurter".to_owned(),
+            stale: false,
+        })?;
+
+        // 显示 CNY：资产 100，负债 20 USD×7 = 140，净资产 -40。
+        let cny = service.balance_summary("CNY")?;
+        assert_eq!(cny.total_assets, Decimal::from(100_u32));
+        assert_eq!(cny.total_liabilities, Decimal::from(140_u32));
+        assert_eq!(cny.net_worth, Decimal::from(-40_i32));
+        // 显示 USD：资产 100÷7 ≈ 14.29，负债 20，净资产 -5.71。
+        let usd = service.balance_summary("USD")?;
+        assert_eq!(usd.total_assets.round_dp(2), Decimal::from_str("14.29")?);
+        assert_eq!(usd.total_liabilities, Decimal::from(20_u32));
+        assert_eq!(usd.net_worth.round_dp(2), Decimal::from_str("-5.71")?);
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 //! 页面级组件：总览、账户、交易、分析、借贷区块。
-import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -31,6 +31,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
+import { rateHint } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -65,6 +66,55 @@ export function PageTitle({ eyebrow, title, actions }: { eyebrow: string; title:
   );
 }
 
+/** 把金额从原币种折算到显示币种：同币种或缺失汇率时返回 null（调用方回退原币显示）。 */
+function convertedMoney(
+  value: string,
+  from: string,
+  display: string,
+  rates: Record<string, number> | undefined
+): { amount: string; currency: string } | null {
+  if (from === display) return null;
+  const factor = rates?.[from];
+  if (factor == null) return null;
+  return { amount: (Number(value) * factor).toFixed(2), currency: display };
+}
+
+/** 拉取一批币种到显示币种的折算汇率：currency → 1 unit = factor display。 */
+function useConversionRates(currencies: string[], display: string) {
+  const [rates, setRates] = useState<Record<string, number>>({});
+  const key = currencies.join("|");
+  useEffect(() => {
+    const needed = [...new Set(key ? key.split("|") : [])].filter((currency) => currency !== display);
+    if (needed.length === 0) {
+      setRates({});
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      needed.map(async (currency) => {
+        try {
+          const quote = await rateHint(currency, display);
+          return [currency, Number(quote.rate)] as const;
+        } catch {
+          return null;
+        }
+      })
+    ).then((pairs) => {
+      if (!cancelled) {
+        setRates(
+          Object.fromEntries(
+            pairs.filter((pair): pair is readonly [string, number] => pair != null)
+          )
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key, display]);
+  return rates;
+}
+
 export function Dashboard({
   data,
   onAdd,
@@ -77,6 +127,17 @@ export function Dashboard({
   const [hidden, setHidden] = useState(false);
   const activeTransactions = data.transactions.filter((item) => !item.voided_at);
   const recent = activeTransactions.slice(0, 5);
+  const display = data.monthly.currency;
+  const rateCurrencies = useMemo(
+    () => [
+      ...new Set([
+        ...data.accounts.map((account) => account.currency),
+        ...data.transactions.map((item) => item.currency)
+      ])
+    ],
+    [data.accounts, data.transactions]
+  );
+  const rates = useConversionRates(rateCurrencies, display);
   return (
     <div className="page page-enter">
       <PageTitle eyebrow="WELCOME BACK" title="今天，也把生活记清楚。" />
@@ -98,7 +159,7 @@ export function Dashboard({
             </span>
             <span>{data.accounts.length} 个账户已连接</span>
           </div>
-          <TrendChart transactions={activeTransactions} currency={data.monthly.currency} />
+          <TrendChart transactions={activeTransactions} currency={display} rates={rates} />
         </article>
 
         <article className="month-card">
@@ -129,7 +190,7 @@ export function Dashboard({
         </div>
         <div className="account-strip">
           {data.accounts.map((account, index) => (
-            <AccountMiniCard key={account.id} account={account} hidden={hidden} index={index} />
+            <AccountMiniCard key={account.id} account={account} hidden={hidden} index={index} display={display} rates={rates} />
           ))}
         </div>
       </section>
@@ -140,7 +201,13 @@ export function Dashboard({
             <div><span>ACTIVITY</span><h2>最近交易</h2></div>
             <button className="text-button" onClick={onShowTransactions}>查看全部</button>
           </div>
-          <TransactionList transactions={recent} accounts={data.accounts} categories={data.categories} />
+          <TransactionList
+            transactions={recent}
+            accounts={data.accounts}
+            categories={data.categories}
+            display={display}
+            rates={rates}
+          />
         </article>
         <article className="panel categories-panel">
           <div className="section-heading compact-heading">
@@ -153,14 +220,27 @@ export function Dashboard({
   );
 }
 
-export function TrendChart({ transactions, currency }: { transactions: Transaction[]; currency: string }) {
+export function TrendChart({
+  transactions,
+  currency,
+  rates = {}
+}: {
+  transactions: Transaction[];
+  currency: string;
+  /** 折算汇率表：交易币种 → 1 unit = factor display；缺汇率时跳过该币种。 */
+  rates?: Record<string, number>;
+}) {
   const points = useMemo(() => {
     const values = Array.from({ length: 12 }, (_, index) => ({ x: index, value: 0 }));
     for (const item of transactions) {
-      if (item.kind === "transfer" || item.kind === "loan" || item.kind === "adjustment" || item.currency !== currency) continue;
+      if (item.kind === "transfer" || item.kind === "loan" || item.kind === "adjustment") continue;
+      const factor = item.currency === currency ? 1 : rates[item.currency];
+      if (factor == null) continue; // 无折算汇率时跳过该币种
       const day = new Date(item.occurred_at).getDate();
       const bucket = Math.min(11, Math.floor(((day - 1) / 31) * 12));
-      const signed = item.kind === "income" ? Number(item.amount) : -Number(item.amount);
+      const signed = item.kind === "income"
+        ? Number(item.amount) * factor
+        : -Number(item.amount) * factor;
       values[bucket].value += signed;
     }
     let running = 0;
@@ -168,7 +248,7 @@ export function TrendChart({ transactions, currency }: { transactions: Transacti
       running += item.value;
       return running;
     });
-  }, [currency, transactions]);
+  }, [currency, transactions, rates]);
   const min = Math.min(...points, 0);
   const max = Math.max(...points, 1);
   const range = Math.max(1, max - min);
@@ -197,15 +277,33 @@ export function TrendChart({ transactions, currency }: { transactions: Transacti
   );
 }
 
-export function AccountMiniCard({ account, hidden, index }: { account: Account; hidden: boolean; index: number }) {
+export function AccountMiniCard({
+  account,
+  hidden,
+  index,
+  display,
+  rates
+}: {
+  account: Account;
+  hidden: boolean;
+  index: number;
+  display: string;
+  rates: Record<string, number>;
+}) {
   const Icon = accountIcon(account);
+  const shown = convertedMoney(account.balance, account.currency, display, rates)
+    ?? { amount: account.balance, currency: account.currency };
+  const isConverted = shown.currency !== account.currency;
   return (
-    <article className={`account-mini tone-${index % 4}`}>
+    <article
+      className={`account-mini tone-${index % 4}`}
+      title={isConverted ? `原币 ${formatMoney(account.balance, account.currency)}` : undefined}
+    >
       <div><span className="account-icon"><Icon size={19} /></span><MoreHorizontal size={18} /></div>
       <small>{account.account_type === "credit" ? "信用" : ({ cash: "零钱账户", savings: "储蓄账户", stock: "股票账户" } as Record<AccountType, string>)[account.account_type]}</small>
       <h3>{account.name}</h3>
-      <strong>{hidden ? "••••••" : formatMoney(account.balance, account.currency)}</strong>
-      <span className="currency-badge">{account.currency}</span>
+      <strong>{hidden ? "••••••" : formatMoney(shown.amount, shown.currency)}</strong>
+      <span className="currency-badge">{shown.currency}</span>
     </article>
   );
 }
@@ -232,6 +330,17 @@ export function AccountsPage({
   const savings = group("savings");
   const stock = group("stock");
   const credit = group("credit");
+  const display = data.monthly.currency;
+  const rateCurrencies = useMemo(
+    () => [
+      ...new Set([
+        ...data.accounts.map((account) => account.currency),
+        ...data.loans.map((loan) => loan.currency)
+      ])
+    ],
+    [data.accounts, data.loans]
+  );
+  const rates = useConversionRates(rateCurrencies, display);
   return (
     <div className="page page-enter">
       <PageTitle
@@ -244,12 +353,14 @@ export function AccountsPage({
         <SummaryCard label="总负债" value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
         <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
-      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} />
+      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} display={display} rates={rates} />
       <AccountGroup
         title="储蓄"
         subtitle={`${savings.length} 个账户`}
         accounts={savings}
         onEdit={onEdit}
+        display={display}
+        rates={rates}
         headingAction={savings.length > 0 ? <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> 转定期</button> : undefined}
         renderAction={(account) => (
           account.interest_rate
@@ -257,11 +368,13 @@ export function AccountsPage({
             : <button className="row-action" title="转入定期" aria-label="转入定期" onClick={() => onDeposit(account)}><PiggyBank size={16} /></button>
         )}
       />
-      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} />
-      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} />
+      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} display={display} rates={rates} />
+      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} display={display} rates={rates} />
       <LoansSection
         loans={data.loans}
         accounts={data.accounts}
+        display={display}
+        rates={rates}
         onCreateLoan={onCreateLoan}
         onRepay={onRepay}
       />
@@ -274,7 +387,6 @@ export function SummaryCard({ label, value, currency, tone }: { label: string; v
     <article className={`summary-card ${tone}`}>
       <span>{label}</span>
       <strong>{formatMoney(value, currency)}</strong>
-      <small>以 {currency} 计价</small>
     </article>
   );
 }
@@ -285,7 +397,9 @@ export function AccountGroup({
   accounts,
   onEdit,
   renderAction,
-  headingAction
+  headingAction,
+  display,
+  rates
 }: {
   title: string;
   subtitle: string;
@@ -293,6 +407,10 @@ export function AccountGroup({
   onEdit?: (account: Account) => void;
   renderAction?: (account: Account) => React.ReactNode;
   headingAction?: React.ReactNode;
+  /** 显示币种（右上角切换）；传入后余额/额度按汇率折算显示，并标注原币 */
+  display: string;
+  /** 折算汇率表：账户币种 → 1 unit = factor display */
+  rates: Record<string, number>;
 }) {
   return (
     <section className="section-block account-group">
@@ -303,21 +421,27 @@ export function AccountGroup({
       <div className="account-grid">
         {accounts.map((account, index) => {
           const Icon = accountIcon(account);
+          const shown = convertedMoney(account.balance, account.currency, display, rates)
+            ?? { amount: account.balance, currency: account.currency };
+          const isConverted = shown.currency !== account.currency;
+          const limitShown = account.credit_limit
+            ? convertedMoney(account.credit_limit, account.currency, display, rates)
+            : null;
           return (
             <article className="account-detail-card" key={account.id}>
               <span className={`large-account-icon tone-${index % 4}`}><Icon size={23} /></span>
               <div className="account-detail-copy">
                 <h3>{account.name}</h3>
                 <span>
-                  {account.currency} 结算 · 单一余额
+                  {isConverted ? `原币 ${formatMoney(account.balance, account.currency)} · ` : ""}
                   {account.credit_limit
-                    ? ` · 额度 ${formatMoney(account.credit_limit, account.currency)} · 已用 ${formatMoney(account.balance, account.currency)}`
+                    ? `额度 ${formatMoney(limitShown?.amount ?? account.credit_limit, limitShown?.currency ?? account.currency)}`
                     : account.interest_rate && account.maturity_at
-                      ? ` · 定期 ${account.interest_rate}% · ${formatDate(account.maturity_at)}到期`
+                      ? `${formatDate(account.maturity_at)}到期`
                       : ""}
                 </span>
               </div>
-              <strong>{formatMoney(account.balance, account.currency)}</strong>
+              <strong>{formatMoney(shown.amount, shown.currency)}</strong>
               {renderAction ? renderAction(account) : null}
               <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
             </article>
@@ -348,6 +472,12 @@ export function TransactionsPage({
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
   const accountsById = useMemo(() => new Map(data.accounts.map((item) => [item.id, item])), [data.accounts]);
   const categoriesById = useMemo(() => new Map(data.categories.map((item) => [item.id, item])), [data.categories]);
+  const display = data.monthly.currency;
+  const txCurrencies = useMemo(
+    () => [...new Set(data.transactions.map((item) => item.currency))],
+    [data.transactions]
+  );
+  const rates = useConversionRates(txCurrencies, display);
   const filtered = data.transactions.filter((item) => {
     const category = item.category_id ? categoriesById.get(item.category_id)?.name ?? "" : "转账";
     const account = accountsById.get(item.account_id)?.name ?? "";
@@ -380,6 +510,8 @@ export function TransactionsPage({
             account={accountsById.get(transaction.account_id)}
             target={transaction.to_account_id ? accountsById.get(transaction.to_account_id) : undefined}
             category={transaction.category_id ? categoriesById.get(transaction.category_id) : undefined}
+            display={display}
+            rates={rates}
             onVoid={() => onVoid(transaction)}
             onMarkReimbursable={() => onMarkReimbursable(transaction)}
             onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
@@ -392,7 +524,21 @@ export function TransactionsPage({
   );
 }
 
-export function TransactionList({ transactions, accounts, categories }: { transactions: Transaction[]; accounts: Account[]; categories: Category[] }) {
+export function TransactionList({
+  transactions,
+  accounts,
+  categories,
+  display,
+  rates
+}: {
+  transactions: Transaction[];
+  accounts: Account[];
+  categories: Category[];
+  /** 显示币种（右上角切换）；传入后金额按汇率折算显示 */
+  display?: string;
+  /** 折算汇率表：交易币种 → 1 unit = factor display */
+  rates?: Record<string, number>;
+}) {
   const accountMap = new Map(accounts.map((item) => [item.id, item]));
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
   return (
@@ -405,6 +551,8 @@ export function TransactionList({ transactions, accounts, categories }: { transa
           account={accountMap.get(transaction.account_id)}
           target={transaction.to_account_id ? accountMap.get(transaction.to_account_id) : undefined}
           category={transaction.category_id ? categoryMap.get(transaction.category_id) : undefined}
+          display={display}
+          rates={rates}
         />
       ))}
       {transactions.length === 0 && <EmptyState title="还没有交易" detail="点击“记一笔”开始。" />}
@@ -418,6 +566,8 @@ export function TransactionRow({
   target,
   category,
   compact = false,
+  display,
+  rates,
   onVoid,
   onMarkReimbursable,
   onUnmarkReimbursable,
@@ -428,6 +578,10 @@ export function TransactionRow({
   target?: Account;
   category?: Category;
   compact?: boolean;
+  /** 显示币种（右上角切换）；传入后金额按汇率折算显示，原币金额保留为辅助行 */
+  display?: string;
+  /** 折算汇率表：交易币种 → 1 unit = factor display；缺汇率的币种回退原币显示 */
+  rates?: Record<string, number>;
   onVoid?: () => void;
   onMarkReimbursable?: () => void;
   onUnmarkReimbursable?: () => void;
@@ -448,6 +602,25 @@ export function TransactionRow({
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
   const hasReimburseActions = transaction.kind === "expense" && !transaction.voided_at && !transaction.reimbursed_at;
+
+  // 折算显示：display 币种与交易币种不同且有汇率时，主金额换算为显示币种，
+  // 并用一行「原币」保留真实入账金额；无汇率时回退原币显示。
+  const factor = display && transaction.currency !== display ? rates?.[transaction.currency] : undefined;
+  const converted = factor != null;
+  const mainAmount = converted ? (Number(transaction.amount) * factor!).toFixed(2) : transaction.amount;
+  const mainCurrency = converted ? display! : transaction.currency;
+  const targetFactor =
+    display && transaction.target_currency && transaction.target_currency !== display
+      ? rates?.[transaction.target_currency]
+      : undefined;
+  const targetConverted = targetFactor != null && transaction.target_amount != null;
+  const targetAmount = targetConverted
+    ? (Number(transaction.target_amount) * targetFactor!).toFixed(2)
+    : transaction.target_amount;
+  const targetCurrency = targetConverted ? display! : transaction.target_currency;
+  const reimbursedShown = converted
+    ? formatMoney((Number(transaction.reimbursed_amount) * factor!).toFixed(2), display!)
+    : formatMoney(transaction.reimbursed_amount, transaction.currency);
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
@@ -470,15 +643,16 @@ export function TransactionRow({
       {!compact && <span className="table-account">{account?.name ?? "未知账户"}{target ? ` → ${target.name}` : ""}</span>}
       {!compact && <span className="table-date">{formatDate(transaction.occurred_at)}</span>}
       <div className={`transaction-amount ${meta.className}`}>
-        <strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong>
-        {transaction.kind === "transfer" && transaction.target_amount && transaction.target_currency && (
-          <span>到账 {formatMoney(transaction.target_amount, transaction.target_currency)}</span>
+        <strong>{prefix}{formatMoney(mainAmount, mainCurrency)}</strong>
+        {converted && <span>原币 {formatMoney(transaction.amount, transaction.currency)}</span>}
+        {transaction.kind === "transfer" && targetAmount && targetCurrency && (
+          <span>到账 {formatMoney(targetAmount, targetCurrency)}</span>
         )}
-        {transaction.kind !== "transfer" && transaction.kind !== "loan" && transaction.kind !== "adjustment" && account && transaction.currency !== account.currency && (
+        {!converted && transaction.kind !== "transfer" && transaction.kind !== "loan" && transaction.kind !== "adjustment" && account && transaction.currency !== account.currency && (
           <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
         )}
         {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && !transaction.reimbursed_at && (
-          <span>已报销 {formatMoney(transaction.reimbursed_amount, transaction.currency)}</span>
+          <span>已报销 {reimbursedShown}</span>
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
@@ -495,8 +669,8 @@ export function TransactionRow({
           {transaction.reimbursed_at && (
             <span
               className="reimbursed-indicator"
-              title={`已报销 ${formatMoney(transaction.reimbursed_amount, transaction.currency)}`}
-              aria-label={`已报销 ${formatMoney(transaction.reimbursed_amount, transaction.currency)}`}
+              title={`已报销 ${reimbursedShown}`}
+              aria-label={`已报销 ${reimbursedShown}`}
             ><CircleCheck size={16} /></span>
           )}
           <button
@@ -774,9 +948,6 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
           currency={summary.currency}
         />
       </div>
-      <p className="sankey-caption">
-        <ShieldCheck size={14} /> 转账已排除；带宽仅由当前币种下已确认的收入和支出决定。
-      </p>
     </details>
   );
 }
@@ -817,24 +988,31 @@ export function CategoryBars({ summary, detailed = false }: { summary: MonthlySu
 export function LoansSection({
   loans,
   accounts,
+  display,
+  rates,
   onCreateLoan,
   onRepay
 }: {
   loans: Loan[];
   accounts: Account[];
+  /** 显示币种（右上角切换）；传入后本金/未结按汇率折算显示 */
+  display: string;
+  /** 折算汇率表：借款币种 → 1 unit = factor display */
+  rates: Record<string, number>;
   onCreateLoan: () => void;
   onRepay: (loan: Loan) => void;
 }) {
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const open = loans.filter((loan) => !loan.closed_at);
   const closed = loans.filter((loan) => loan.closed_at);
+  const shown = (value: string, from: string) =>
+    convertedMoney(value, from, display, rates) ?? { amount: value, currency: from };
   const lendOutstanding = open
     .filter((loan) => loan.loan_type === "lend")
-    .reduce((sum, loan) => sum + Number(loan.outstanding), 0);
+    .reduce((sum, loan) => sum + Number(shown(loan.outstanding, loan.currency).amount), 0);
   const borrowOutstanding = open
     .filter((loan) => loan.loan_type === "borrow")
-    .reduce((sum, loan) => sum + Number(loan.outstanding), 0);
-  const currency = open[0]?.currency ?? "CNY";
+    .reduce((sum, loan) => sum + Number(shown(loan.outstanding, loan.currency).amount), 0);
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
@@ -842,30 +1020,38 @@ export function LoansSection({
         <button className="text-button" onClick={onCreateLoan}><Plus size={16} /> 记一笔借款</button>
       </div>
       <div className="balance-summary-row">
-        <SummaryCard label="借出应收" value={lendOutstanding.toFixed(2)} currency={currency} tone="green" />
-        <SummaryCard label="借入应付" value={borrowOutstanding.toFixed(2)} currency={currency} tone="orange" />
+        <SummaryCard label="借出应收" value={lendOutstanding.toFixed(2)} currency={display} tone="green" />
+        <SummaryCard label="借入应付" value={borrowOutstanding.toFixed(2)} currency={display} tone="orange" />
       </div>
       <div className="account-grid">
-        {open.map((loan) => (
-          <article className="account-detail-card" key={loan.id}>
-            <span className={`large-account-icon tone-${loan.id % 4}`}><Handshake size={23} /></span>
-            <div className="account-detail-copy">
-              <h3>
-                {loan.counterparty}
-                <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
-                  {loan.loan_type === "lend" ? "借出" : "借入"}
-                </small>
-              </h3>
-              <span>
-                {loan.currency} · 本金 {formatMoney(loan.principal, loan.currency)} ·{" "}
-                {accountMap.get(loan.account_id)?.name ?? "未知账户"}
-                {loan.note ? ` · ${loan.note}` : ""}
-              </span>
-            </div>
-            <strong>{formatMoney(loan.outstanding, loan.currency)}</strong>
-            <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
-          </article>
-        ))}
+        {open.map((loan) => {
+          const outstandingShown = shown(loan.outstanding, loan.currency);
+          const principalShown = shown(loan.principal, loan.currency);
+          const isConverted = outstandingShown.currency !== loan.currency;
+          return (
+            <article className="account-detail-card" key={loan.id}>
+              <span className={`large-account-icon tone-${loan.id % 4}`}><Handshake size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>
+                  {loan.counterparty}
+                  <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
+                    {loan.loan_type === "lend" ? "借出" : "借入"}
+                  </small>
+                </h3>
+                <span>
+                  {loan.currency}
+                  {isConverted ? `（原币 ${formatMoney(loan.outstanding, loan.currency)}）` : ""} · 本金{" "}
+                  {formatMoney(principalShown.amount, principalShown.currency)}
+                  {isConverted ? `（原币 ${formatMoney(loan.principal, loan.currency)}）` : ""} ·{" "}
+                  {accountMap.get(loan.account_id)?.name ?? "未知账户"}
+                  {loan.note ? ` · ${loan.note}` : ""}
+                </span>
+              </div>
+              <strong>{formatMoney(outstandingShown.amount, outstandingShown.currency)}</strong>
+              <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
+            </article>
+          );
+        })}
         {open.length === 0 && <EmptyState title="没有进行中的借款" detail="点击“记一笔借款”借出或借入。" />}
       </div>
       {closed.length > 0 && (

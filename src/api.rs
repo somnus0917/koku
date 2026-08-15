@@ -570,11 +570,12 @@ async fn api_monthly_summary(
     Query(query): Query<MonthlyQuery>,
 ) -> Result<Json<ApiResponse<MonthlySummary>>> {
     let now = Utc::now();
-    let summary = lock_service(&state)?.monthly_summary(
-        query.year.unwrap_or_else(|| now.year()),
-        query.month.unwrap_or_else(|| now.month()),
-        query.currency.as_deref().unwrap_or("CNY"),
-    )?;
+    let year = query.year.unwrap_or_else(|| now.year());
+    let month = query.month.unwrap_or_else(|| now.month());
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_service(&state)?.transaction_currencies(year, month)?;
+    ensure_summary_rates(&state, &display, currencies).await?;
+    let summary = lock_service(&state)?.monthly_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -583,11 +584,12 @@ async fn api_cash_flow_summary(
     Query(query): Query<MonthlyQuery>,
 ) -> Result<Json<ApiResponse<CashFlowSummary>>> {
     let now = Utc::now();
-    let summary = lock_service(&state)?.cash_flow_summary(
-        query.year.unwrap_or_else(|| now.year()),
-        query.month.unwrap_or_else(|| now.month()),
-        query.currency.as_deref().unwrap_or("CNY"),
-    )?;
+    let year = query.year.unwrap_or_else(|| now.year());
+    let month = query.month.unwrap_or_else(|| now.month());
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_service(&state)?.transaction_currencies(year, month)?;
+    ensure_summary_rates(&state, &display, currencies).await?;
+    let summary = lock_service(&state)?.cash_flow_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -595,9 +597,50 @@ async fn api_balance_summary(
     State(state): State<AppState>,
     Query(query): Query<BalanceQuery>,
 ) -> Result<Json<ApiResponse<BalanceSummary>>> {
-    let summary =
-        lock_service(&state)?.balance_summary(query.currency.as_deref().unwrap_or("CNY"))?;
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_service(&state)?.balance_currencies()?;
+    ensure_summary_rates(&state, &display, currencies).await?;
+    let summary = lock_service(&state)?.balance_summary(&display)?;
     Ok(Json(ApiResponse::new(summary)))
+}
+
+/// 确保「账本中出现的各币种 → 显示币种」的折算汇率都可用：缓存缺失或超龄的
+/// 现场拉取并缓存；拉取失败时报错（前端会提示具体缺失的币种对，可重试）。
+async fn ensure_summary_rates(
+    state: &AppState,
+    display: &str,
+    currencies: Vec<String>,
+) -> Result<()> {
+    let today = Utc::now().date_naive();
+    let missing: Vec<(String, String)> = {
+        let service = lock_service(state)?;
+        let mut missing = Vec::new();
+        for currency in currencies {
+            if currency.eq_ignore_ascii_case(display) {
+                continue;
+            }
+            if service
+                .conversion_rate(&currency, display, today)?
+                .is_none()
+            {
+                missing.push((currency, display.to_owned()));
+            }
+        }
+        missing
+    };
+    for (from, to) in missing {
+        match state.rates.fetch(&from, &to).await {
+            Ok(quote) => {
+                lock_service(state)?.store_rate(&quote)?;
+            }
+            Err(error) => {
+                return Err(KokuError::InvalidInput(format!(
+                    "exchange rate unavailable for {from}->{to}: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 汇率提示：同币种直接返回 1；跨币种优先用当天/近几天的本地缓存，

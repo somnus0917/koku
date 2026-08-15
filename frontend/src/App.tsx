@@ -383,7 +383,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           </div>
           <div className="topbar-actions">
             <label className="currency-select">
-              <select aria-label="显示币种" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+              <select aria-label="显示币种（按当前汇率折算所有金额）" value={currency} onChange={(event) => setCurrency(event.target.value)}>
                 {currencies.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
