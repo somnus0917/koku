@@ -1,0 +1,66 @@
+name: koku
+
+services:
+  api:
+    container_name: koku-api
+    image: ${KOKU_API_IMAGE:?KOKU_API_IMAGE is required}
+    user: ${KOKU_RUNTIME_UID:-1000}:${KOKU_RUNTIME_GID:-1000}
+    restart: unless-stopped
+    environment:
+      KOKU_HOST: 0.0.0.0
+      KOKU_PORT: 8080
+      KOKU_DB_PATH: /app/data/koku.db
+      KOKU_SEED_DEMO: "false"
+    volumes:
+      - ${KOKU_DATA_DIR:-./data}:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "8080"
+
+  web:
+    container_name: koku-web
+    image: ${KOKU_WEB_IMAGE:?KOKU_WEB_IMAGE is required}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "8080"
+
+  caddy:
+    container_name: koku-caddy
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    environment:
+      KOKU_DOMAIN: ${KOKU_DOMAIN:?KOKU_DOMAIN is required}
+      KOKU_AUTH_USER: ${KOKU_AUTH_USER:?KOKU_AUTH_USER is required}
+      KOKU_AUTH_HASH: ${KOKU_AUTH_HASH:?KOKU_AUTH_HASH is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  caddy_data:
+  caddy_config:

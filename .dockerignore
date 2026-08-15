@@ -1,0 +1,12 @@
+.git
+.jj
+.agents
+.codex
+.github
+target
+data
+frontend
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

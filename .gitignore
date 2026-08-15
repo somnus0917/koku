@@ -7,3 +7,6 @@
 *.db-shm
 *.db-wal
 .DS_Store
+/.env
+/.release.env
+/.release.next.env
