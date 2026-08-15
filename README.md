@@ -24,7 +24,14 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 ```text
 koku/
 ├── Cargo.toml          # Rust API 与领域核心
-├── src/main.rs         # SQLite、Service、REST API、CLI Demo 与测试
+├── src/main.rs         # 进程入口与服务器启动
+├── src/domain.rs       # 领域类型：账户/分类/交易枚举与 DTO
+├── src/service.rs      # SQLite 持久化、记账业务、软撤销与迁移
+├── src/api.rs          # REST API 处理器、鉴权中间件与路由
+├── src/auth.rs         # 登录配置与会话 Cookie/令牌工具
+├── src/config.rs       # 环境变量解析
+├── src/demo.rs         # 控制台演示与演示账本种子
+├── src/error.rs        # 统一错误类型与 HTTP 映射
 ├── data/koku.db        # 首次运行自动创建，不纳入版本控制
 └── frontend/
     ├── src/App.tsx     # 页面、业务交互和组件
