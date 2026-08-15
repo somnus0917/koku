@@ -102,6 +102,26 @@ export function createAccount(input: {
   });
 }
 
+export function updateAccount(
+  id: number,
+  input: { name?: string; account_type?: AccountType; currency?: string }
+): Promise<Account> {
+  return request(`/api/accounts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
+export function adjustBalance(
+  id: number,
+  input: { amount: string; note?: string }
+): Promise<Transaction> {
+  return request(`/api/accounts/${id}/adjust-balance`, {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export function createCategory(input: {
   name: string;
   kind: CategoryKind;

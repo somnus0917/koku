@@ -1,6 +1,6 @@
 export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
-export type TransactionKind = "expense" | "income" | "transfer" | "loan";
+export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment";
 export type LoanType = "lend" | "borrow";
 
 export interface Account {

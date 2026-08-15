@@ -69,6 +69,7 @@ import {
 } from "react";
 import {
   ApiError,
+  adjustBalance,
   createAccount,
   createCategory,
   createDeposit,
@@ -84,6 +85,7 @@ import {
   reimburse,
   repayLoan,
   settleDeposit,
+  updateAccount,
   voidTransaction
 } from "./api";
 import type {
@@ -102,7 +104,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "loans" | "insights";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -315,6 +317,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [depositFrom, setDepositFrom] = useState<Account | null>(null);
   const [settleTarget, setSettleTarget] = useState<Account | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
@@ -381,6 +384,10 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           <AccountsPage
             data={data}
             onAddAccount={() => setModal("account")}
+            onEdit={(account) => {
+              setEditAccount(account);
+              setModal("edit-account");
+            }}
             onDeposit={(account) => {
               setDepositFrom(account);
               setModal("deposit");
@@ -566,6 +573,24 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           currencies={currencies}
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createAccount(input), "账户已创建")}
+        />
+      )}
+      {modal === "edit-account" && data && editAccount && (
+        <EditAccountModal
+          account={editAccount}
+          currencies={currencies}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              async () => {
+                await updateAccount(editAccount.id, input.details);
+                if (input.adjustment !== undefined) {
+                  await adjustBalance(editAccount.id, { amount: input.adjustment, note: "余额调整" });
+                }
+              },
+              "账户已更新"
+            )
+          }
         />
       )}
       {modal === "category" && (
@@ -758,7 +783,7 @@ function TrendChart({ transactions, currency }: { transactions: Transaction[]; c
   const points = useMemo(() => {
     const values = Array.from({ length: 12 }, (_, index) => ({ x: index, value: 0 }));
     for (const item of transactions) {
-      if (item.kind === "transfer" || item.currency !== currency) continue;
+      if (item.kind === "transfer" || item.kind === "loan" || item.kind === "adjustment" || item.currency !== currency) continue;
       const day = new Date(item.occurred_at).getDate();
       const bucket = Math.min(11, Math.floor(((day - 1) / 31) * 12));
       const signed = item.kind === "income" ? Number(item.amount) : -Number(item.amount);
@@ -814,11 +839,13 @@ function AccountMiniCard({ account, hidden, index }: { account: Account; hidden:
 function AccountsPage({
   data,
   onAddAccount,
+  onEdit,
   onDeposit,
   onSettle
 }: {
   data: AppData;
   onAddAccount: () => void;
+  onEdit: (account: Account) => void;
   onDeposit: (account: Account) => void;
   onSettle: (account: Account) => void;
 }) {
@@ -839,19 +866,21 @@ function AccountsPage({
         <SummaryCard label="总负债" value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
         <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
-      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} />
+      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} />
       <AccountGroup
         title="储蓄"
         subtitle={`${savings.length} 个账户`}
         accounts={savings}
+        onEdit={onEdit}
+        headingAction={savings.length > 0 ? <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> 转定期</button> : undefined}
         renderAction={(account) => (
           account.interest_rate
             ? <button className="row-action" title="结清定期并转回" aria-label="结清定期" onClick={() => onSettle(account)}><RotateCcw size={16} /></button>
             : <button className="row-action" title="转入定期" aria-label="转入定期" onClick={() => onDeposit(account)}><PiggyBank size={16} /></button>
         )}
       />
-      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} />
-      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} />
+      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} />
+      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} />
     </div>
   );
 }
@@ -870,16 +899,23 @@ function AccountGroup({
   title,
   subtitle,
   accounts,
-  renderAction
+  onEdit,
+  renderAction,
+  headingAction
 }: {
   title: string;
   subtitle: string;
   accounts: Account[];
+  onEdit?: (account: Account) => void;
   renderAction?: (account: Account) => React.ReactNode;
+  headingAction?: React.ReactNode;
 }) {
   return (
     <section className="section-block account-group">
-      <div className="section-heading compact-heading"><div><span>{subtitle}</span><h2>{title}</h2></div></div>
+      <div className="section-heading compact-heading">
+        <div><span>{subtitle}</span><h2>{title}</h2></div>
+        {headingAction}
+      </div>
       <div className="account-grid">
         {accounts.map((account, index) => {
           const Icon = accountIcon(account);
@@ -896,9 +932,8 @@ function AccountGroup({
                 </span>
               </div>
               <strong>{formatMoney(account.balance, account.currency)}</strong>
-              {renderAction
-                ? renderAction(account)
-                : <button className="bare-button" aria-label={`${account.name}更多操作`}><MoreHorizontal size={19} /></button>}
+              {renderAction ? renderAction(account) : null}
+              <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
             </article>
           );
         })}
@@ -1011,15 +1046,20 @@ function TransactionRow({
     expense: { icon: ArrowUpRight, label: category?.name ?? "支出", className: "expense" },
     income: { icon: ArrowDownLeft, label: category?.name ?? "收入", className: "income" },
     transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" },
-    loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" }
+    loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" },
+    adjustment: { icon: RotateCcw, label: "余额调整", className: "transfer" }
   }[transaction.kind];
   const Icon = meta.icon;
-  const prefix = transaction.kind === "expense" ? "−" : transaction.kind === "income" ? "+" : "";
+  const prefix =
+    transaction.kind === "expense" ? "−"
+    : transaction.kind === "income" ? "+"
+    : transaction.kind === "adjustment" ? (Number(transaction.amount) >= 0 ? "+" : "−")
+    : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
-        {transaction.kind === "transfer" || transaction.kind === "loan" ? (
+        {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
           <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
@@ -1041,7 +1081,7 @@ function TransactionRow({
         {transaction.kind === "transfer" && transaction.target_amount && transaction.target_currency && (
           <span>到账 {formatMoney(transaction.target_amount, transaction.target_currency)}</span>
         )}
-        {transaction.kind !== "transfer" && transaction.kind !== "loan" && account && transaction.currency !== account.currency && (
+        {transaction.kind !== "transfer" && transaction.kind !== "loan" && transaction.kind !== "adjustment" && account && transaction.currency !== account.currency && (
           <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
         )}
         {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && (
@@ -1761,7 +1801,7 @@ function TransactionModal({
   onClose: () => void;
   onSubmit: (input: TransactionSubmit) => Promise<void>;
 }) {
-  const [kind, setKind] = useState<Exclude<TransactionKind, "loan">>("expense");
+  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment">>("expense");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
   const [sourceCurrency, setSourceCurrency] = useState(accounts[0]?.currency ?? "CNY");
@@ -1782,7 +1822,7 @@ function TransactionModal({
   const crossCurrency = kind === "transfer" && source?.currency !== target?.currency;
   const sameTransferEndpoint = kind === "transfer" && accountId === targetId;
 
-  const changeKind = (nextKind: Exclude<TransactionKind, "loan">) => {
+  const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment">) => {
     setKind(nextKind);
     if (nextKind !== "transfer") {
       setCategoryId(categories.find((item) => item.kind === nextKind)?.id ?? 0);
@@ -1858,6 +1898,72 @@ function TransactionModal({
         {sameTransferEndpoint && <div className="form-error">转出与转入账户不能相同。</div>}
         {formError && <div className="form-error">{formError}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (foreignTransaction && !settledAmount) || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? "保存中" : "确认记录"}</button></div>
+      </form>
+    </ModalShell>
+  );
+}
+
+function EditAccountModal({
+  account,
+  currencies,
+  onClose,
+  onSubmit
+}: {
+  account: Account;
+  currencies: string[];
+  onClose: () => void;
+  onSubmit: (input: { details: { name?: string; account_type?: AccountType; currency?: string }; adjustment?: string }) => Promise<void>;
+}) {
+  const [name, setName] = useState(account.name);
+  const [type, setType] = useState<AccountType>(account.account_type);
+  const [currency, setCurrency] = useState(account.currency);
+  const [adjustment, setAdjustment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await onSubmit({
+        details: {
+          name: name.trim() !== account.name ? name.trim() : undefined,
+          account_type: type !== account.account_type ? type : undefined,
+          currency: currency !== account.currency ? currency : undefined
+        },
+        adjustment: adjustment ? adjustment : undefined
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="EDIT ACCOUNT" title="编辑账户" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p><strong>{account.name}</strong> · 当前余额 {formatMoney(account.balance, account.currency)}</p>
+        </div>
+        <div className="form-grid">
+          <label className="span-two"><span>账户名称</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+            <option value="cash">零钱</option>
+            <option value="savings">储蓄</option>
+            <option value="stock">股票</option>
+            <option value="credit">信用</option>
+          </select></label>
+          <label><span>结算币种</span><select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            {currencies.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select></label>
+          <label className="span-two"><span>余额调整（正数增加 / 负数减少，留空则不调整）</span>
+            <input step="0.01" inputMode="decimal" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="0.00" />
+          </label>
+        </div>
+        <p className="category-delete-note">余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。</p>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}保存</button>
+        </div>
       </form>
     </ModalShell>
   );

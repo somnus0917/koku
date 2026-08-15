@@ -215,6 +215,8 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET` | `/api/auth/session` | 查询当前登录用户 |
 | `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
+| `PATCH` | `/api/accounts/{id}` | 编辑账户（名称/类型/币种；有交易历史时不可改币种） |
+| `POST` | `/api/accounts/{id}/adjust-balance` | 余额调整（带符号增量，生成可追溯的调整流水） |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000） |

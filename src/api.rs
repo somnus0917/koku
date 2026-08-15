@@ -6,7 +6,7 @@ use axum::extract::{Extension, Path as AxumPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Datelike, Utc};
 use rust_decimal::Decimal;
@@ -100,6 +100,21 @@ struct TransactionQuery {
     limit: Option<u32>,
     /// 跳过条数，默认 0。
     offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateAccountRequest {
+    name: Option<String>,
+    account_type: Option<AccountType>,
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdjustBalanceRequest {
+    /// 带符号增量：正数增加余额、负数减少余额
+    amount: Decimal,
+    #[serde(default)]
+    note: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,6 +282,30 @@ async fn api_create_account(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(account))))
 }
 
+async fn api_update_account(
+    State(state): State<AppState>,
+    AxumPath(account_id): AxumPath<i64>,
+    Json(request): Json<UpdateAccountRequest>,
+) -> Result<Json<ApiResponse<Account>>> {
+    let account = lock_service(&state)?.update_account(
+        account_id,
+        request.name,
+        request.account_type,
+        request.currency,
+    )?;
+    Ok(Json(ApiResponse::new(account)))
+}
+
+async fn api_adjust_balance(
+    State(state): State<AppState>,
+    AxumPath(account_id): AxumPath<i64>,
+    Json(request): Json<AdjustBalanceRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let transaction =
+        lock_service(&state)?.adjust_balance(account_id, request.amount, request.note)?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
 async fn api_categories(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Category>>>> {
     let categories = lock_service(&state)?.categories()?;
     Ok(Json(ApiResponse::new(categories)))
@@ -342,6 +381,11 @@ async fn api_create_transaction(
         TransactionKind::Loan => {
             return Err(KokuError::InvalidInput(
                 "use /api/loans for loan transactions".to_owned(),
+            ))
+        }
+        TransactionKind::Adjustment => {
+            return Err(KokuError::InvalidInput(
+                "use /api/accounts/{id}/adjust-balance to adjust a balance".to_owned(),
             ))
         }
     };
@@ -504,6 +548,11 @@ async fn api_balance_summary(
 pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
     let protected = Router::new()
         .route("/api/accounts", get(api_accounts).post(api_create_account))
+        .route("/api/accounts/{account_id}", patch(api_update_account))
+        .route(
+            "/api/accounts/{account_id}/adjust-balance",
+            post(api_adjust_balance),
+        )
         .route(
             "/api/categories",
             get(api_categories).post(api_create_category),

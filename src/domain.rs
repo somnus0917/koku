@@ -106,6 +106,8 @@ pub enum TransactionKind {
     Transfer,
     /// 借款资金移动（借出/借入/还款），不计入收支统计
     Loan,
+    /// 余额调整（修正账户余额），amount 为带符号增量，不计入收支统计
+    Adjustment,
 }
 
 impl TransactionKind {
@@ -115,6 +117,7 @@ impl TransactionKind {
             Self::Income => "income",
             Self::Transfer => "transfer",
             Self::Loan => "loan",
+            Self::Adjustment => "adjustment",
         }
     }
 
@@ -124,6 +127,7 @@ impl TransactionKind {
             "income" => Ok(Self::Income),
             "transfer" => Ok(Self::Transfer),
             "loan" => Ok(Self::Loan),
+            "adjustment" => Ok(Self::Adjustment),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown transaction kind in database: {other}"
             ))),

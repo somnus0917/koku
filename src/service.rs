@@ -86,7 +86,7 @@ impl BookkeepingService {
 
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan')),
+                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment')),
                 account_id    INTEGER NOT NULL REFERENCES accounts(id),
                 to_account_id INTEGER REFERENCES accounts(id),
                 category_id   INTEGER REFERENCES categories(id),
@@ -109,7 +109,7 @@ impl BookkeepingService {
                     (kind = 'transfer' AND category_id IS NULL
                      AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                     OR
-                    (kind = 'loan' AND category_id IS NULL
+                    (kind IN ('loan', 'adjustment') AND category_id IS NULL
                      AND to_account_id IS NULL AND target_amount IS NULL)
                 )
             );
@@ -177,7 +177,7 @@ impl BookkeepingService {
         if !table_sql_contains(&conn, "accounts", "'cash'")? {
             rebuild_accounts_table(&conn)?;
         }
-        if !table_sql_contains(&conn, "transactions", "'loan'")? {
+        if !table_sql_contains(&conn, "transactions", "'adjustment'")? {
             rebuild_transactions_table(&conn)?;
         }
         conn.execute_batch(
@@ -220,6 +220,82 @@ impl BookkeepingService {
             params![name, account_type.as_str(), currency, decimal_to_db(opening_balance), now],
         )?;
         self.account(self.conn.last_insert_rowid())
+    }
+
+    /// 更新账户名称/类型/币种；有交易历史的账户不允许改币种（避免历史流水语义混乱）。
+    pub fn update_account(
+        &mut self,
+        id: i64,
+        name: Option<String>,
+        account_type: Option<AccountType>,
+        currency: Option<String>,
+    ) -> Result<Account> {
+        let current = self.account(id)?;
+        let name = match name {
+            Some(value) => required_text(value, "account name")?,
+            None => current.name,
+        };
+        let account_type = account_type.unwrap_or(current.account_type);
+        let currency = match currency {
+            Some(value) => {
+                let currency = normalize_currency(value)?;
+                if currency != current.currency {
+                    let count: i64 = self.conn.query_row(
+                        "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 OR to_account_id = ?1",
+                        [id],
+                        |row| row.get(0),
+                    )?;
+                    if count > 0 {
+                        return Err(KokuError::InvalidInput(
+                            "cannot change the currency of an account with transaction history"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                currency
+            }
+            None => current.currency,
+        };
+        self.conn.execute(
+            "UPDATE accounts SET name = ?1, account_type = ?2, currency = ?3 WHERE id = ?4",
+            params![name, account_type.as_str(), currency, id],
+        )?;
+        self.account(id)
+    }
+
+    /// 调整账户余额：`amount` 为带符号增量（正数增加、负数减少，按账户方向生效），
+    /// 记录一条 `adjustment` 流水（不计入收支统计），可撤销。
+    pub fn adjust_balance(
+        &mut self,
+        account_id: i64,
+        amount: Decimal,
+        note: impl Into<String>,
+    ) -> Result<Transaction> {
+        if amount.is_zero() {
+            return Err(KokuError::InvalidInput(
+                "balance adjustment amount cannot be zero".to_owned(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let account = Self::account_in_tx(&tx, account_id)?;
+        let new_balance = account.balance + amount;
+        Self::set_balance(&tx, account_id, new_balance)?;
+        tx.execute(
+            "INSERT INTO transactions(kind, account_id, amount, currency, settled_amount, occurred_at, note) VALUES ('adjustment', ?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                account_id,
+                decimal_to_db(amount),
+                account.currency,
+                decimal_to_db(amount),
+                timestamp(Utc::now()),
+                note.into()
+            ],
+        )?;
+        let transaction_id = tx.last_insert_rowid();
+        tx.commit()?;
+        self.transaction(transaction_id)
     }
 
     pub fn create_category(
@@ -551,9 +627,9 @@ impl BookkeepingService {
                     "categorized transactions cannot be transfers".to_owned(),
                 ))
             }
-            TransactionKind::Loan => {
+            TransactionKind::Loan | TransactionKind::Adjustment => {
                 return Err(KokuError::InvalidInput(
-                    "categorized transactions cannot be loans".to_owned(),
+                    "categorized transactions cannot be loans or adjustments".to_owned(),
                 ))
             }
         };
@@ -583,7 +659,9 @@ impl BookkeepingService {
             TransactionKind::Income => account
                 .account_type
                 .apply_inflow(current_balance, settled_amount),
-            TransactionKind::Transfer | TransactionKind::Loan => unreachable!("validated above"),
+            TransactionKind::Transfer | TransactionKind::Loan | TransactionKind::Adjustment => {
+                unreachable!("validated above")
+            }
         };
         Self::set_balance(&tx, account_id, new_balance)?;
         tx.execute(
@@ -706,6 +784,14 @@ impl BookkeepingService {
                     "loan transactions cannot be voided; repay or adjust the loan instead"
                         .to_owned(),
                 ))
+            }
+            // 余额调整的撤销：把带符号增量反向应用即可恢复原余额。
+            TransactionKind::Adjustment => {
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source.balance - transaction.amount,
+                )?;
             }
         }
 
@@ -1218,7 +1304,8 @@ impl BookkeepingService {
                         .entry((category_id, category_name))
                         .or_insert(Decimal::ZERO) += amount;
                 }
-                TransactionKind::Transfer | TransactionKind::Loan => {}
+                TransactionKind::Transfer | TransactionKind::Loan | TransactionKind::Adjustment => {
+                }
             }
         }
 
@@ -1533,7 +1620,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
         PRAGMA foreign_keys = OFF;
         CREATE TABLE transactions_new (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan')),
+            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment')),
             account_id    INTEGER NOT NULL REFERENCES accounts(id),
             to_account_id INTEGER REFERENCES accounts(id),
             category_id   INTEGER REFERENCES categories(id),
@@ -1556,7 +1643,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
                 (kind = 'transfer' AND category_id IS NULL
                  AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                 OR
-                (kind = 'loan' AND category_id IS NULL
+                (kind IN ('loan', 'adjustment') AND category_id IS NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
             )
         );
@@ -2207,6 +2294,42 @@ mod tests {
         assert_eq!(summary.total_expense, Decimal::ZERO);
         assert_eq!(summary.total_income, Decimal::from(100_u32));
         assert_eq!(service.account(cash.id)?.balance, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn account_can_be_edited_and_balance_adjusted_with_audit_trail() -> Result<()> {
+        let mut service = test_service()?;
+        let account =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+
+        // 改名/改类型
+        let updated = service.update_account(
+            account.id,
+            Some("微信零钱".to_owned()),
+            Some(AccountType::Cash),
+            None,
+        )?;
+        assert_eq!(updated.name, "微信零钱");
+
+        // 调整余额 +50，产生一条 adjustment 流水且不计入收支统计
+        let adjustment = service.adjust_balance(account.id, Decimal::from(50_u32), "补记现金")?;
+        assert_eq!(adjustment.kind, TransactionKind::Adjustment);
+        assert_eq!(adjustment.amount, Decimal::from(50_u32));
+        assert_eq!(service.account(account.id)?.balance, Decimal::from(150_u32));
+        let summary = service.monthly_summary(Utc::now().year(), Utc::now().month(), "CNY")?;
+        assert_eq!(summary.total_income, Decimal::ZERO);
+        assert_eq!(summary.total_expense, Decimal::ZERO);
+
+        // 撤销调整 → 余额恢复
+        service.void_transaction(adjustment.id)?;
+        assert_eq!(service.account(account.id)?.balance, Decimal::from(100_u32));
+
+        // 已有交易历史时不允许改币种
+        assert!(matches!(
+            service.update_account(account.id, None, None, Some("USD".to_owned())),
+            Err(KokuError::InvalidInput(_))
+        ));
         Ok(())
     }
 
