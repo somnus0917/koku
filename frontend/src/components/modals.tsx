@@ -576,7 +576,6 @@ export function CategoryModal({ categories, onClose, onSubmit, onDelete }: { cat
   return (
     <ModalShell eyebrow="CATEGORIES" title="管理分类" onClose={onClose}>
       <div className="category-library">
-        <p className="category-delete-note">删除后仅从新交易的可选分类中隐藏，历史账单和统计会完整保留。</p>
         {([
           { kind: "expense" as const, label: "支出分类" },
           { kind: "income" as const, label: "收入分类" }

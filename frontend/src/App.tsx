@@ -358,7 +358,6 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             <span className="avatar">K</span>
             <span>
               <strong>{username}</strong>
-              <small>管理分类</small>
             </span>
             <MoreHorizontal size={18} />
           </button>

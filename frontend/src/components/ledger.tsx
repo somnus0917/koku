@@ -538,7 +538,7 @@ export function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; c
       </section>
       <article className="insight-callout">
         <span className="callout-icon"><ChartNoAxesCombined size={22} /></span>
-        <div><span>KOKU NOTE</span><h3>你保留了 {healthScore(summary)}% 的本月收入</h3><p>结余率来自已确认的收入与支出，不包含账户间转账。</p></div>
+        <div><span>KOKU NOTE</span><h3>你保留了 {healthScore(summary)}% 的本月收入</h3></div>
       </article>
     </div>
   );
@@ -689,7 +689,6 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
     <details className="panel cash-flow-panel" open>
       <summary>
         <span><ChevronDown size={18} />现金流</span>
-        <small>收入来源 → 可用现金 → 支出去向与结余</small>
       </summary>
       <div className="sankey-scroll">
         <svg
