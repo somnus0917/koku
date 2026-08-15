@@ -446,8 +446,10 @@ export function TransactionRow({
     : transaction.kind === "adjustment" ? (Number(transaction.amount) > 0 ? "+" : "")
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
+  // 只有可操作的支出行才有报销列（避免其他行多出一段空列）。
+  const hasReimburseActions = transaction.kind === "expense" && !transaction.voided_at && !transaction.reimbursed_at;
   return (
-    <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
+    <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""} ${hasReimburseActions ? "has-reimburse" : ""}`}>
       <div className="transaction-main">
         {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
@@ -479,18 +481,17 @@ export function TransactionRow({
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
-      {!compact && (
+      {!compact && hasReimburseActions && (
         <div className="row-actions">
-          {transaction.kind === "expense" && !transaction.voided_at && (
-            reimbursable
-              ? <>
-                  <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
-                  <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
-                </>
-              : !transaction.reimbursed_at && (
-                  <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
-                )
-          )}
+          {reimbursable
+            ? <>
+                <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
+                <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
+              </>
+            : (
+                <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
+              )
+          }
         </div>
       )}
       {!compact && (
