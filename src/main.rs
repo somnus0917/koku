@@ -1656,8 +1656,15 @@ async fn api_login(
     State(state): State<AppState>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Response> {
-    let password_matches = bcrypt::verify(&request.password, &state.auth.password_hash)
-        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+    let password = request.password;
+    let password_hash = state.auth.password_hash.clone();
+    let password_matches =
+        tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash))
+            .await
+            .map_err(|error| {
+                KokuError::AuthConfiguration(format!("password verification task failed: {error}"))
+            })?
+            .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
     if request.username != state.auth.username || !password_matches {
         return Err(KokuError::InvalidCredentials);
     }
