@@ -99,6 +99,9 @@ backup_database() {
         '.timeout 5000' \
         ".backup /app/data/backups/koku-${timestamp}.db"
     echo "SQLite backup created: data/backups/koku-${timestamp}.db"
+
+    # 保留最近 10 份备份，更早的自动清理，防止无限累积。
+    ls -1t "$DATA_DIR/backups"/koku-*.db 2>/dev/null | tail -n +11 | xargs -r rm -f
 }
 
 rollback() {
