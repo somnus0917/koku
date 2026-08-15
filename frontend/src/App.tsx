@@ -29,6 +29,8 @@ import {
   LayoutDashboard,
   Laptop,
   LoaderCircle,
+  LockKeyhole,
+  LogOut,
   Menu,
   Moon,
   MoreHorizontal,
@@ -64,18 +66,23 @@ import {
   type FormEvent
 } from "react";
 import {
+  ApiError,
   createAccount,
   createCategory,
   createTransaction,
   createTransfer,
   deleteCategory,
+  getAuthSession,
   loadAppData,
+  login,
+  logout,
   voidTransaction
 } from "./api";
 import type {
   Account,
   AccountType,
   AppData,
+  AuthSession,
   CashFlowSummary,
   Category,
   CategoryKind,
@@ -199,6 +206,95 @@ function availableCurrencies(accounts: Account[], transactions: Transaction[] = 
 }
 
 function App() {
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    void getAuthSession()
+      .then(setSession)
+      .catch((reason) => {
+        if (!(reason instanceof ApiError && reason.status === 401)) {
+          console.error("Unable to check login session", reason);
+        }
+        setSession(null);
+      })
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  useEffect(() => {
+    const handleUnauthorized = () => setSession(null);
+    window.addEventListener("koku:unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("koku:unauthorized", handleUnauthorized);
+  }, []);
+
+  if (checkingSession) return <AuthLoadingState />;
+  if (!session) return <LoginPage onAuthenticated={setSession} />;
+  return (
+    <LedgerApp
+      username={session.username}
+      onLogout={async () => {
+        try { await logout(); }
+        finally { setSession(null); }
+      }}
+    />
+  );
+}
+
+function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    localStorage.setItem("koku-theme", dark ? "dark" : "light");
+  }, [dark]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try { onAuthenticated(await login(username, password)); }
+    catch (reason) {
+      setError(reason instanceof ApiError && reason.status === 401 ? "用户名或密码不正确" : reason instanceof Error ? reason.message : "暂时无法登录");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="login-page">
+      <button className="login-theme-button" type="button" onClick={() => setDark((value) => !value)} aria-label="切换主题">
+        {dark ? <Sun size={18} /> : <Moon size={18} />}
+      </button>
+      <section className="login-story" aria-label="Koku 私人账本">
+        <div className="login-brand"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><strong>Koku</strong><small>PRIVATE LEDGER</small></div></div>
+        <div className="login-story-copy">
+          <span>YOUR MONEY, QUIETLY KEPT</span>
+          <h1>只属于你的，<br />私人账本。</h1>
+          <p>账户、交易和统计仅保存在你自己的服务器中。没有广告，没有第三方分析，也不会上传到其他平台。</p>
+        </div>
+        <div className="login-trust-row"><span><ShieldCheck size={16} />私有部署</span><span><LockKeyhole size={16} />加密会话</span></div>
+      </section>
+      <section className="login-panel">
+        <form className="login-card" onSubmit={submit}>
+          <div className="login-lock"><LockKeyhole size={20} /></div>
+          <span className="login-eyebrow">WELCOME BACK</span>
+          <h2>登录你的账本</h2>
+          <p>验证身份后才能读取服务器中的财务数据。</p>
+          <label><span>用户名</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="输入用户名" /></label>
+          <label><span>密码</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
+          {error && <div className="login-error" role="alert">{error}</div>}
+          <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? "正在验证" : "安全登录"}</button>
+          <small className="login-footnote">登录会话仅存储在此浏览器的安全 Cookie 中</small>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function LedgerApp({ username, onLogout }: { username: string; onLogout: () => Promise<void> }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [monthValue, setMonthValue] = useState(currentMonthValue);
   const [currency, setCurrency] = useState("CNY");
@@ -326,18 +422,21 @@ function App() {
         <div className="privacy-note">
           <ShieldCheck size={18} />
           <div>
-            <strong>本地优先</strong>
-            <span>数据保存在你的设备</span>
+            <strong>私有部署</strong>
+            <span>数据保存在你的服务器</span>
           </div>
         </div>
-        <button className="profile-chip" onClick={() => setModal("category")}>
-          <span className="avatar">K</span>
-          <span>
-            <strong>我的账本</strong>
-            <small>管理分类</small>
-          </span>
-          <MoreHorizontal size={18} />
-        </button>
+        <div className="profile-actions">
+          <button className="profile-chip" onClick={() => setModal("category")}>
+            <span className="avatar">K</span>
+            <span>
+              <strong>{username}</strong>
+              <small>管理分类</small>
+            </span>
+            <MoreHorizontal size={18} />
+          </button>
+          <button className="logout-button" onClick={() => void onLogout()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
+        </div>
       </aside>
 
       {mobileNavOpen && <button className="nav-scrim" onClick={() => setMobileNavOpen(false)} />}
@@ -1307,6 +1406,10 @@ function CategoryModal({ categories, onClose, onSubmit, onDelete }: { categories
       </form>
     </ModalShell>
   );
+}
+
+function AuthLoadingState() {
+  return <main className="auth-loading"><div className="loading-mark"><span /><span /></div><p>正在验证安全会话…</p></main>;
 }
 
 function LoadingState() {

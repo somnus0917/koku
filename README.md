@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/somnus0917/koku/actions/workflows/ci.yml/badge.svg)](https://github.com/somnus0917/koku/actions/workflows/ci.yml)
 
-Koku 是一个本地优先、前后端分离的个人记账 MVP。设计借鉴了 [Sure](https://github.com/we-promise/sure) 克制、清晰的财务工作台体验，但采用独立的 Koku 视觉语言与 Rust 实现。
+Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应用。设计借鉴了 [Sure](https://github.com/we-promise/sure) 克制、清晰的财务工作台体验，但采用独立的 Koku 视觉语言与 Rust 实现。浏览器通过 HTTPS API 将账本数据写入你自己的服务器，而不是仅保存在当前设备中。
 
 ## 功能
 
@@ -38,6 +38,9 @@ koku/
 终端一，启动后端：
 
 ```bash
+KOKU_AUTH_USERNAME=somnus \
+KOKU_AUTH_PASSWORD_HASH='$2b$12$替换为你自己的bcrypt哈希' \
+KOKU_COOKIE_SECURE=false \
 cargo run
 ```
 
@@ -53,10 +56,15 @@ npm run dev
 
 浏览器打开 `http://127.0.0.1:5173`。
 
-可通过环境变量覆盖后端配置：
+可通过环境变量覆盖后端配置。上面的 `KOKU_COOKIE_SECURE=false` 仅用于本机 HTTP 开发；生产环境保持默认值 `true`：
 
 ```bash
-KOKU_PORT=9000 KOKU_DB_PATH=/path/to/koku.db cargo run
+KOKU_PORT=9000 \
+KOKU_DB_PATH=/path/to/koku.db \
+KOKU_AUTH_USERNAME=somnus \
+KOKU_AUTH_PASSWORD_HASH='$2b$12$替换为你自己的bcrypt哈希' \
+KOKU_COOKIE_SECURE=false \
+cargo run
 ```
 
 若前端不使用 Vite 开发代理，可创建 `frontend/.env.local`：
@@ -83,7 +91,7 @@ cargo run -- --demo
 
 ## 腾讯云自动部署
 
-这台腾讯云已经运行统一的 `edge-caddy` 并占用 `80/443`，因此 Koku 只启动两个独立容器：`web` 提供 React 静态文件并在内部代理 `/api`，`api` 运行 Rust 服务并独占 SQLite 写入。两个容器都不向宿主机公开端口；`web` 加入现有的外部 `proxy` 网络，由 `edge-caddy` 统一负责域名、HTTPS 与 Basic Auth。
+这台腾讯云已经运行统一的 `edge-caddy` 并占用 `80/443`，因此 Koku 只启动两个独立容器：`web` 提供 React 静态文件并在内部代理 `/api`，`api` 运行 Rust 服务并独占 SQLite 写入。两个容器都不向宿主机公开端口；`web` 加入现有的外部 `proxy` 网络，由 `edge-caddy` 统一负责域名与 HTTPS，登录认证由 Koku API 自身完成。
 
 ### 1. 初始化服务器
 
@@ -106,22 +114,26 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 
 - `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
 - `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
+- `KOKU_AUTH_USERNAME`：单用户登录名。
+- `KOKU_SESSION_TTL_DAYS`：登录会话有效天数，范围为 1–365。
 - `DEBIAN_MIRROR`：腾讯云建议使用 `http://mirrors.cloud.tencent.com`；Cargo 构建已固定使用 USTC 稀疏索引并启用缓存。
 
-在服务器生成 Basic Auth 密码哈希：
+使用 Caddy 自带的 bcrypt 工具生成应用登录密码哈希，并单独保存在数据目录：
 
 ```bash
-docker run --rm caddy:2.10-alpine caddy hash-password --plaintext '换成一个强密码'
+docker run --rm caddy:2-alpine caddy hash-password --plaintext '换成一个强密码' \
+  > ~/koku/data/auth-password.hash
+chmod 600 ~/koku/data/auth-password.hash
 ```
 
-参考 [Caddy 站点模板](deploy/Caddyfile.example)，把替换好域名、用户名和密码哈希的站点块加入现有的 `~/caddy/Caddyfile`。随后验证并无中断重载现有入口：
+参考 [Caddy 站点模板](deploy/Caddyfile.example)，把替换好域名的站点块加入现有的 `~/caddy/Caddyfile`。随后验证并无中断重载现有入口：
 
 ```bash
 docker exec edge-caddy caddy validate --config /etc/caddy/Caddyfile
 docker exec edge-caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-该站点块代理到 `koku-web:8080`。认证必须放在现有 Caddy 上，才能同时保护页面和所有写入型 `/api` 接口。
+该站点块代理到 `koku-web:8080`。登录页可以公开加载，但除健康检查和登录接口外，所有账本 API 都会验证服务器端会话。浏览器只保存 `HttpOnly`、`Secure`、`SameSite=Strict` Cookie，SQLite 只保存随机会话令牌的 SHA-256 摘要。
 
 生产部署采用与 `luopanhacker` 相同的受限 SSH 模式。CI 成功后，Actions 只向服务器发送已经验证过的 40 位 Git commit SHA；服务器下载该不可变源码归档并复用 Docker 层缓存完成构建，不通过 SCP 搬运源码或镜像，也不需要保存 GitHub PAT。
 
@@ -166,7 +178,7 @@ docker compose --env-file .env --env-file .release.env -f compose.production.yml
 docker compose --env-file .env --env-file .release.env -f compose.production.yml logs --tail=200
 ```
 
-SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。容器重建不会删除此目录；不要把数据库或 `.env` 提交到 Git。
+SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览器会通过 HTTPS API 把账户与交易提交到这台服务器；“私有”表示数据不离开你的自托管服务器，并不表示只保存在访问设备中。容器重建不会删除此目录；不要把数据库、密码哈希或 `.env` 提交到 Git。
 
 ## 生产环境变量
 
@@ -177,12 +189,20 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。容器�
 | `KOKU_DB_PATH` | `data/koku.db` | SQLite 文件路径 |
 | `KOKU_SEED_DEMO` | `true` | 是否为空数据库生成演示账本；生产容器固定为 `false` |
 | `KOKU_ALLOWED_ORIGIN` | 未设置 | 可选的单一跨域来源；同域生产部署无需开启 CORS |
+| `KOKU_AUTH_USERNAME` | 必填 | 单用户登录名 |
+| `KOKU_AUTH_PASSWORD_HASH` | 未设置 | bcrypt 密码哈希，适合本地运行；生产环境使用文件 |
+| `KOKU_AUTH_PASSWORD_HASH_FILE` | 未设置 | bcrypt 哈希文件；生产容器固定为 `/app/data/auth-password.hash` |
+| `KOKU_SESSION_TTL_DAYS` | `30` | 会话有效天数，范围 1–365 |
+| `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
 
 ## REST API
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
+| `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话 |
+| `GET` | `/api/auth/session` | 查询当前登录用户 |
+| `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |

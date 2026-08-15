@@ -2,6 +2,7 @@ import type {
   Account,
   AccountType,
   AppData,
+  AuthSession,
   BalanceSummary,
   CashFlowSummary,
   Category,
@@ -17,9 +18,17 @@ interface Envelope<T> {
   data: T;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
       ...init?.headers
@@ -29,12 +38,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     error?: string;
   };
   if (!response.ok) {
-    throw new Error(payload.error ?? `请求失败（${response.status}）`);
+    if (response.status === 401 && path !== "/api/auth/login") {
+      window.dispatchEvent(new Event("koku:unauthorized"));
+    }
+    throw new ApiError(payload.error ?? `请求失败（${response.status}）`, response.status);
   }
   if (payload.data === undefined) {
     throw new Error("服务返回了无效数据");
   }
   return payload.data;
+}
+
+export function getAuthSession(): Promise<AuthSession> {
+  return request("/api/auth/session");
+}
+
+export function login(username: string, password: string): Promise<AuthSession> {
+  return request("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password })
+  });
+}
+
+export function logout(): Promise<{ logged_out: boolean }> {
+  return request("/api/auth/logout", { method: "POST" });
 }
 
 export async function loadAppData(

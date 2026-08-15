@@ -1,10 +1,7 @@
 # Add this block to the existing edge Caddy configuration on tencent-cloud.
-# Replace the domain, user, and bcrypt hash before reloading Caddy.
+# Replace the domain before reloading Caddy. Authentication is enforced by
+# Koku itself, so the login page remains publicly reachable.
 koku.example.com {
-	basic_auth {
-		KOKU_USER KOKU_BCRYPT_HASH
-	}
-
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"

@@ -4,8 +4,9 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::extract::{Extension, Path as AxumPath, Query, Request, State};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -15,10 +16,13 @@ use rusqlite::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tower_http::cors::CorsLayer;
 
 type Result<T> = std::result::Result<T, KokuError>;
+
+const SESSION_COOKIE_NAME: &str = "koku_session";
 
 #[derive(Debug, Error)]
 pub enum KokuError {
@@ -39,6 +43,12 @@ pub enum KokuError {
     },
     #[error("a transaction that has already been voided cannot be voided again")]
     AlreadyVoided,
+    #[error("invalid username or password")]
+    InvalidCredentials,
+    #[error("authentication required")]
+    Unauthorized,
+    #[error("authentication configuration error: {0}")]
+    AuthConfiguration(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +315,17 @@ struct CreateTransferRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuthenticatedUser {
+    username: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct MonthlyQuery {
     year: Option<i32>,
     month: Option<u32>,
@@ -319,6 +340,55 @@ struct BalanceQuery {
 #[derive(Clone)]
 struct AppState {
     service: Arc<Mutex<BookkeepingService>>,
+    auth: Arc<AuthConfig>,
+}
+
+#[derive(Debug)]
+struct AuthConfig {
+    username: String,
+    password_hash: String,
+    session_ttl_seconds: i64,
+    cookie_secure: bool,
+}
+
+impl AuthConfig {
+    fn from_env() -> Result<Self> {
+        let username = required_env("KOKU_AUTH_USERNAME")?;
+        let password_hash = match std::env::var("KOKU_AUTH_PASSWORD_HASH") {
+            Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                let path = required_env("KOKU_AUTH_PASSWORD_HASH_FILE")?;
+                std::fs::read_to_string(path)?.trim().to_owned()
+            }
+            Err(error) => {
+                return Err(KokuError::AuthConfiguration(format!(
+                    "could not read KOKU_AUTH_PASSWORD_HASH: {error}"
+                )))
+            }
+        };
+        bcrypt::verify("koku-password-hash-validation", &password_hash).map_err(|error| {
+            KokuError::AuthConfiguration(format!("KOKU_AUTH_PASSWORD_HASH is invalid: {error}"))
+        })?;
+        let session_ttl_days = std::env::var("KOKU_SESSION_TTL_DAYS")
+            .unwrap_or_else(|_| "30".to_owned())
+            .parse::<i64>()
+            .map_err(|error| {
+                KokuError::AuthConfiguration(format!(
+                    "KOKU_SESSION_TTL_DAYS must be an integer: {error}"
+                ))
+            })?;
+        if !(1..=365).contains(&session_ttl_days) {
+            return Err(KokuError::AuthConfiguration(
+                "KOKU_SESSION_TTL_DAYS must be between 1 and 365".to_owned(),
+            ));
+        }
+        Ok(Self {
+            username,
+            password_hash,
+            session_ttl_seconds: session_ttl_days * 24 * 60 * 60,
+            cookie_secure: env_bool("KOKU_COOKIE_SECURE", true)?,
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -331,12 +401,14 @@ impl IntoResponse for KokuError {
         let status = match &self {
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::AlreadyVoided => StatusCode::CONFLICT,
+            Self::InvalidCredentials | Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::InvalidInput(_) | Self::CategoryKindMismatch { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            Self::Database(_) | Self::InvalidDecimal(_) | Self::Io(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Database(_)
+            | Self::InvalidDecimal(_)
+            | Self::Io(_)
+            | Self::AuthConfiguration(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (
             status,
@@ -413,6 +485,15 @@ impl BookkeepingService {
                 ON transactions(occurred_at, voided_at);
             CREATE INDEX IF NOT EXISTS idx_transactions_account
                 ON transactions(account_id, to_account_id);
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                username   TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
+                ON auth_sessions(expires_at);
             "#,
         )?;
         if !table_has_column(&conn, "transactions", "currency")? {
@@ -634,6 +715,48 @@ impl BookkeepingService {
         )?;
         transaction.commit()?;
         Ok(category)
+    }
+
+    fn create_auth_session(&mut self, username: &str, ttl_seconds: i64) -> Result<String> {
+        let mut random_bytes = [0_u8; 32];
+        getrandom::fill(&mut random_bytes).map_err(|error| {
+            KokuError::AuthConfiguration(format!("could not generate a session token: {error}"))
+        })?;
+        let token = hex_encode(&random_bytes);
+        let now = Utc::now();
+        let expires_at = now.timestamp() + ttl_seconds;
+        let transaction = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= ?1",
+            [now.timestamp()],
+        )?;
+        transaction.execute(
+            "INSERT INTO auth_sessions(token_hash, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            params![session_token_hash(&token), username, timestamp(now), expires_at],
+        )?;
+        transaction.commit()?;
+        Ok(token)
+    }
+
+    fn authenticated_username(&self, token: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT username FROM auth_sessions WHERE token_hash = ?1 AND expires_at > ?2",
+                params![session_token_hash(token), Utc::now().timestamp()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(KokuError::from)
+    }
+
+    fn delete_auth_session(&mut self, token: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM auth_sessions WHERE token_hash = ?1",
+            [session_token_hash(token)],
+        )?;
+        Ok(())
     }
 
     pub fn record_expense(
@@ -1252,6 +1375,40 @@ fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+fn session_token_hash(token: &str) -> String {
+    hex_encode(Sha256::digest(token.as_bytes()).as_ref())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|cookie| cookie.trim().split_once('='))
+        .find_map(|(name, value)| {
+            (name == SESSION_COOKIE_NAME && !value.is_empty()).then(|| value.to_owned())
+        })
+}
+
+fn session_cookie(token: &str, max_age: i64, secure: bool) -> Result<HeaderValue> {
+    let secure_attribute = if secure { "; Secure" } else { "" };
+    HeaderValue::from_str(&format!(
+        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly{secure_attribute}; SameSite=Strict; Max-Age={max_age}"
+    ))
+    .map_err(|error| KokuError::AuthConfiguration(format!("invalid session cookie: {error}")))
+}
+
 fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
@@ -1477,6 +1634,78 @@ fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> 
         .map_err(|_| KokuError::InvalidInput("bookkeeping service lock was poisoned".to_owned()))
 }
 
+async fn require_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+    let Some(token) = session_token(request.headers()) else {
+        return KokuError::Unauthorized.into_response();
+    };
+    let username = match lock_service(&state).and_then(|service| {
+        service
+            .authenticated_username(&token)?
+            .ok_or(KokuError::Unauthorized)
+    }) {
+        Ok(username) => username,
+        Err(error) => return error.into_response(),
+    };
+    request
+        .extensions_mut()
+        .insert(AuthenticatedUser { username });
+    next.run(request).await
+}
+
+async fn api_login(
+    State(state): State<AppState>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Response> {
+    let password_matches = bcrypt::verify(&request.password, &state.auth.password_hash)
+        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+    if request.username != state.auth.username || !password_matches {
+        return Err(KokuError::InvalidCredentials);
+    }
+
+    let token = lock_service(&state)?
+        .create_auth_session(&state.auth.username, state.auth.session_ttl_seconds)?;
+    let mut response = Json(ApiResponse::new(AuthenticatedUser {
+        username: state.auth.username.clone(),
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        session_cookie(
+            &token,
+            state.auth.session_ttl_seconds,
+            state.auth.cookie_secure,
+        )?,
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn api_auth_session(Extension(user): Extension<AuthenticatedUser>) -> Response {
+    let mut response = Json(ApiResponse::new(user)).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
+    if let Some(token) = session_token(&headers) {
+        lock_service(&state)?.delete_auth_session(&token)?;
+    }
+    let mut response =
+        Json(ApiResponse::new(serde_json::json!({ "logged_out": true }))).into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        session_cookie("", 0, state.auth.cookie_secure)?,
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
     Json(ApiResponse::new(serde_json::json!({
         "status": "ok",
@@ -1635,8 +1864,7 @@ async fn api_balance_summary(
 }
 
 fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
-    let router = Router::new()
-        .route("/api/health", get(api_health))
+    let protected = Router::new()
         .route("/api/accounts", get(api_accounts).post(api_create_account))
         .route(
             "/api/categories",
@@ -1655,6 +1883,13 @@ fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
         .route("/api/summary/monthly", get(api_monthly_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/balance", get(api_balance_summary))
+        .route("/api/auth/session", get(api_auth_session))
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
+    let router = Router::new()
+        .route("/api/health", get(api_health))
+        .route("/api/auth/login", post(api_login))
+        .route("/api/auth/logout", post(api_logout))
+        .merge(protected)
         .with_state(state);
 
     match allowed_origin {
@@ -1662,7 +1897,8 @@ fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
             CorsLayer::new()
                 .allow_origin(origin)
                 .allow_methods([Method::GET, Method::POST, Method::DELETE])
-                .allow_headers([header::CONTENT_TYPE]),
+                .allow_headers([header::CONTENT_TYPE])
+                .allow_credentials(true),
         ),
         None => router,
     }
@@ -1683,6 +1919,18 @@ fn env_bool(name: &str, default: bool) -> Result<bool> {
         Ok(value) => parse_env_bool(name, &value),
         Err(std::env::VarError::NotPresent) => Ok(default),
         Err(error) => Err(KokuError::InvalidInput(format!(
+            "could not read {name}: {error}"
+        ))),
+    }
+}
+
+fn required_env(name: &str) -> Result<String> {
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(value.trim().to_owned()),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Err(KokuError::AuthConfiguration(format!(
+            "{name} is required and cannot be empty"
+        ))),
+        Err(error) => Err(KokuError::AuthConfiguration(format!(
             "could not read {name}: {error}"
         ))),
     }
@@ -1726,6 +1974,7 @@ async fn run_server() -> Result<()> {
 
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
+        auth: Arc::new(AuthConfig::from_env()?),
     };
     axum::serve(listener, api_router(state, configured_origin()?))
         .with_graceful_shutdown(async {
@@ -1768,6 +2017,54 @@ mod tests {
             parse_env_bool("FLAG", "sometimes"),
             Err(KokuError::InvalidInput(_))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn server_sessions_are_hashed_expirable_and_revocable() -> Result<()> {
+        let mut service = test_service()?;
+        let token = service.create_auth_session("somnus", 3600)?;
+        assert_eq!(token.len(), 64);
+        assert_eq!(
+            service.authenticated_username(&token)?.as_deref(),
+            Some("somnus")
+        );
+        let stored_token =
+            service
+                .conn
+                .query_row("SELECT token_hash FROM auth_sessions", [], |row| {
+                    row.get::<_, String>(0)
+                })?;
+        assert_ne!(stored_token, token);
+
+        service.conn.execute(
+            "UPDATE auth_sessions SET expires_at = ?1",
+            [Utc::now().timestamp() - 1],
+        )?;
+        assert_eq!(service.authenticated_username(&token)?, None);
+
+        let second_token = service.create_auth_session("somnus", 3600)?;
+        service.delete_auth_session(&second_token)?;
+        assert_eq!(service.authenticated_username(&second_token)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn session_cookie_is_http_only_and_parsed_by_name() -> Result<()> {
+        let cookie = session_cookie("test-token", 3600, true)?;
+        let cookie_text = cookie
+            .to_str()
+            .map_err(|error| KokuError::InvalidInput(error.to_string()))?;
+        assert!(cookie_text.contains("HttpOnly"));
+        assert!(cookie_text.contains("Secure"));
+        assert!(cookie_text.contains("SameSite=Strict"));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("theme=dark; koku_session=test-token; locale=zh"),
+        );
+        assert_eq!(session_token(&headers).as_deref(), Some("test-token"));
         Ok(())
     }
 

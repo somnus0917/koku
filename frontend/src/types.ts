@@ -16,6 +16,10 @@ export interface Category {
   kind: CategoryKind;
 }
 
+export interface AuthSession {
+  username: string;
+}
+
 export interface Transaction {
   id: number;
   kind: TransactionKind;
