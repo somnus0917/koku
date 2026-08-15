@@ -563,6 +563,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       )}
       {modal === "account" && (
         <AccountModal
+          currencies={currencies}
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createAccount(input), "账户已创建")}
         />
@@ -1862,7 +1863,7 @@ function TransactionModal({
   );
 }
 
-function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (input: Parameters<typeof createAccount>[0]) => Promise<void> }) {
+function AccountModal({ currencies, onClose, onSubmit }: { currencies: string[]; onClose: () => void; onSubmit: (input: Parameters<typeof createAccount>[0]) => Promise<void> }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("cash");
   const [currency, setCurrency] = useState("CNY");
@@ -1885,7 +1886,11 @@ function AccountModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (i
             <option value="stock">股票</option>
             <option value="credit">信用</option>
           </select></label>
-          <label><span>账户结算币种</span><input required maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} /></label>
+          <label><span>账户结算币种</span>
+            <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              {currencies.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
           <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
