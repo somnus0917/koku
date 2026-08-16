@@ -102,8 +102,10 @@ impl BookkeepingService {
                         .entry((category_id, category_name))
                         .or_insert(Decimal::ZERO) += amount;
                 }
-                TransactionKind::Transfer | TransactionKind::Loan | TransactionKind::Adjustment => {
-                }
+                TransactionKind::Transfer
+                | TransactionKind::Loan
+                | TransactionKind::Adjustment
+                | TransactionKind::Trade => {}
             }
         }
 
@@ -194,7 +196,10 @@ impl BookkeepingService {
             match TransactionKind::from_db(&kind)? {
                 TransactionKind::Income => entry.0 += amount,
                 TransactionKind::Expense => entry.1 += amount,
-                TransactionKind::Transfer | TransactionKind::Loan | TransactionKind::Adjustment => {}
+                TransactionKind::Transfer
+                | TransactionKind::Loan
+                | TransactionKind::Adjustment
+                | TransactionKind::Trade => {}
             }
         }
 

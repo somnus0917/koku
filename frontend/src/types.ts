@@ -1,6 +1,6 @@
 export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
-export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment";
+export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment" | "trade";
 export type LoanType = "lend" | "borrow";
 export type RecurrenceFrequency = "monthly" | "weekly";
 
@@ -110,6 +110,16 @@ export interface Tag {
   name: string;
 }
 
+export interface Holding {
+  id: number;
+  account_id: number;
+  symbol: string;
+  shares: string;
+  cost_basis: string;
+  last_price: string | null;
+  average_cost: string;
+}
+
 export interface MonthlySummary {
   year: number;
   month: number;
@@ -177,4 +187,5 @@ export interface AppData {
   budgets: Budget[];
   recurring: RecurringRule[];
   tags: Tag[];
+  holdings: Holding[];
 }

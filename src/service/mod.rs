@@ -23,6 +23,7 @@ pub struct BookkeepingService {
 
 mod accounts;
 mod budgets;
+mod holdings;
 mod loans;
 mod rates;
 mod receipts;
@@ -114,6 +115,17 @@ impl BookkeepingService {
                 PRIMARY KEY (transaction_id, tag_id)
             );
 
+            CREATE TABLE IF NOT EXISTS holdings (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL REFERENCES accounts(id),
+                symbol     TEXT NOT NULL,
+                shares     TEXT NOT NULL,
+                cost_basis TEXT NOT NULL,
+                last_price TEXT,
+                updated_at TEXT NOT NULL,
+                UNIQUE(account_id, symbol)
+            );
+
             CREATE TABLE IF NOT EXISTS loans (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 loan_type    TEXT NOT NULL CHECK (loan_type IN ('lend', 'borrow')),
@@ -146,7 +158,7 @@ impl BookkeepingService {
 
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment')),
+                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade')),
                 account_id    INTEGER NOT NULL REFERENCES accounts(id),
                 to_account_id INTEGER REFERENCES accounts(id),
                 category_id   INTEGER REFERENCES categories(id),
@@ -169,7 +181,7 @@ impl BookkeepingService {
                     (kind = 'transfer' AND category_id IS NULL
                      AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                     OR
-                    (kind IN ('loan', 'adjustment') AND category_id IS NULL
+                    (kind IN ('loan', 'adjustment', 'trade') AND category_id IS NULL
                      AND to_account_id IS NULL AND target_amount IS NULL)
                 )
             );
@@ -241,6 +253,9 @@ impl BookkeepingService {
             rebuild_accounts_table(&conn)?;
         }
         if !table_sql_contains(&conn, "transactions", "'adjustment'")? {
+            rebuild_transactions_table(&conn)?;
+        }
+        if !table_sql_contains(&conn, "transactions", "'trade'")? {
             rebuild_transactions_table(&conn)?;
         }
         conn.execute_batch(
@@ -679,7 +694,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
         PRAGMA foreign_keys = OFF;
         CREATE TABLE transactions_new (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment')),
+            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade')),
             account_id    INTEGER NOT NULL REFERENCES accounts(id),
             to_account_id INTEGER REFERENCES accounts(id),
             category_id   INTEGER REFERENCES categories(id),
@@ -702,7 +717,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
                 (kind = 'transfer' AND category_id IS NULL
                  AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                 OR
-                (kind IN ('loan', 'adjustment') AND category_id IS NULL
+                (kind IN ('loan', 'adjustment', 'trade') AND category_id IS NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
             )
         );
@@ -1242,6 +1257,70 @@ mod tests {
         assert!(service
             .set_transaction_tags(expense.id, vec!["  ".to_owned()])
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn stock_buy_sell_tracks_holdings_and_cash() -> Result<()> {
+        let mut service = test_service()?;
+        let broker =
+            service.create_account("券商", AccountType::Stock, "CNY", Decimal::from(10000_u32))?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+
+        // 买入 10 股 @ 150：现金 -1500，持仓 +10。
+        let buy = service.buy_stock(
+            broker.id,
+            "AAPL".to_owned(),
+            Decimal::from(10_u32),
+            Decimal::from(150_u32),
+            at,
+            "".to_owned(),
+        )?;
+        assert_eq!(buy.kind, TransactionKind::Trade);
+        assert_eq!(service.account(broker.id)?.balance, Decimal::from(8500_u32));
+        let holdings = service.holdings()?;
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].symbol, "AAPL");
+        assert_eq!(holdings[0].shares, Decimal::from(10_u32));
+        assert_eq!(holdings[0].cost_basis, Decimal::from(1500_u32));
+
+        // 净资产：8500 现金 + 1500 持仓（默认摊薄成本）。
+        let summary = service.balance_summary("CNY")?;
+        assert_eq!(summary.total_assets, Decimal::from(10000_u32));
+
+        // 设市价 200：持仓市值 2000，净资产 +500。
+        service.set_holding_price(holdings[0].id, Decimal::from(200_u32))?;
+        let summary = service.balance_summary("CNY")?;
+        assert_eq!(summary.total_assets, Decimal::from(10500_u32));
+
+        // 卖出 4 股 @ 200：现金 +800，持仓 6 股，成本 1500 - 4×150 = 900。
+        let sell = service.sell_stock(
+            broker.id,
+            "AAPL".to_owned(),
+            Decimal::from(4_u32),
+            Decimal::from(200_u32),
+            at,
+            "".to_owned(),
+        )?;
+        assert_eq!(sell.kind, TransactionKind::Trade);
+        assert_eq!(service.account(broker.id)?.balance, Decimal::from(9300_u32));
+        let holdings = service.holdings()?;
+        assert_eq!(holdings[0].shares, Decimal::from(6_u32));
+        assert_eq!(holdings[0].cost_basis, Decimal::from(900_u32));
+
+        // 清仓后无持仓。
+        service.sell_stock(
+            broker.id,
+            "AAPL".to_owned(),
+            Decimal::from(6_u32),
+            Decimal::from(200_u32),
+            at,
+            "".to_owned(),
+        )?;
+        assert!(service.holdings()?.is_empty());
         Ok(())
     }
 

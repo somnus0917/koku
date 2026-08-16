@@ -19,8 +19,8 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
-    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Receipt,
-    RecurrenceFrequency, RecurringRule, Tag, Transaction, TransactionKind,
+    DepositSettlement, Holding, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
+    Receipt, RecurrenceFrequency, RecurringRule, Tag, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -240,6 +240,22 @@ struct CreateRecurringRequest {
 struct ExportQuery {
     year: Option<i32>,
     month: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TradeRequest {
+    account_id: i64,
+    symbol: String,
+    shares: Decimal,
+    price: Decimal,
+    occurred_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetPriceRequest {
+    price: Decimal,
 }
 
 fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
@@ -509,6 +525,50 @@ async fn api_run_recurring(
     Ok(Json(ApiResponse::new(generated)))
 }
 
+async fn api_holdings(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Holding>>>> {
+    let holdings = lock_service(&state)?.holdings()?;
+    Ok(Json(ApiResponse::new(holdings)))
+}
+
+async fn api_buy_stock(
+    State(state): State<AppState>,
+    Json(request): Json<TradeRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let transaction = lock_service(&state)?.buy_stock(
+        request.account_id,
+        request.symbol,
+        request.shares,
+        request.price,
+        request.occurred_at.unwrap_or_else(Utc::now),
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
+async fn api_sell_stock(
+    State(state): State<AppState>,
+    Json(request): Json<TradeRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
+    let transaction = lock_service(&state)?.sell_stock(
+        request.account_id,
+        request.symbol,
+        request.shares,
+        request.price,
+        request.occurred_at.unwrap_or_else(Utc::now),
+        request.note,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
+async fn api_set_holding_price(
+    State(state): State<AppState>,
+    AxumPath(holding_id): AxumPath<i64>,
+    Json(request): Json<SetPriceRequest>,
+) -> Result<Json<ApiResponse<Holding>>> {
+    let holding = lock_service(&state)?.set_holding_price(holding_id, request.price)?;
+    Ok(Json(ApiResponse::new(holding)))
+}
+
 async fn api_transactions(
     State(state): State<AppState>,
     Query(query): Query<TransactionQuery>,
@@ -668,6 +728,11 @@ async fn api_create_transaction(
         TransactionKind::Adjustment => {
             return Err(KokuError::InvalidInput(
                 "use /api/accounts/{id}/adjust-balance to adjust a balance".to_owned(),
+            ))
+        }
+        TransactionKind::Trade => {
+            return Err(KokuError::InvalidInput(
+                "use /api/holdings/buy or /api/holdings/sell for trades".to_owned(),
             ))
         }
     };
@@ -1024,6 +1089,10 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/recurring", get(api_recurring_rules).post(api_create_recurring))
         .route("/api/recurring/run", post(api_run_recurring))
         .route("/api/recurring/{rule_id}", delete(api_delete_recurring))
+        .route("/api/holdings", get(api_holdings))
+        .route("/api/holdings/buy", post(api_buy_stock))
+        .route("/api/holdings/sell", post(api_sell_stock))
+        .route("/api/holdings/{holding_id}/price", put(api_set_holding_price))
         .route(
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),

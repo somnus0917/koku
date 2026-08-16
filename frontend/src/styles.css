@@ -1700,6 +1700,16 @@ button:disabled {
   font-weight: 650;
 }
 
+.inline-number {
+  width: 90px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 12px;
+}
+
 .transaction-table {
   padding: 9px 20px;
 }

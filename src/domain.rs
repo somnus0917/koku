@@ -108,6 +108,8 @@ pub enum TransactionKind {
     Loan,
     /// 余额调整（修正账户余额），amount 为带符号增量，不计入收支统计
     Adjustment,
+    /// 股票买卖（现金进出），amount 为带符号现金额，不计入收支统计
+    Trade,
 }
 
 impl TransactionKind {
@@ -118,6 +120,7 @@ impl TransactionKind {
             Self::Transfer => "transfer",
             Self::Loan => "loan",
             Self::Adjustment => "adjustment",
+            Self::Trade => "trade",
         }
     }
 
@@ -128,6 +131,7 @@ impl TransactionKind {
             "transfer" => Ok(Self::Transfer),
             "loan" => Ok(Self::Loan),
             "adjustment" => Ok(Self::Adjustment),
+            "trade" => Ok(Self::Trade),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown transaction kind in database: {other}"
             ))),
@@ -330,6 +334,18 @@ impl RecurrenceFrequency {
 pub struct Tag {
     pub id: i64,
     pub name: String,
+}
+
+/// 股票账户的一只持仓：股数、总成本、可选市价与摊薄成本。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    pub id: i64,
+    pub account_id: i64,
+    pub symbol: String,
+    pub shares: Decimal,
+    pub cost_basis: Decimal,
+    pub last_price: Option<Decimal>,
+    pub average_cost: Decimal,
 }
 
 /// 交易的小票/发票附件元数据（不含图片字节）。

@@ -252,6 +252,38 @@ impl BookkeepingService {
                 LoanType::Borrow => total_liabilities += outstanding,
             }
         }
+        // 股票持仓按市值（有市价用市价，否则用摊薄成本）计入资产。
+        let mut statement = self.conn.prepare(
+            "SELECT a.account_type, a.currency, h.shares, h.cost_basis, h.last_price
+             FROM holdings h JOIN accounts a ON a.id = h.account_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        for row in rows {
+            let (account_type, account_currency, shares, cost_basis, last_price) = row?;
+            if AccountType::from_db(&account_type)? != AccountType::Stock {
+                continue;
+            }
+            let shares = decimal_from_db(&shares)?;
+            let cost_basis = decimal_from_db(&cost_basis)?;
+            let last_price = last_price.as_deref().map(decimal_from_db).transpose()?;
+            let per_share = last_price.unwrap_or_else(|| {
+                if shares.is_zero() {
+                    Decimal::ZERO
+                } else {
+                    cost_basis / shares
+                }
+            });
+            let market_value = (shares * per_share).round_dp(2);
+            total_assets += self.convert_amount(market_value, &account_currency, &currency, today)?;
+        }
         Ok(BalanceSummary {
             currency,
             total_assets,

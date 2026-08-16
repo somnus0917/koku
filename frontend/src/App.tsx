@@ -33,6 +33,7 @@ import {
 import {
   ApiError,
   adjustBalance,
+  buyStock,
   clearBudget,
   createAccount,
   createCategory,
@@ -52,7 +53,9 @@ import {
   reimburse,
   repayLoan,
   runRecurring,
+  sellStock,
   setBudget,
+  setHoldingPrice,
   settleDeposit,
   unmarkReimbursable,
   updateAccount,
@@ -71,6 +74,7 @@ import {
   ReimburseModal,
   RepayModal,
   SettleDepositModal,
+  TradeModal,
   TransactionModal
 } from "./components/modals";
 import {
@@ -103,7 +107,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "insights";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -220,6 +224,8 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [settleTarget, setSettleTarget] = useState<Account | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
   const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
+  const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
+  const [tradeSymbol, setTradeSymbol] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
@@ -336,6 +342,19 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onCreateRecurring={() => setModal("recurring")}
             onDeleteRecurring={(id) =>
               void mutate(() => deleteRecurringRule(id), "周期交易已删除")
+            }
+            onBuyStock={(symbol = "") => {
+              setTradeSide("buy");
+              setTradeSymbol(symbol);
+              setModal("trade");
+            }}
+            onSellStock={(symbol) => {
+              setTradeSide("sell");
+              setTradeSymbol(symbol);
+              setModal("trade");
+            }}
+            onSetHoldingPrice={(holdingId, price) =>
+              void mutate(() => setHoldingPrice(holdingId, price), "已更新市价")
             }
           />
         );
@@ -636,6 +655,20 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           categories={data.categories}
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createRecurringRule(input), "周期交易已创建")}
+        />
+      )}
+      {modal === "trade" && data && (
+        <TradeModal
+          accounts={data.accounts}
+          initialSide={tradeSide}
+          initialSymbol={tradeSymbol}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => (input.side === "buy" ? buyStock(input.payload) : sellStock(input.payload)),
+              input.side === "buy" ? "买入已记录" : "卖出已记录"
+            )
+          }
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

@@ -9,6 +9,7 @@ import type {
   Category,
   CategoryKind,
   DepositSettlement,
+  Holding,
   Loan,
   LoanType,
   MonthlySummary,
@@ -89,7 +90,7 @@ export async function loadSummaryData(
   });
   const currencyQuery = new URLSearchParams({ currency });
   const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags] = await Promise.all([
+  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Budget[]>(`/api/budgets?${budgetQuery}`),
@@ -98,9 +99,10 @@ export async function loadSummaryData(
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
     request<Loan[]>("/api/loans"),
     request<RecurringRule[]>("/api/recurring"),
-    request<Tag[]>("/api/tags")
+    request<Tag[]>("/api/tags"),
+    request<Holding[]>("/api/holdings")
   ]);
-  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings };
 }
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
@@ -119,6 +121,41 @@ export function loadTransactions(
     query.set("month", String(month));
   }
   return request<Transaction[]>(`/api/transactions?${query.toString()}`);
+}
+
+export function buyStock(input: {
+  account_id: number;
+  symbol: string;
+  shares: string;
+  price: string;
+  occurred_at?: string;
+  note?: string;
+}): Promise<Transaction> {
+  return request("/api/holdings/buy", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function sellStock(input: {
+  account_id: number;
+  symbol: string;
+  shares: string;
+  price: string;
+  occurred_at?: string;
+  note?: string;
+}): Promise<Transaction> {
+  return request("/api/holdings/sell", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function setHoldingPrice(holdingId: number, price: string): Promise<Holding> {
+  return request(`/api/holdings/${holdingId}/price`, {
+    method: "PUT",
+    body: JSON.stringify({ price })
+  });
 }
 
 /** 给交易上传小票/发票附件（multipart；文件字段名为 `file`）。 */

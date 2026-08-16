@@ -587,7 +587,7 @@ export function TransactionModal({
   onClose: () => void;
   onSubmit: (input: TransactionSubmit) => Promise<void>;
 }) {
-  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment">>("expense");
+  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment" | "trade">>("expense");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
   const [sourceCurrency, setSourceCurrency] = useState(accounts[0]?.currency ?? "CNY");
@@ -620,7 +620,7 @@ export function TransactionModal({
     }
   }, [foreignTransaction, status, hint, amount, settledTouched]);
 
-  const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment">) => {
+  const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment" | "trade">) => {
     setKind(nextKind);
     if (nextKind !== "transfer") {
       setCategoryId(categories.find((item) => item.kind === nextKind)?.id ?? 0);
@@ -1121,6 +1121,95 @@ export function RecurringModal({
         <div className="modal-actions">
           <button type="button" className="secondary-button" onClick={onClose}>取消</button>
           <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+export function TradeModal({
+  accounts,
+  initialSide,
+  initialSymbol,
+  onClose,
+  onSubmit
+}: {
+  accounts: Account[];
+  initialSide: "buy" | "sell";
+  initialSymbol: string;
+  onClose: () => void;
+  onSubmit: (input: {
+    side: "buy" | "sell";
+    payload: {
+      account_id: number;
+      symbol: string;
+      shares: string;
+      price: string;
+      occurred_at?: string;
+      note?: string;
+    };
+  }) => Promise<void>;
+}) {
+  const stockAccounts = accounts.filter((account) => account.account_type === "stock");
+  const [side, setSide] = useState<"buy" | "sell">(initialSide);
+  const [accountId, setAccountId] = useState(stockAccounts[0]?.id ?? 0);
+  const [symbol, setSymbol] = useState(initialSymbol);
+  const [shares, setShares] = useState("");
+  const [price, setPrice] = useState("");
+  const [note, setNote] = useState("");
+  const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSubmit({
+        side,
+        payload: {
+          account_id: Number(accountId),
+          symbol,
+          shares,
+          price,
+          occurred_at: new Date(occurredAt).toISOString(),
+          note: note || undefined
+        }
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="TRADE" title={side === "buy" ? "买入股票" : "卖出股票"} onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="kind-tabs">
+          {(["buy", "sell"] as const).map((item) => (
+            <button type="button" key={item} className={side === item ? "active" : ""} onClick={() => setSide(item)}>
+              {item === "buy" ? "买入" : "卖出"}
+            </button>
+          ))}
+        </div>
+        <div className="form-grid">
+          <label><span>股票账户</span>
+            <select required value={accountId} onChange={(event) => setAccountId(Number(event.target.value))}>
+              {stockAccounts.length === 0 && <option value={0} disabled>没有股票账户</option>}
+              {stockAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label><span>代码</span><input required autoFocus value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="例如 AAPL" /></label>
+          <label><span>股数</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
+          <label><span>每股价格</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
+          <label><span>时间</span><input type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="可选" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting || !symbol || !shares || !price || !accountId}>{submitting && <LoaderCircle className="spin" size={17} />}{side === "buy" ? "买入" : "卖出"}</button>
         </div>
       </form>
     </ModalShell>

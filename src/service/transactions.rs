@@ -119,9 +119,9 @@ impl BookkeepingService {
                     "categorized transactions cannot be transfers".to_owned(),
                 ))
             }
-            TransactionKind::Loan | TransactionKind::Adjustment => {
+            TransactionKind::Loan | TransactionKind::Adjustment | TransactionKind::Trade => {
                 return Err(KokuError::InvalidInput(
-                    "categorized transactions cannot be loans or adjustments".to_owned(),
+                    "categorized transactions cannot be loans, adjustments, or trades".to_owned(),
                 ))
             }
         };
@@ -151,7 +151,10 @@ impl BookkeepingService {
             TransactionKind::Income => account
                 .account_type
                 .apply_inflow(current_balance, settled_amount),
-            TransactionKind::Transfer | TransactionKind::Loan | TransactionKind::Adjustment => {
+            TransactionKind::Transfer
+            | TransactionKind::Loan
+            | TransactionKind::Adjustment
+            | TransactionKind::Trade => {
                 unreachable!("validated above")
             }
         };
@@ -311,6 +314,12 @@ impl BookkeepingService {
             TransactionKind::Loan => {
                 return Err(KokuError::InvalidInput(
                     "loan transactions cannot be voided; repay or adjust the loan instead"
+                        .to_owned(),
+                ))
+            }
+            TransactionKind::Trade => {
+                return Err(KokuError::InvalidInput(
+                    "trade transactions cannot be voided; record an opposite trade instead"
                         .to_owned(),
                 ))
             }

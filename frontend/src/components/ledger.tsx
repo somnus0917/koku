@@ -45,6 +45,7 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  Holding,
   Loan,
   MonthlySummary,
   MonthlyTrendPoint,
@@ -324,7 +325,10 @@ export function AccountsPage({
   onCreateLoan,
   onRepay,
   onCreateRecurring,
-  onDeleteRecurring
+  onDeleteRecurring,
+  onBuyStock,
+  onSellStock,
+  onSetHoldingPrice
 }: {
   data: AppData;
   onAddAccount: () => void;
@@ -335,6 +339,9 @@ export function AccountsPage({
   onRepay: (loan: Loan) => void;
   onCreateRecurring: () => void;
   onDeleteRecurring: (id: number) => void;
+  onBuyStock: (symbol?: string) => void;
+  onSellStock: (symbol: string) => void;
+  onSetHoldingPrice: (holdingId: number, price: string) => void;
 }) {
   const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
   const cash = group("cash");
@@ -395,6 +402,15 @@ export function AccountsPage({
         categories={data.categories}
         onCreate={onCreateRecurring}
         onDelete={onDeleteRecurring}
+      />
+      <HoldingSection
+        holdings={data.holdings}
+        accounts={data.accounts}
+        display={display}
+        rates={rates}
+        onBuy={onBuyStock}
+        onSell={onSellStock}
+        onSetPrice={onSetHoldingPrice}
       />
     </div>
   );
@@ -701,13 +717,15 @@ export function TransactionRow({
     income: { icon: ArrowDownLeft, label: category?.name ?? "收入", className: "income" },
     transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" },
     loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" },
-    adjustment: { icon: RotateCcw, label: "余额调整", className: "transfer" }
+    adjustment: { icon: RotateCcw, label: "余额调整", className: "transfer" },
+    trade: { icon: TrendingUp, label: "股票交易", className: "transfer" }
   }[transaction.kind];
   const Icon = meta.icon;
   const prefix =
     transaction.kind === "expense" ? "−"
     : transaction.kind === "income" ? "+"
-    : transaction.kind === "adjustment" ? (Number(transaction.amount) > 0 ? "+" : "")
+    : transaction.kind === "adjustment" || transaction.kind === "trade"
+      ? (Number(transaction.amount) > 0 ? "+" : "")
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
   const hasReimburseActions = transaction.kind === "expense" && !transaction.voided_at && !transaction.reimbursed_at;
@@ -733,7 +751,7 @@ export function TransactionRow({
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
-        {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" ? (
+        {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" || transaction.kind === "trade" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
           <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
@@ -788,7 +806,7 @@ export function TransactionRow({
           )}
           <button
             className="row-action"
-            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan"}
+            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan" || transaction.kind === "trade"}
             onClick={onVoid}
             title="撤销并恢复余额"
             aria-label="撤销交易"
@@ -1532,6 +1550,77 @@ export function RecurringSection({
           );
         })}
         {rules.length === 0 && <EmptyState title="还没有周期交易" detail="房租、订阅等固定收支可设为自动重复。" />}
+      </div>
+    </section>
+  );
+}
+
+export function HoldingSection({
+  holdings,
+  accounts,
+  display,
+  rates,
+  onBuy,
+  onSell,
+  onSetPrice
+}: {
+  holdings: Holding[];
+  accounts: Account[];
+  display: string;
+  rates: Record<string, number>;
+  onBuy: (symbol?: string) => void;
+  onSell: (symbol: string) => void;
+  onSetPrice: (holdingId: number, price: string) => void;
+}) {
+  const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  return (
+    <section className="section-block account-group">
+      <div className="section-heading compact-heading">
+        <div><span>HOLDINGS</span><h2>股票持仓</h2></div>
+        <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> 买入</button>
+      </div>
+      <div className="account-grid">
+        {holdings.map((holding) => {
+          const account = accountMap.get(holding.account_id);
+          const currency = account?.currency ?? "CNY";
+          const shares = Number(holding.shares);
+          const lastPrice = holding.last_price !== null ? Number(holding.last_price) : null;
+          const marketValue = shares * (lastPrice ?? Number(holding.average_cost));
+          const shown = convertedMoney(String(marketValue), currency, display, rates)
+            ?? { amount: String(marketValue), currency };
+          const editing = editingId === holding.id;
+          return (
+            <article className="account-detail-card" key={holding.id}>
+              <span className="large-account-icon tone-3"><TrendingUp size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>{holding.symbol}</h3>
+                <span>
+                  {shares} 股 · 成本 {formatMoney(holding.average_cost, currency)}
+                  {lastPrice !== null ? ` · 现价 ${formatMoney(holding.last_price!, currency)}` : " · 未设现价"}
+                </span>
+              </div>
+              <strong>{formatMoney(shown.amount, shown.currency)}</strong>
+              <div className="account-card-actions">
+                {editing ? (
+                  <>
+                    <input className="inline-number" type="number" min="0" step="0.01" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="市价" autoFocus />
+                    <button className="row-action" onClick={() => { if (draft.trim()) onSetPrice(holding.id, draft.trim()); setEditingId(null); }} title="保存市价" aria-label="保存市价"><Check size={16} /></button>
+                    <button className="row-action" onClick={() => setEditingId(null)} title="取消" aria-label="取消"><X size={16} /></button>
+                  </>
+                ) : (
+                  <>
+                    <button className="row-action" onClick={() => { setDraft(holding.last_price ?? ""); setEditingId(holding.id); }} title="更新市价" aria-label="更新市价"><RefreshCcw size={16} /></button>
+                    <button className="text-button" onClick={() => onBuy(holding.symbol)}>买</button>
+                    <button className="text-button" onClick={() => onSell(holding.symbol)}>卖</button>
+                  </>
+                )}
+              </div>
+            </article>
+          );
+        })}
+        {holdings.length === 0 && <EmptyState title="还没有持仓" detail="在股票账户上买入第一笔，即可追踪持仓与成本。" />}
       </div>
     </section>
   );
