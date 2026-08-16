@@ -7,7 +7,7 @@ use axum::extract::{ConnectInfo, Extension, Path as AxumPath, Query, Request, St
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Datelike, Utc};
 use rust_decimal::Decimal;
@@ -17,7 +17,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
-    Account, AccountType, BalanceSummary, CashFlowSummary, Category, CategoryKind,
+    Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
     DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Transaction,
     TransactionKind,
 };
@@ -208,6 +208,17 @@ struct RateQuery {
     to: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct BudgetQuery {
+    year: i32,
+    month: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetBudgetRequest {
+    limit_amount: Decimal,
+}
+
 fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
     state
         .service
@@ -393,6 +404,34 @@ async fn api_delete_category(
 ) -> Result<Json<ApiResponse<Category>>> {
     let category = lock_service(&state)?.delete_category(category_id)?;
     Ok(Json(ApiResponse::new(category)))
+}
+
+async fn api_budgets(
+    State(state): State<AppState>,
+    Query(query): Query<BudgetQuery>,
+) -> Result<Json<ApiResponse<Vec<Budget>>>> {
+    let budgets = lock_service(&state)?.budgets(query.year, query.month)?;
+    Ok(Json(ApiResponse::new(budgets)))
+}
+
+async fn api_set_budget(
+    State(state): State<AppState>,
+    AxumPath(category_id): AxumPath<i64>,
+    Query(query): Query<BudgetQuery>,
+    Json(request): Json<SetBudgetRequest>,
+) -> Result<Json<ApiResponse<Budget>>> {
+    let budget =
+        lock_service(&state)?.set_budget(category_id, query.year, query.month, request.limit_amount)?;
+    Ok(Json(ApiResponse::new(budget)))
+}
+
+async fn api_clear_budget(
+    State(state): State<AppState>,
+    AxumPath(category_id): AxumPath<i64>,
+    Query(query): Query<BudgetQuery>,
+) -> Result<Json<ApiResponse<Budget>>> {
+    let budget = lock_service(&state)?.clear_budget(category_id, query.year, query.month)?;
+    Ok(Json(ApiResponse::new(budget)))
 }
 
 async fn api_transactions(
@@ -759,6 +798,11 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             get(api_categories).post(api_create_category),
         )
         .route("/api/categories/{category_id}", delete(api_delete_category))
+        .route("/api/budgets", get(api_budgets))
+        .route(
+            "/api/budgets/{category_id}",
+            put(api_set_budget).delete(api_clear_budget),
+        )
         .route(
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),
@@ -798,7 +842,13 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         Some(origin) => router.layer(
             CorsLayer::new()
                 .allow_origin(origin)
-                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                ])
                 .allow_headers([header::CONTENT_TYPE])
                 .allow_credentials(true),
         ),

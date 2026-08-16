@@ -994,6 +994,77 @@ button:disabled {
 .legend-expense i { background: var(--expense); }
 .legend-net i { background: var(--transfer); }
 
+.budget-panel {
+  margin-top: 18px;
+}
+
+.budget-panel .section-heading > small {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.budget-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.budget-row {
+  padding-bottom: 4px;
+}
+
+.budget-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.budget-category,
+.budget-amount,
+.budget-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.budget-category {
+  min-width: 0;
+  font-weight: 650;
+}
+
+.budget-amount strong {
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-weight: 500;
+}
+
+.budget-amount > span {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.budget-edit input {
+  width: 110px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.budget-track {
+  margin-top: 8px;
+  height: 7px;
+}
+
+.budget-over-note {
+  display: block;
+  margin-top: 6px;
+  color: var(--expense);
+  font-size: 11px;
+}
+
 .month-card {
   display: flex;
   flex-direction: column;

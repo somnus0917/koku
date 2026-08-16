@@ -22,6 +22,7 @@ pub struct BookkeepingService {
 }
 
 mod accounts;
+mod budgets;
 mod loans;
 mod rates;
 mod reimbursements;
@@ -66,6 +67,16 @@ impl BookkeepingService {
                 created_at TEXT NOT NULL,
                 archived_at TEXT,
                 UNIQUE(name, kind)
+            );
+
+            CREATE TABLE IF NOT EXISTS budgets (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id  INTEGER NOT NULL REFERENCES categories(id),
+                year         INTEGER NOT NULL,
+                month        INTEGER NOT NULL,
+                limit_amount TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                UNIQUE(category_id, year, month)
             );
 
             CREATE TABLE IF NOT EXISTS loans (
@@ -1030,6 +1041,52 @@ mod tests {
             .filter(|point| !point.total_income.is_zero() || !point.total_expense.is_zero())
             .count();
         assert_eq!(nonzero, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn budgets_round_trip_and_attach_limits_to_monthly_summary() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let salary = service.create_category("工资", CategoryKind::Income)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        service.record_expense(cash.id, food.id, Decimal::from(120_u32), at, "餐费")?;
+
+        // 未设预算时 monthly_summary 不返回 budget_limit。
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.expenses_by_category[0].budget_limit, None);
+
+        // 设置预算并回填。
+        let budget = service.set_budget(food.id, 2026, 8, Decimal::from(100_u32))?;
+        assert_eq!(budget.limit_amount, Decimal::from(100_u32));
+        assert_eq!(budget.category_name, "餐饮");
+        assert_eq!(budget.category_kind, CategoryKind::Expense);
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(
+            summary.expenses_by_category[0].budget_limit,
+            Some(Decimal::from(100_u32))
+        );
+
+        // 同月覆盖，列表只有一条。
+        service.set_budget(food.id, 2026, 8, Decimal::from(200_u32))?;
+        let budgets = service.budgets(2026, 8)?;
+        assert_eq!(budgets.len(), 1);
+        assert_eq!(budgets[0].limit_amount, Decimal::from(200_u32));
+
+        // 收入分类不能设预算。
+        assert!(service
+            .set_budget(salary.id, 2026, 8, Decimal::from(50_u32))
+            .is_err());
+
+        // 清除后不再回填。
+        service.clear_budget(food.id, 2026, 8)?;
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.expenses_by_category[0].budget_limit, None);
         Ok(())
     }
 

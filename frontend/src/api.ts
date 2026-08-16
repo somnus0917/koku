@@ -4,6 +4,7 @@ import type {
   AppData,
   AuthSession,
   BalanceSummary,
+  Budget,
   CashFlowSummary,
   Category,
   CategoryKind,
@@ -83,15 +84,17 @@ export async function loadSummaryData(
     currency
   });
   const currencyQuery = new URLSearchParams({ currency });
-  const [accounts, categories, monthly, cashFlow, balance, loans] = await Promise.all([
+  const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
+  const [accounts, categories, budgets, monthly, cashFlow, balance, loans] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
+    request<Budget[]>(`/api/budgets?${budgetQuery}`),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
     request<Loan[]>("/api/loans")
   ]);
-  return { accounts, categories, monthly, cashFlow, balance, loans };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, loans };
 }
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
@@ -163,6 +166,24 @@ export function createCategory(input: {
 
 export function deleteCategory(id: number): Promise<Category> {
   return request(`/api/categories/${id}`, { method: "DELETE" });
+}
+
+export function setBudget(
+  categoryId: number,
+  year: number,
+  month: number,
+  limitAmount: string
+): Promise<Budget> {
+  const query = new URLSearchParams({ year: String(year), month: String(month) });
+  return request(`/api/budgets/${categoryId}?${query.toString()}`, {
+    method: "PUT",
+    body: JSON.stringify({ limit_amount: limitAmount })
+  });
+}
+
+export function clearBudget(categoryId: number, year: number, month: number): Promise<Budget> {
+  const query = new URLSearchParams({ year: String(year), month: String(month) });
+  return request(`/api/budgets/${categoryId}?${query.toString()}`, { method: "DELETE" });
 }
 
 export function createTransaction(input: {

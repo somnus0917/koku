@@ -70,6 +70,17 @@ export interface CategoryExpense {
   category_name: string;
   amount: string;
   percentage: string;
+  /** 该分类当月预算上限；未设置时服务端不返回该字段 */
+  budget_limit?: string | null;
+}
+
+export interface Budget {
+  category_id: number;
+  category_name: string;
+  category_kind: CategoryKind;
+  year: number;
+  month: number;
+  limit_amount: string;
 }
 
 export interface MonthlySummary {
@@ -136,4 +147,5 @@ export interface AppData {
   cashFlow: CashFlowSummary;
   balance: BalanceSummary;
   loans: Loan[];
+  budgets: Budget[];
 }

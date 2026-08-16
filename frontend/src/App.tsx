@@ -33,6 +33,7 @@ import {
 import {
   ApiError,
   adjustBalance,
+  clearBudget,
   createAccount,
   createCategory,
   createDeposit,
@@ -48,6 +49,7 @@ import {
   markReimbursable,
   reimburse,
   repayLoan,
+  setBudget,
   settleDeposit,
   unmarkReimbursable,
   updateAccount,
@@ -354,7 +356,26 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           />
         );
       case "insights":
-        return <InsightsPage summary={data.monthly} cashFlow={data.cashFlow} />;
+        return (
+          <InsightsPage
+            summary={data.monthly}
+            cashFlow={data.cashFlow}
+            categories={data.categories}
+            budgets={data.budgets}
+            onSetBudget={(categoryId, limit) =>
+              void mutate(
+                () => setBudget(categoryId, data.monthly.year, data.monthly.month, limit),
+                "预算已更新"
+              )
+            }
+            onClearBudget={(categoryId) =>
+              void mutate(
+                () => clearBudget(categoryId, data.monthly.year, data.monthly.month),
+                "预算已清除"
+              )
+            }
+          />
+        );
       default:
         return (
           <Dashboard

@@ -17,6 +17,7 @@ use crate::service::BookkeepingService;
 impl BookkeepingService {
     pub fn monthly_summary(&self, year: i32, month: u32, currency: &str) -> Result<MonthlySummary> {
         let cash_flow = self.cash_flow_summary(year, month, currency)?;
+        let budget_limits = self.budget_limits(year, month)?;
         Ok(MonthlySummary {
             year,
             month,
@@ -32,6 +33,7 @@ impl BookkeepingService {
                     category_name: item.category_name,
                     amount: item.amount,
                     percentage: item.percentage,
+                    budget_limit: budget_limits.get(&item.category_id).copied(),
                 })
                 .collect(),
         })

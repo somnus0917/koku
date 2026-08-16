@@ -7,6 +7,7 @@ import {
   BadgeDollarSign,
   Banknote,
   ChartNoAxesCombined,
+  Check,
   ChevronDown,
   CircleCheck,
   CircleDollarSign,
@@ -38,6 +39,7 @@ import type {
   Account,
   AccountType,
   AppData,
+  Budget,
   CashFlowSummary,
   Category,
   CategoryKind,
@@ -749,7 +751,21 @@ export function TransactionRow({
   );
 }
 
-export function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; cashFlow: CashFlowSummary }) {
+export function InsightsPage({
+  summary,
+  cashFlow,
+  categories,
+  budgets,
+  onSetBudget,
+  onClearBudget
+}: {
+  summary: MonthlySummary;
+  cashFlow: CashFlowSummary;
+  categories: Category[];
+  budgets: Budget[];
+  onSetBudget: (categoryId: number, limit: string) => void;
+  onClearBudget: (categoryId: number) => void;
+}) {
   const gradient = buildDonutGradient(summary);
   return (
     <div className="page page-enter">
@@ -761,6 +777,13 @@ export function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; c
       </section>
       <MonthlyTrendPanel currency={summary.currency} />
       <CashFlowSankey summary={cashFlow} />
+      <BudgetPanel
+        summary={summary}
+        categories={categories}
+        budgets={budgets}
+        onSetBudget={onSetBudget}
+        onClearBudget={onClearBudget}
+      />
       <section className="insights-grid">
         <article className="panel donut-panel">
           <div className="section-heading compact-heading"><div><span>CATEGORY MIX</span><h2>分类占比</h2></div></div>
@@ -881,6 +904,140 @@ export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPo
         <span className="legend-net"><i />结余</span>
       </div>
     </div>
+  );
+}
+
+export function BudgetPanel({
+  summary,
+  categories,
+  budgets,
+  onSetBudget,
+  onClearBudget
+}: {
+  summary: MonthlySummary;
+  categories: Category[];
+  budgets: Budget[];
+  onSetBudget: (categoryId: number, limit: string) => void;
+  onClearBudget: (categoryId: number) => void;
+}) {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const expenseCategories = useMemo(
+    () => categories.filter((category) => category.kind === "expense"),
+    [categories]
+  );
+  const actualByCategory = useMemo(
+    () => new Map(summary.expenses_by_category.map((item) => [item.category_id, Number(item.amount)])),
+    [summary.expenses_by_category]
+  );
+  const limitByCategory = useMemo(
+    () => new Map(budgets.map((budget) => [budget.category_id, budget.limit_amount])),
+    [budgets]
+  );
+  const rows = expenseCategories.filter(
+    (category) => actualByCategory.has(category.id) || limitByCategory.has(category.id)
+  );
+  return (
+    <section className="panel budget-panel">
+      <div className="section-heading compact-heading">
+        <div><span>BUDGET</span><h2>月度预算</h2></div>
+        <small>{summary.year}年{summary.month}月</small>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyState title="还没有预算" detail="在支出分类上设置月度上限，即可跟踪预算进度。" />
+      ) : (
+        <div className="budget-list">
+          {rows.map((category) => {
+            const actual = actualByCategory.get(category.id) ?? 0;
+            const limit = limitByCategory.get(category.id);
+            const limitNumber = limit === undefined ? null : Number(limit);
+            const over = limitNumber !== null && actual > limitNumber;
+            const ratio = limitNumber !== null && limitNumber > 0 ? actual / limitNumber : 0;
+            const editing = editingId === category.id;
+            return (
+              <div className={`budget-row ${over ? "over" : ""}`} key={category.id}>
+                <div className="budget-row-head">
+                  <span className="budget-category">
+                    <CategoryAvatar name={category.name} size="small" />
+                    {category.name}
+                  </span>
+                  {editing ? (
+                    <span className="budget-edit">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        placeholder="每月上限"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        className="row-action"
+                        title="保存预算"
+                        aria-label="保存预算"
+                        onClick={() => {
+                          if (draft.trim()) onSetBudget(category.id, draft.trim());
+                          setEditingId(null);
+                        }}
+                      ><Check size={16} /></button>
+                      {limit !== undefined && (
+                        <button
+                          type="button"
+                          className="row-action"
+                          title="清除预算"
+                          aria-label="清除预算"
+                          onClick={() => {
+                            onClearBudget(category.id);
+                            setEditingId(null);
+                          }}
+                        ><Trash2 size={16} /></button>
+                      )}
+                      <button
+                        type="button"
+                        className="row-action"
+                        title="取消"
+                        aria-label="取消"
+                        onClick={() => setEditingId(null)}
+                      ><X size={16} /></button>
+                    </span>
+                  ) : (
+                    <span className="budget-amount">
+                      <strong>{formatMoney(String(actual), summary.currency)}</strong>
+                      <span>{limitNumber === null ? " / 未设预算" : ` / ${formatMoney(limit!, summary.currency)}`}</span>
+                      <button
+                        type="button"
+                        className="row-action"
+                        title="设置预算"
+                        aria-label="设置预算"
+                        onClick={() => {
+                          setDraft(limit ?? "");
+                          setEditingId(category.id);
+                        }}
+                      ><MoreHorizontal size={16} /></button>
+                    </span>
+                  )}
+                </div>
+                <div className="bar-track budget-track">
+                  <i
+                    style={{
+                      width: `${Math.min(100, ratio * 100)}%`,
+                      background: over ? "var(--expense)" : categoryVisual(category.name).color
+                    }}
+                  />
+                </div>
+                {over && (
+                  <small className="budget-over-note">
+                    已超支 {formatMoney(String(actual - limitNumber!), summary.currency)}
+                  </small>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

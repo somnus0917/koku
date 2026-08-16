@@ -276,6 +276,20 @@ pub struct CategoryExpense {
     pub category_name: String,
     pub amount: Decimal,
     pub percentage: Decimal,
+    /// 该分类当月的预算上限；未设置时不序列化。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_limit: Option<Decimal>,
+}
+
+/// 某分类在某自然月的预算上限。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Budget {
+    pub category_id: i64,
+    pub category_name: String,
+    pub category_kind: CategoryKind,
+    pub year: i32,
+    pub month: u32,
+    pub limit_amount: Decimal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
