@@ -59,7 +59,9 @@ services:
 
 networks:
   backend:
-    internal: true
+    # 需要出站：api 容器要拉取公开汇率（Frankfurter / currency-api）做跨币种折算。
+    # 不要设 internal: true——Docker 内部网络禁止一切对外通信，会导致汇率查询
+    # 永远失败。bridge 网络不发布端口，对公网暴露面不变。
   proxy:
     name: proxy
     external: true
