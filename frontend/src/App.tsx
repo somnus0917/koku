@@ -57,6 +57,7 @@ import {
   unmarkReimbursable,
   updateAccount,
   updateTransaction,
+  uploadReceipt,
   voidTransaction
 } from "./api";
 import {
@@ -360,6 +361,9 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               setEditTransaction(transaction);
               setModal("edit-transaction");
             }}
+            onUploadReceipt={(transaction, file) =>
+              void mutate(() => uploadReceipt(transaction.id, file), "小票已上传")
+            }
             onLoadMore={loadMore}
             loadingMore={loadingMore}
             hasMore={txHasMore}

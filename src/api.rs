@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use axum::extract::{ConnectInfo, Extension, Path as AxumPath, Query, Request, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path as AxumPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -19,7 +19,7 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
-    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
+    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Receipt,
     RecurrenceFrequency, RecurringRule, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
@@ -705,6 +705,49 @@ async fn api_update_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+async fn api_upload_receipt(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<ApiResponse<Receipt>>)> {
+    let mut content_type: Option<String> = None;
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| KokuError::InvalidInput(format!("invalid multipart upload: {error}")))?
+    {
+        if field.name() == Some("file") {
+            content_type = field.content_type().map(|value| value.to_string());
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|error| KokuError::InvalidInput(format!("could not read upload: {error}")))?;
+            data = Some(bytes.to_vec());
+        }
+    }
+    let data = data.ok_or_else(|| {
+        KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
+    })?;
+    let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
+    let receipt = lock_service(&state)?.attach_receipt(transaction_id, content_type, data)?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
+}
+
+async fn api_get_receipt(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Response> {
+    let (content_type, bytes) = lock_service(&state)?.receipt_bytes(transaction_id)?;
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    let header_value = HeaderValue::from_str(&content_type)
+        .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, header_value);
+    Ok(response)
+}
+
 async fn api_create_deposit(
     State(state): State<AppState>,
     Json(request): Json<CreateDepositRequest>,
@@ -975,6 +1018,12 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route(
             "/api/transactions/{transaction_id}/reimbursable",
             post(api_mark_reimbursable).delete(api_unmark_reimbursable),
+        )
+        .route(
+            "/api/transactions/{transaction_id}/receipt",
+            post(api_upload_receipt)
+                .get(api_get_receipt)
+                .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/api/reimbursements", post(api_reimburse))
         .route("/api/deposits", post(api_create_deposit))

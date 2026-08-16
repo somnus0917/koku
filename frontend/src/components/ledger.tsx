@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   LoaderCircle,
   MoreHorizontal,
+  Paperclip,
   PiggyBank,
   Plus,
   ReceiptText,
@@ -34,7 +35,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
-import { exportTransactions, loadTrend, rateHint } from "../api";
+import { exportTransactions, loadTrend, rateHint, receiptUrl } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -480,6 +481,7 @@ export function TransactionsPage({
   onUnmarkReimbursable,
   onReimburse,
   onEdit,
+  onUploadReceipt,
   onLoadMore,
   loadingMore = false,
   hasMore = false,
@@ -493,6 +495,7 @@ export function TransactionsPage({
   onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
   onEdit: (transaction: Transaction) => void;
+  onUploadReceipt: (transaction: Transaction, file: File) => void;
   onLoadMore?: () => void;
   loadingMore?: boolean;
   hasMore?: boolean;
@@ -572,6 +575,7 @@ export function TransactionsPage({
             onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
             onReimburse={() => onReimburse(transaction)}
             onEdit={() => onEdit(transaction)}
+            onUploadReceipt={(file) => onUploadReceipt(transaction, file)}
           />
         ))}
         {filtered.length === 0 && <EmptyState title="没有找到交易" detail="换个关键词，或记录一笔新的交易。" />}
@@ -642,7 +646,8 @@ export function TransactionRow({
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
-  onEdit
+  onEdit,
+  onUploadReceipt
 }: {
   transaction: Transaction;
   account?: Account;
@@ -659,9 +664,12 @@ export function TransactionRow({
   onReimburse?: () => void;
   /** 传入后在行最右侧显示 ⋯ 菜单（编辑交易） */
   onEdit?: () => void;
+  /** 传入后菜单里出现「上传小票」 */
+  onUploadReceipt?: (file: File) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   // 点击菜单外部时关闭。
   useEffect(() => {
     if (!menuOpen) return;
@@ -723,6 +731,7 @@ export function TransactionRow({
           <span className="transaction-meta">
             <span>{meta.label}</span>
             {reimbursable ? <span className="reimburse-status">待报销</span> : ""}
+            {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> 小票</span> : ""}
           </span>
         </div>
       </div>
@@ -784,6 +793,37 @@ export function TransactionRow({
               <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onEdit(); }}>
                 编辑交易
               </button>
+              {onUploadReceipt && (
+                <>
+                  <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
+                    上传小票
+                  </button>
+                  {transaction.has_receipt && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        window.open(receiptUrl(transaction.id), "_blank", "noopener");
+                      }}
+                    >
+                      查看小票
+                    </button>
+                  )}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) onUploadReceipt(file);
+                      event.target.value = "";
+                      setMenuOpen(false);
+                    }}
+                  />
+                </>
+              )}
             </div>
           )}
         </div>

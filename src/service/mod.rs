@@ -25,6 +25,7 @@ mod accounts;
 mod budgets;
 mod loans;
 mod rates;
+mod receipts;
 mod recurring;
 mod reimbursements;
 mod summaries;
@@ -91,6 +92,13 @@ impl BookkeepingService {
                 next_due_at TEXT NOT NULL,
                 created_at  TEXT NOT NULL,
                 paused_at   TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS receipts (
+                transaction_id INTEGER PRIMARY KEY REFERENCES transactions(id),
+                content_type   TEXT NOT NULL,
+                data           BLOB NOT NULL,
+                created_at     TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS loans (
@@ -335,7 +343,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -461,6 +469,7 @@ type TransactionRow = (
     Option<String>,
     Option<String>,
     String,
+    bool,
 );
 
 fn account_from_row(row: AccountRow) -> Result<Account> {
@@ -503,6 +512,7 @@ fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> 
         row.get(14)?,
         row.get(15)?,
         row.get(16)?,
+        row.get(17)?,
     ))
 }
 
@@ -525,6 +535,7 @@ fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         reimbursable_at: row.14.as_deref().map(parse_timestamp).transpose()?,
         reimbursed_at: row.15.as_deref().map(parse_timestamp).transpose()?,
         reimbursed_amount: decimal_from_db(&row.16)?,
+        has_receipt: row.17,
     })
 }
 
@@ -1138,6 +1149,33 @@ mod tests {
             service.recurring_rule(rule.id),
             Err(KokuError::NotFound { entity, .. }) if entity == "recurring rule"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn receipts_attach_and_round_trip_binary_data() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(10_u32), at, "餐费")?;
+        assert!(!expense.has_receipt);
+        assert!(service.receipt(expense.id).is_err());
+
+        let bytes = vec![0_u8, 1, 2, 255, 254];
+        let receipt = service.attach_receipt(expense.id, "image/png".to_owned(), bytes.clone())?;
+        assert_eq!(receipt.byte_length, 5);
+        assert_eq!(receipt.content_type, "image/png");
+
+        assert!(service.transaction(expense.id)?.has_receipt);
+        let (content_type, data) = service.receipt_bytes(expense.id)?;
+        assert_eq!(content_type, "image/png");
+        assert_eq!(data, bytes);
         Ok(())
     }
 

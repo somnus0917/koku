@@ -2614,6 +2614,16 @@ button:disabled {
   opacity: 0.72;
 }
 
+.transaction-meta .receipt-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+}
+
 .reimbursed-indicator {
   display: grid;
   width: 31px;

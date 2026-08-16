@@ -6,7 +6,7 @@ rust-version = "1.88"
 description = "A minimal, private, SQLite-backed personal finance MVP"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 bcrypt = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
 getrandom = "0.4"

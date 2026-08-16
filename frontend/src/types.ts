@@ -46,6 +46,7 @@ export interface Transaction {
   reimbursable_at: string | null;
   reimbursed_at: string | null;
   reimbursed_amount: string;
+  has_receipt: boolean;
 }
 
 export interface Loan {
@@ -94,6 +95,13 @@ export interface RecurringRule {
   frequency: RecurrenceFrequency;
   next_due_at: string;
   paused_at: string | null;
+}
+
+export interface Receipt {
+  transaction_id: number;
+  content_type: string;
+  byte_length: number;
+  created_at: string;
 }
 
 export interface MonthlySummary {

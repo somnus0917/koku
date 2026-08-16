@@ -14,6 +14,7 @@ import type {
   MonthlySummary,
   MonthlyTrendPoint,
   RateQuote,
+  Receipt,
   RecurrenceFrequency,
   RecurringRule,
   Transaction,
@@ -116,6 +117,33 @@ export function loadTransactions(
     query.set("month", String(month));
   }
   return request<Transaction[]>(`/api/transactions?${query.toString()}`);
+}
+
+/** 给交易上传小票/发票附件（multipart；文件字段名为 `file`）。 */
+export function uploadReceipt(transactionId: number, file: File): Promise<Receipt> {
+  const form = new FormData();
+  form.append("file", file);
+  return fetch(`${API_BASE}/api/transactions/${transactionId}/receipt`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form
+  }).then(async (response) => {
+    const payload = (await response.json().catch(() => ({}))) as Partial<Envelope<Receipt>> & {
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new ApiError(payload.error ?? `上传失败（${response.status}）`, response.status);
+    }
+    if (payload.data === undefined) {
+      throw new Error("服务返回了无效数据");
+    }
+    return payload.data;
+  });
+}
+
+/** 小票附件的取图地址（同源、带会话 Cookie）。 */
+export function receiptUrl(transactionId: number): string {
+  return `${API_BASE}/api/transactions/${transactionId}/receipt`;
 }
 
 /** 查询最近 `months` 个月的收支趋势（收入/支出/结余逐月折算到显示币种）。 */

@@ -212,6 +212,8 @@ pub struct Transaction {
     pub reimbursed_at: Option<DateTime<Utc>>,
     /// 累计已报销金额（原币种）
     pub reimbursed_amount: Decimal,
+    /// 是否已挂有小票/发票附件
+    pub has_receipt: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +320,15 @@ impl RecurrenceFrequency {
             ))),
         }
     }
+}
+
+/// 交易的小票/发票附件元数据（不含图片字节）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Receipt {
+    pub transaction_id: i64,
+    pub content_type: String,
+    pub byte_length: usize,
+    pub created_at: DateTime<Utc>,
 }
 
 /// 周期交易模板：到点自动生成一笔收入/支出并推进下一次生成时间。
