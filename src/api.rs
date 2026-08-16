@@ -1,5 +1,6 @@
 //! REST API：请求/响应 DTO、鉴权中间件、处理器与路由。
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -231,11 +232,26 @@ struct CreateRecurringRequest {
     next_due_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+}
+
 fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
     state
         .service
         .lock()
         .map_err(|_| KokuError::InvalidInput("bookkeeping service lock was poisoned".to_owned()))
+}
+
+/// 把单个单元格转成 CSV 字段：含逗号/引号/换行时用引号包裹并转义引号。
+fn csv_field(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_owned()
+    }
 }
 
 async fn require_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
@@ -501,6 +517,96 @@ async fn api_transactions(
         }
     };
     Ok(Json(ApiResponse::new(transactions)))
+}
+
+async fn api_export_transactions(
+    State(state): State<AppState>,
+    Query(query): Query<ExportQuery>,
+) -> Result<Response> {
+    let service = lock_service(&state)?;
+    // 分页拉全量（复用既有 1000 上限，逐页累积）。
+    let mut all = Vec::new();
+    let mut offset = 0_u32;
+    loop {
+        let page = match (query.year, query.month) {
+            (Some(year), Some(month)) => service.transactions_in_month(year, month, 1000, offset)?,
+            (None, None) => service.transactions(1000, offset)?,
+            _ => {
+                return Err(KokuError::InvalidInput(
+                    "year and month must be provided together".to_owned(),
+                ))
+            }
+        };
+        let count = page.len();
+        all.extend(page);
+        offset += count as u32;
+        if count < 1000 {
+            break;
+        }
+    }
+
+    let account_names: HashMap<i64, String> = service
+        .accounts()?
+        .into_iter()
+        .map(|account| (account.id, account.name))
+        .collect();
+    let category_names: HashMap<i64, String> = service
+        .categories()?
+        .into_iter()
+        .map(|category| (category.id, category.name))
+        .collect();
+
+    let mut csv = String::from(
+        "id,kind,account,target_account,category,amount,currency,settled_amount,occurred_at,note,voided_at\n",
+    );
+    for tx in &all {
+        let fields = [
+            tx.id.to_string(),
+            tx.kind.as_str().to_owned(),
+            account_names
+                .get(&tx.account_id)
+                .cloned()
+                .unwrap_or_default(),
+            tx.to_account_id
+                .and_then(|id| account_names.get(&id).cloned())
+                .unwrap_or_default(),
+            tx.category_id
+                .and_then(|id| category_names.get(&id).cloned())
+                .unwrap_or_default(),
+            tx.amount.normalize().to_string(),
+            tx.currency.clone(),
+            tx.settled_amount.normalize().to_string(),
+            tx.occurred_at.to_rfc3339(),
+            tx.note.clone(),
+            tx.voided_at
+                .map(|value| value.to_rfc3339())
+                .unwrap_or_default(),
+        ];
+        csv.push_str(
+            &fields
+                .iter()
+                .map(|field| csv_field(field))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        csv.push('\n');
+    }
+
+    let filename = match (query.year, query.month) {
+        (Some(year), Some(month)) => format!("koku-transactions-{year}-{month:02}.csv"),
+        _ => "koku-transactions.csv".to_owned(),
+    };
+    let mut response = Response::new(axum::body::Body::from(csv));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+        .map_err(|error| KokuError::InvalidInput(format!("invalid filename: {error}")))?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
+    Ok(response)
 }
 
 async fn api_create_transaction(
@@ -860,6 +966,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),
         )
+        .route("/api/transactions/export", get(api_export_transactions))
         .route("/api/transfers", post(api_create_transfer))
         .route(
             "/api/transactions/{transaction_id}",
@@ -909,4 +1016,17 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
     };
     // 请求级 tracing（方法/路径/状态码/耗时），配合 tracing_subscriber 输出。
     router.layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::csv_field;
+
+    #[test]
+    fn csv_field_escapes_only_when_needed() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("line\nbreak"), "\"line\nbreak\"");
+    }
 }

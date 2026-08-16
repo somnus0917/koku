@@ -12,6 +12,7 @@ import {
   CircleCheck,
   CircleDollarSign,
   CreditCard,
+  Download,
   Eye,
   EyeOff,
   Handshake,
@@ -33,7 +34,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
-import { loadTrend, rateHint } from "../api";
+import { exportTransactions, loadTrend, rateHint } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -481,7 +482,9 @@ export function TransactionsPage({
   onEdit,
   onLoadMore,
   loadingMore = false,
-  hasMore = false
+  hasMore = false,
+  exportYear,
+  exportMonth
 }: {
   data: AppData;
   onAdd: () => void;
@@ -493,9 +496,24 @@ export function TransactionsPage({
   onLoadMore?: () => void;
   loadingMore?: boolean;
   hasMore?: boolean;
+  exportYear?: number;
+  exportMonth?: number;
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportTransactions(exportYear, exportMonth);
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : "导出失败");
+    } finally {
+      setExporting(false);
+    }
+  };
   const accountsById = useMemo(() => new Map(data.accounts.map((item) => [item.id, item])), [data.accounts]);
   const categoriesById = useMemo(() => new Map(data.categories.map((item) => [item.id, item])), [data.categories]);
   const display = data.monthly.currency;
@@ -526,7 +544,18 @@ export function TransactionsPage({
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          className="text-button export-button"
+          onClick={() => void handleExport()}
+          disabled={exporting}
+          title={exportYear !== undefined && exportMonth !== undefined ? `导出 ${exportYear}年${exportMonth}月` : "导出全部交易"}
+        >
+          {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+          {exporting ? "导出中…" : "导出 CSV"}
+        </button>
       </div>
+      {exportError && <div className="inline-error">导出失败:{exportError}</div>}
       <article className="panel transaction-table">
         <div className="table-header"><span>交易</span><span>账户</span><span>日期</span><span>金额</span><span /><span /></div>
         {filtered.map((transaction) => (

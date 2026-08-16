@@ -1630,6 +1630,20 @@ button:disabled {
   box-shadow: 0 2px 7px rgba(20, 24, 20, 0.07);
 }
 
+.export-button {
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.export-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .transaction-table {
   padding: 9px 20px;
 }

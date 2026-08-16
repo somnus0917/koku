@@ -213,6 +213,33 @@ export function runRecurring(): Promise<Transaction[]> {
   return request("/api/recurring/run", { method: "POST" });
 }
 
+/** 导出交易为 CSV 并触发浏览器下载；传入 year/month 时仅导出该自然月。 */
+export async function exportTransactions(year?: number, month?: number): Promise<void> {
+  const query = new URLSearchParams();
+  if (year !== undefined && month !== undefined) {
+    query.set("year", String(year));
+    query.set("month", String(month));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE}/api/transactions/export${suffix}`, {
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(payload.error ?? `导出失败（${response.status}）`, response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  link.download = disposition.match(/filename="?([^"]+)"?/)?.[1] ?? "koku-transactions.csv";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export function createTransaction(input: {
   kind: Exclude<TransactionKind, "transfer">;
   account_id: number;

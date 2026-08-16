@@ -363,6 +363,8 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onLoadMore={loadMore}
             loadingMore={loadingMore}
             hasMore={txHasMore}
+            exportYear={year}
+            exportMonth={month}
           />
         );
       case "insights":
