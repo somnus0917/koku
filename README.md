@@ -14,10 +14,21 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 借款：借入/借出任意账户（如从储蓄借出、还到零钱），未结应收/应付计入净资产
 - SQLite 原子余额更新与账单撤销
 - `rust_decimal` 精确货币计算，API 金额统一序列化为字符串
-- 月度收支、净结余、分类占比与净资产统计
+- 月度收支、净结余、分类占比与净资产统计，以及近 12 个月收支趋势图
 - 28 个开箱即用的收入/支出分类，并支持自定义补充
 - 每个预设分类拥有独立图标、配色和头像，自定义分类自动生成稳定视觉样式
 - 桌面 Sankey 与手机纵向流量卡片两套现金流视图
+- 交易列表分页 + 按月筛选、全文搜索与标签筛选
+- 月度预算：按分类设置上限，超支红色进度条
+- 周期交易：房租/订阅等固定收支按月/周自动生成（请求驱动，无后台任务）
+- CSV 导出：全部或按月的交易流水，浏览器直接下载
+- 标签：跨类目聚合（多对多），表单自由输入 + 列表筛选
+- 股票持仓：买入/卖出（摊薄成本）、市价更新，持仓市值计入净资产
+- 报销附件：交易可挂小票/发票图片（存 SQLite BLOB）
+- 到期提醒：Dashboard 顶部提示已到期未结的定存与借款
+- 应用内改密码（修改后旧会话全部失效）
+- PWA：可添加到主屏幕，离线缓存应用外壳（账本 API 仍走网络）
+- 快速记账：记住上次使用的账户/分类，打开即预填
 - 响应式桌面/移动界面、底部快捷导航、浅色/深色主题
 - 本地 SQLite 持久化，首次启动自动生成演示账本
 - 旧版 SQLite 数据启动时自动迁移（含 asset/liability → 零钱/信用），无需手工转换
@@ -221,17 +232,28 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话 |
 | `GET` | `/api/auth/session` | 查询当前登录用户 |
 | `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
+| `POST` | `/api/auth/password` | 应用内改密码（校验旧密码，作废全部会话） |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
 | `PATCH` | `/api/accounts/{id}` | 编辑账户（名称/类型/币种；有交易历史时不可改币种） |
 | `POST` | `/api/accounts/{id}/adjust-balance` | 余额调整（带符号增量，生成可追溯的调整流水） |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
-| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤 |
+| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤；记录时可带 `tag_names` |
+| `GET` | `/api/transactions/export` | 导出交易为 CSV（可选 `?year=&month=`），触发浏览器下载 |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
-| `PATCH` | `/api/transactions/{id}` | 编辑收入/支出（备注/时间/分类/金额/账户/结算额，余额原子联动；已撤销、转账/借款、已报销的流水有编辑限制） |
+| `PATCH` | `/api/transactions/{id}` | 编辑收入/支出（备注/时间/分类/金额/账户/结算额/标签，余额原子联动；已撤销、转账/借款、已报销的流水有编辑限制） |
 | `POST/DELETE` | `/api/transactions/{id}/reimbursable` | 标记/取消"待报销"（已发生报销的支出不可取消） |
+| `POST/GET` | `/api/transactions/{id}/receipt` | 上传（multipart `file` 字段）或读取交易的小票/发票图片 |
 | `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水；撤销支出会级联撤销报销收入） |
+| `GET` | `/api/tags` | 查询全部标签 |
+| `GET/PUT/DELETE` | `/api/budgets` / `/api/budgets/{category_id}` | 查询/设置/清除某分类某月预算（`?year=&month=`） |
+| `GET/POST` | `/api/recurring` | 查询或创建周期交易（每月/每周） |
+| `POST` | `/api/recurring/run` | 触发到期周期交易生成（请求驱动） |
+| `DELETE` | `/api/recurring/{id}` | 删除周期交易 |
+| `GET` | `/api/holdings` | 查询股票持仓 |
+| `POST` | `/api/holdings/buy` / `/api/holdings/sell` | 买入/卖出股票（现金与持仓联动） |
+| `PUT` | `/api/holdings/{id}/price` | 更新持仓市价 |
 | `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |
 | `POST` | `/api/deposits/{id}/settle` | 结清定期：按持有天数计息并把本息转回 |
 | `GET/POST` | `/api/loans` | 查询或创建借出/借入 |
