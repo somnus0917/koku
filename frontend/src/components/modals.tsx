@@ -1223,3 +1223,55 @@ export function TradeModal({
     </ModalShell>
   );
 }
+
+export function PasswordModal({
+  onClose,
+  onSubmit
+}: {
+  onClose: () => void;
+  onSubmit: (oldPassword: string, newPassword: string) => Promise<void>;
+}) {
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    if (newPassword.length < 8) {
+      setError("新密码至少 8 位");
+      setSubmitting(false);
+      return;
+    }
+    if (newPassword !== confirm) {
+      setError("两次输入的新密码不一致");
+      setSubmitting(false);
+      return;
+    }
+    try {
+      await onSubmit(oldPassword, newPassword);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "修改失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="SECURITY" title="修改密码" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="form-grid">
+          <label className="span-two"><span>当前密码</span><input required type="password" autoFocus autoComplete="current-password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
+          <label className="span-two"><span>新密码（至少 8 位）</span><input required type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+          <label className="span-two"><span>确认新密码</span><input required type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+        </div>
+        <p className="fx-hint">修改后所有登录会话将失效，需要重新登录。</p>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting || !oldPassword || !newPassword || !confirm}>{submitting && <LoaderCircle className="spin" size={17} />}保存并重新登录</button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}

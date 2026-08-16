@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path as AxumPath, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
@@ -31,6 +31,8 @@ use crate::throttle::LoginThrottle;
 pub struct AppState {
     pub service: Arc<Mutex<BookkeepingService>>,
     pub auth: Arc<AuthConfig>,
+    /// 当前生效的密码哈希（可随应用内改密码更新；启动时优先取持久化值）。
+    pub password_hash: Arc<RwLock<String>>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
     pub rates: Arc<RateClient>,
 }
@@ -97,6 +99,12 @@ struct CreateTransferRequest {
 struct LoginRequest {
     username: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChangePasswordRequest {
+    old_password: String,
+    new_password: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -313,7 +321,11 @@ async fn api_login(
     }
 
     let password = request.password;
-    let password_hash = state.auth.password_hash.clone();
+    let password_hash = state
+        .password_hash
+        .read()
+        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))?
+        .clone();
     let password_matches =
         tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash))
             .await
@@ -373,6 +385,44 @@ async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+async fn api_change_password(
+    State(state): State<AppState>,
+    Json(request): Json<ChangePasswordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    let old_password = request.old_password;
+    let new_password = request.new_password;
+    if new_password.chars().count() < 8 {
+        return Err(KokuError::InvalidInput(
+            "new password must be at least 8 characters".to_owned(),
+        ));
+    }
+    let current_hash = state
+        .password_hash
+        .read()
+        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))?
+        .clone();
+    let old_matches = tokio::task::spawn_blocking(move || bcrypt::verify(old_password, &current_hash))
+        .await
+        .map_err(|error| KokuError::AuthConfiguration(format!("password verification task failed: {error}")))?
+        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+    if !old_matches {
+        return Err(KokuError::InvalidCredentials);
+    }
+    let new_hash = tokio::task::spawn_blocking(move || bcrypt::hash(new_password, bcrypt::DEFAULT_COST))
+        .await
+        .map_err(|error| KokuError::AuthConfiguration(format!("password hashing task failed: {error}")))?
+        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+
+    lock_service(&state)?.set_setting("password_hash", &new_hash)?;
+    *state
+        .password_hash
+        .write()
+        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))? = new_hash;
+    lock_service(&state)?.delete_all_auth_sessions()?;
+    tracing::info!(target: "auth", "password changed; all sessions invalidated");
+    Ok(Json(ApiResponse::new(serde_json::json!({ "changed": true }))))
 }
 
 async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
@@ -1129,6 +1179,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/summary/balance", get(api_balance_summary))
         .route("/api/rates", get(api_rate_hint))
         .route("/api/auth/session", get(api_auth_session))
+        .route("/api/auth/password", post(api_change_password))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let router = Router::new()
         .route("/api/health", get(api_health))

@@ -198,6 +198,11 @@ impl BookkeepingService {
                 created_at TEXT NOT NULL,
                 expires_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
                 ON auth_sessions(expires_at);
             "#,
@@ -321,6 +326,34 @@ impl BookkeepingService {
         self.conn.execute(
             "DELETE FROM auth_sessions WHERE token_hash = ?1",
             [session_token_hash(token)],
+        )?;
+        Ok(())
+    }
+
+    /// 作废所有登录会话（改密码后强制重新登录）。
+    pub fn delete_all_auth_sessions(&mut self) -> Result<()> {
+        self.conn.execute("DELETE FROM auth_sessions", [])?;
+        Ok(())
+    }
+
+    /// 读取持久化的应用设置；不存在时返回 None。
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(KokuError::from)
+    }
+
+    /// 写入（覆盖）一条应用设置。
+    pub fn set_setting(&mut self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
         )?;
         Ok(())
     }
@@ -859,6 +892,22 @@ mod tests {
         let second_token = service.create_auth_session("somnus", 3600)?;
         service.delete_auth_session(&second_token)?;
         assert_eq!(service.authenticated_username(&second_token)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn app_settings_round_trip_and_sessions_can_be_invalidated() -> Result<()> {
+        let mut service = test_service()?;
+        assert_eq!(service.get_setting("password_hash")?, None);
+        service.set_setting("password_hash", "hashed")?;
+        assert_eq!(service.get_setting("password_hash")?.as_deref(), Some("hashed"));
+        service.set_setting("password_hash", "new")?;
+        assert_eq!(service.get_setting("password_hash")?.as_deref(), Some("new"));
+
+        let token = service.create_auth_session("somnus", 3600)?;
+        assert!(service.authenticated_username(&token)?.is_some());
+        service.delete_all_auth_sessions()?;
+        assert_eq!(service.authenticated_username(&token)?, None);
         Ok(())
     }
 

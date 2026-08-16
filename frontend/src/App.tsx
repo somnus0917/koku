@@ -14,6 +14,7 @@ import {
   CircleDollarSign,
   Eye,
   EyeOff,
+  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
@@ -34,6 +35,7 @@ import {
   ApiError,
   adjustBalance,
   buyStock,
+  changePassword,
   clearBudget,
   createAccount,
   createCategory,
@@ -70,6 +72,7 @@ import {
   EditAccountModal,
   EditTransactionModal,
   LoanModal,
+  PasswordModal,
   RecurringModal,
   ReimburseModal,
   RepayModal,
@@ -107,7 +110,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "insights";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -464,6 +467,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             </span>
             <MoreHorizontal size={18} />
           </button>
+          <button className="password-button" onClick={() => setModal("password")} aria-label="修改密码" title="修改密码"><KeyRound size={17} /></button>
           <button className="logout-button" onClick={() => void onLogout()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
         </div>
       </aside>
@@ -669,6 +673,16 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               input.side === "buy" ? "买入已记录" : "卖出已记录"
             )
           }
+        />
+      )}
+      {modal === "password" && (
+        <PasswordModal
+          onClose={() => setModal(null)}
+          onSubmit={async (oldPassword, newPassword) => {
+            await changePassword(oldPassword, newPassword);
+            setModal(null);
+            await onLogout();
+          }}
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

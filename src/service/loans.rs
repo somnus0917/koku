@@ -11,6 +11,7 @@ use crate::service::BookkeepingService;
 
 impl BookkeepingService {
     /// 借出/借入：创建借款记录并从账户划拨本金（借出扣减余额、借入增加余额）。
+    #[allow(clippy::too_many_arguments)]
     pub fn create_loan(
         &mut self,
         loan_type: LoanType,

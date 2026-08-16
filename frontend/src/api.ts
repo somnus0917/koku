@@ -75,6 +75,16 @@ export function logout(): Promise<{ logged_out: boolean }> {
   return request("/api/auth/logout", { method: "POST" });
 }
 
+export function changePassword(
+  oldPassword: string,
+  newPassword: string
+): Promise<{ changed: boolean }> {
+  return request("/api/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
+  });
+}
+
 /** 汇总侧数据（除交易流水外的所有首屏数据）。 */
 export type SummaryData = Omit<AppData, "transactions">;
 

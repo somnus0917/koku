@@ -575,6 +575,24 @@ button:disabled {
   color: var(--expense);
 }
 
+.password-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.password-button:hover {
+  background: var(--transfer-soft);
+  color: var(--transfer);
+}
+
 .profile-chip > svg {
   margin-left: auto;
   color: var(--text-faint);

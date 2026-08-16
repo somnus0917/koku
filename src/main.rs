@@ -56,9 +56,15 @@ async fn run_server() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("Koku API is listening on http://{address}");
 
+    let auth = AuthConfig::from_env()?;
+    // 应用内改过的密码哈希优先；否则回退到环境/文件配置的初始哈希。
+    let initial_hash = service
+        .get_setting("password_hash")?
+        .unwrap_or_else(|| auth.password_hash.clone());
     let state = AppState {
         service: Arc::new(Mutex::new(service)),
-        auth: Arc::new(AuthConfig::from_env()?),
+        auth: Arc::new(auth),
+        password_hash: Arc::new(std::sync::RwLock::new(initial_hash)),
         login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
         rates: Arc::new(RateClient::new()),
     };
