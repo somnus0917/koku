@@ -1,6 +1,6 @@
 //! 借款：借出/借入、跨账户还款、未结余额与结清。
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, TransactionBehavior};
 use rust_decimal::Decimal;
 
@@ -19,6 +19,7 @@ impl BookkeepingService {
         amount: Decimal,
         account_id: i64,
         note: impl Into<String>,
+        due_at: Option<DateTime<Utc>>,
     ) -> Result<Loan> {
         let counterparty = required_text(counterparty.into(), "counterparty")?;
         positive_amount(amount)?;
@@ -46,10 +47,16 @@ impl BookkeepingService {
                     existing_id
                 ],
             )?;
+            if let Some(due) = due_at {
+                tx.execute(
+                    "UPDATE loans SET due_at = ?1 WHERE id = ?2",
+                    params![timestamp(due), existing_id],
+                )?;
+            }
             existing_id
         } else {
             tx.execute(
-                "INSERT INTO loans(loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO loans(loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, due_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     loan_type.as_str(),
                     &counterparty,
@@ -58,7 +65,8 @@ impl BookkeepingService {
                     decimal_to_db(amount),
                     account_id,
                     timestamp(now),
-                    note.into()
+                    note.into(),
+                    due_at.map(timestamp)
                 ],
             )?;
             tx.last_insert_rowid()
@@ -191,7 +199,7 @@ impl BookkeepingService {
 
     pub fn loans(&self) -> Result<Vec<Loan>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans ORDER BY id DESC",
+            "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at, due_at FROM loans ORDER BY id DESC",
         )?;
         let rows = statement.query_map([], loan_row)?;
         rows.map(|row| loan_from_row(row?)).collect()
@@ -201,7 +209,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans WHERE id = ?1",
+                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at, due_at FROM loans WHERE id = ?1",
                 [id],
                 loan_row,
             )

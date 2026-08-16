@@ -190,6 +190,7 @@ struct CreateLoanRequest {
     account_id: i64,
     #[serde(default)]
     note: String,
+    due_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -911,6 +912,7 @@ async fn api_create_loan(
         request.amount,
         request.account_id,
         request.note,
+        request.due_at,
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(loan))))
 }

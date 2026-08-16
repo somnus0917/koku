@@ -6,6 +6,7 @@ import {
   ArrowUpRight,
   BadgeDollarSign,
   Banknote,
+  BellRing,
   ChartNoAxesCombined,
   Check,
   ChevronDown,
@@ -123,6 +124,32 @@ function useConversionRates(currencies: string[], display: string) {
   return rates;
 }
 
+function ReminderBanner({ accounts, loans }: { accounts: Account[]; loans: Loan[] }) {
+  const now = Date.now();
+  const maturedDeposits = accounts.filter(
+    (account) => account.interest_rate && account.maturity_at && new Date(account.maturity_at).getTime() <= now
+  );
+  const overdueLoans = loans.filter(
+    (loan) => !loan.closed_at && loan.due_at && new Date(loan.due_at).getTime() <= now
+  );
+  if (maturedDeposits.length === 0 && overdueLoans.length === 0) return null;
+  return (
+    <aside className="reminder-banner" role="status">
+      <BellRing size={18} />
+      <div>
+        {maturedDeposits.map((account) => (
+          <p key={account.id}>定期「{account.name}」已于 {formatDate(account.maturity_at!)} 到期，可结清转回。</p>
+        ))}
+        {overdueLoans.map((loan) => (
+          <p key={loan.id}>
+            {loan.loan_type === "lend" ? "借出" : "借入"}「{loan.counterparty}」已于 {formatDate(loan.due_at!)} 到期。
+          </p>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 export function Dashboard({
   data,
   onAdd,
@@ -149,6 +176,7 @@ export function Dashboard({
   return (
     <div className="page page-enter">
       <PageTitle eyebrow="WELCOME BACK" title="今天，也把生活记清楚。" />
+      <ReminderBanner accounts={data.accounts} loans={data.loans} />
       <section className="hero-grid">
         <article className="net-worth-card">
           <div className="card-heading">

@@ -136,7 +136,8 @@ impl BookkeepingService {
                 account_id   INTEGER NOT NULL REFERENCES accounts(id),
                 opened_at    TEXT NOT NULL,
                 note         TEXT NOT NULL DEFAULT '',
-                closed_at    TEXT
+                closed_at    TEXT,
+                due_at       TEXT
             );
 
             CREATE TABLE IF NOT EXISTS reimbursements (
@@ -231,6 +232,9 @@ impl BookkeepingService {
         }
         if !table_has_column(&conn, "transactions", "loan_id")? {
             conn.execute("ALTER TABLE transactions ADD COLUMN loan_id INTEGER", [])?;
+        }
+        if !table_has_column(&conn, "loans", "due_at")? {
+            conn.execute("ALTER TABLE loans ADD COLUMN due_at TEXT", [])?;
         }
         if !table_has_column(&conn, "transactions", "reimbursable_at")? {
             conn.execute(
@@ -386,7 +390,7 @@ impl BookkeepingService {
     fn loan_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Loan> {
         let row = tx
             .query_row(
-                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at FROM loans WHERE id = ?1",
+                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at, due_at FROM loans WHERE id = ?1",
                 [id],
                 loan_row,
             )
@@ -590,6 +594,7 @@ type LoanRow = (
     String,
     String,
     Option<String>,
+    Option<String>,
 );
 
 fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
@@ -604,6 +609,7 @@ fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
         row.get(7)?,
         row.get(8)?,
         row.get(9)?,
+        row.get(10)?,
     ))
 }
 
@@ -619,6 +625,7 @@ fn loan_from_row(row: LoanRow) -> Result<Loan> {
         opened_at: parse_timestamp(&row.7)?,
         note: row.8,
         closed_at: row.9.as_deref().map(parse_timestamp).transpose()?,
+        due_at: row.10.as_deref().map(parse_timestamp).transpose()?,
     })
 }
 
@@ -1615,6 +1622,7 @@ mod tests {
             Decimal::from(100_u32),
             cash.id,
             "借款",
+            None,
         )?;
         let loan_tx = service
             .transactions(100, 0)?
@@ -2225,6 +2233,7 @@ mod tests {
             Decimal::from(1000_u32),
             savings.id,
             "",
+            None,
         )?;
         let second = service.create_loan(
             LoanType::Lend,
@@ -2233,6 +2242,7 @@ mod tests {
             Decimal::from(500_u32),
             savings.id,
             "再借",
+            None,
         )?;
         assert_eq!(second.id, first.id);
         assert_eq!(second.principal, Decimal::from(1500_u32));
@@ -2255,6 +2265,7 @@ mod tests {
             Decimal::from(200_u32),
             savings.id,
             "",
+            None,
         )?;
         assert_eq!(third.id, first.id);
         assert_eq!(third.principal, Decimal::from(1700_u32));
@@ -2268,6 +2279,7 @@ mod tests {
             Decimal::from(300_u32),
             savings.id,
             "",
+            None,
         )?;
         service.create_loan(
             LoanType::Lend,
@@ -2276,6 +2288,7 @@ mod tests {
             Decimal::from(100_u32),
             savings.id,
             "",
+            None,
         )?;
         assert_eq!(service.loans()?.len(), 3);
 
@@ -2296,6 +2309,7 @@ mod tests {
             Decimal::from(50_u32),
             savings.id,
             "",
+            None,
         )?;
         assert_ne!(fourth.id, first.id);
         assert_eq!(fourth.principal, Decimal::from(50_u32));
@@ -2321,6 +2335,7 @@ mod tests {
             Decimal::from(1000_u32),
             savings.id,
             "朋友借款",
+            None,
         )?;
         assert_eq!(lend.outstanding, Decimal::from(1000_u32));
         assert_eq!(
@@ -2367,6 +2382,7 @@ mod tests {
             Decimal::from(2000_u32),
             cash.id,
             "周转",
+            None,
         )?;
         assert_eq!(service.account(cash.id)?.balance, Decimal::from(2400_u32));
         let balance = service.balance_summary("CNY")?;

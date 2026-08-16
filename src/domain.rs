@@ -271,6 +271,8 @@ pub struct Loan {
     pub opened_at: DateTime<Utc>,
     pub note: String,
     pub closed_at: Option<DateTime<Utc>>,
+    /// 约定还款/到期日（可选，用于到期提醒）
+    pub due_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

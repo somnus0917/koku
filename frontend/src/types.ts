@@ -61,6 +61,7 @@ export interface Loan {
   opened_at: string;
   note: string;
   closed_at: string | null;
+  due_at: string | null;
 }
 
 export interface DepositSettlement {

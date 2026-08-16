@@ -390,13 +390,14 @@ export function LoanModal({
   /** 历史往来人（来自已有借款），下拉可选；选中已有的人会合并到未结清的同一方向借款 */
   counterparties: string[];
   onClose: () => void;
-  onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; note?: string }) => Promise<void>;
+  onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; note?: string; due_at?: string }) => Promise<void>;
 }) {
   const [loanType, setLoanType] = useState<LoanType>("lend");
   const [counterparty, setCounterparty] = useState("");
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [dueAt, setDueAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => {
@@ -408,7 +409,8 @@ export function LoanModal({
         counterparty,
         amount,
         account_id: Number(accountId),
-        note: note || undefined
+        note: note || undefined,
+        due_at: dueAt ? new Date(`${dueAt}T00:00:00`).toISOString() : undefined
       });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "操作失败");
@@ -441,6 +443,7 @@ export function LoanModal({
             </select>
           </label>
           <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+          <label><span>到期日（可选）</span><input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">

@@ -1109,6 +1109,32 @@ button:disabled {
   cursor: pointer;
 }
 
+.reminder-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 13px 16px;
+  border: 1px solid color-mix(in srgb, var(--expense) 30%, transparent);
+  border-radius: 12px;
+  background: var(--expense-soft);
+  color: var(--expense);
+  font-size: 12px;
+}
+
+.reminder-banner svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.reminder-banner p {
+  margin: 0 0 4px;
+}
+
+.reminder-banner p:last-child {
+  margin-bottom: 0;
+}
+
 .month-card {
   display: flex;
   flex-direction: column;

@@ -413,6 +413,7 @@ export function createLoan(input: {
   amount: string;
   account_id: number;
   note?: string;
+  due_at?: string;
 }): Promise<Loan> {
   return request("/api/loans", {
     method: "POST",
