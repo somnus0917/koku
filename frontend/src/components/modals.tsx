@@ -19,7 +19,9 @@ import {
   formatDate,
   formatMoney,
   localDateTimeValue,
-  toLocalDateTimeValue
+  readQuickEntry,
+  toLocalDateTimeValue,
+  writeQuickEntry
 } from "../lib";
 import { CategoryAvatar } from "./avatar";
 import type {
@@ -590,16 +592,18 @@ export function TransactionModal({
   onClose: () => void;
   onSubmit: (input: TransactionSubmit) => Promise<void>;
 }) {
-  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment" | "trade">>("expense");
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
+  const [lastEntry] = useState(() => readQuickEntry());
+  const initialAccountId = lastEntry?.account_id ?? accounts[0]?.id ?? 0;
+  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment" | "trade">>(lastEntry?.kind ?? "expense");
+  const [accountId, setAccountId] = useState(initialAccountId);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
-  const [sourceCurrency, setSourceCurrency] = useState(accounts[0]?.currency ?? "CNY");
-  const [categoryId, setCategoryId] = useState(categories.find((item) => item.kind === "expense")?.id ?? 0);
+  const [sourceCurrency, setSourceCurrency] = useState(accounts.find((account) => account.id === initialAccountId)?.currency ?? "CNY");
+  const [categoryId, setCategoryId] = useState(lastEntry?.category_id ?? categories.find((item) => item.kind === "expense")?.id ?? 0);
   const [amount, setAmount] = useState("");
   const [settledAmount, setSettledAmount] = useState("");
   const [settledTouched, setSettledTouched] = useState(false);
   const [targetAmount, setTargetAmount] = useState("");
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(lastEntry?.note ?? "");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -663,6 +667,7 @@ export function TransactionModal({
             tag_names: tagNames
           }
         });
+        writeQuickEntry({ kind, account_id: accountId, category_id: categoryId, amount, note });
       }
     } catch (reason) {
       setFormError(reason instanceof Error ? reason.message : "保存失败");

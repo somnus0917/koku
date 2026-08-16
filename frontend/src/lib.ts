@@ -151,3 +151,33 @@ export function formatDate(value: string): string {
     minute: "2-digit"
   }).format(new Date(value));
 }
+
+const QUICK_ENTRY_KEY = "koku:quick-entry";
+
+/** 最近一笔收入/支出（快速记账预填用）。 */
+export interface QuickEntry {
+  kind: "expense" | "income";
+  account_id: number;
+  category_id: number;
+  amount: string;
+  note: string;
+}
+
+export function readQuickEntry(): QuickEntry | null {
+  try {
+    const raw = window.localStorage.getItem(QUICK_ENTRY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as QuickEntry;
+    return parsed && (parsed.kind === "expense" || parsed.kind === "income") ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeQuickEntry(entry: QuickEntry): void {
+  try {
+    window.localStorage.setItem(QUICK_ENTRY_KEY, JSON.stringify(entry));
+  } catch {
+    // 隐私模式等场景下忽略写入失败。
+  }
+}
