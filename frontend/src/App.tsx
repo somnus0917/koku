@@ -38,9 +38,11 @@ import {
   createCategory,
   createDeposit,
   createLoan,
+  createRecurringRule,
   createTransaction,
   createTransfer,
   deleteCategory,
+  deleteRecurringRule,
   getAuthSession,
   loadSummaryData,
   loadTransactions,
@@ -49,6 +51,7 @@ import {
   markReimbursable,
   reimburse,
   repayLoan,
+  runRecurring,
   setBudget,
   settleDeposit,
   unmarkReimbursable,
@@ -63,6 +66,7 @@ import {
   EditAccountModal,
   EditTransactionModal,
   LoanModal,
+  RecurringModal,
   ReimburseModal,
   RepayModal,
   SettleDepositModal,
@@ -98,7 +102,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "insights";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -232,6 +236,8 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       if (quiet) setRefreshing(true);
       else setLoading(true);
       try {
+        // 先触发周期交易到期生成（请求驱动、无后台任务），再读取最新数据。
+        await runRecurring().catch(() => undefined);
         const now = new Date();
         const summaryYear = year ?? now.getFullYear();
         const summaryMonth = month ?? now.getMonth() + 1;
@@ -326,6 +332,10 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               setLoanTarget(loan);
               setModal("repay");
             }}
+            onCreateRecurring={() => setModal("recurring")}
+            onDeleteRecurring={(id) =>
+              void mutate(() => deleteRecurringRule(id), "周期交易已删除")
+            }
           />
         );
       case "transactions":
@@ -611,6 +621,14 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               "还款已入账"
             )
           }
+        />
+      )}
+      {modal === "recurring" && data && (
+        <RecurringModal
+          accounts={data.accounts}
+          categories={data.categories}
+          onClose={() => setModal(null)}
+          onSubmit={(input) => mutate(() => createRecurringRule(input), "周期交易已创建")}
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

@@ -292,6 +292,48 @@ pub struct Budget {
     pub limit_amount: Decimal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecurrenceFrequency {
+    /// 每月一次（按 next_due_at 的日历月 +1，月末自动夹取）
+    Monthly,
+    /// 每周一次（next_due_at + 7 天）
+    Weekly,
+}
+
+impl RecurrenceFrequency {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Monthly => "monthly",
+            Self::Weekly => "weekly",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "monthly" => Ok(Self::Monthly),
+            "weekly" => Ok(Self::Weekly),
+            other => Err(KokuError::InvalidInput(format!(
+                "unknown recurrence frequency in database: {other}"
+            ))),
+        }
+    }
+}
+
+/// 周期交易模板：到点自动生成一笔收入/支出并推进下一次生成时间。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecurringRule {
+    pub id: i64,
+    pub kind: TransactionKind,
+    pub account_id: i64,
+    pub category_id: i64,
+    pub amount: Decimal,
+    pub note: String,
+    pub frequency: RecurrenceFrequency,
+    pub next_due_at: DateTime<Utc>,
+    pub paused_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonthlySummary {
     pub year: i32,

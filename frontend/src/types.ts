@@ -2,6 +2,7 @@ export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
 export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment";
 export type LoanType = "lend" | "borrow";
+export type RecurrenceFrequency = "monthly" | "weekly";
 
 export interface Account {
   id: number;
@@ -83,6 +84,18 @@ export interface Budget {
   limit_amount: string;
 }
 
+export interface RecurringRule {
+  id: number;
+  kind: TransactionKind;
+  account_id: number;
+  category_id: number;
+  amount: string;
+  note: string;
+  frequency: RecurrenceFrequency;
+  next_due_at: string;
+  paused_at: string | null;
+}
+
 export interface MonthlySummary {
   year: number;
   month: number;
@@ -148,4 +161,5 @@ export interface AppData {
   balance: BalanceSummary;
   loans: Loan[];
   budgets: Budget[];
+  recurring: RecurringRule[];
 }

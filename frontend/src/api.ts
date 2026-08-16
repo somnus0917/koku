@@ -14,6 +14,8 @@ import type {
   MonthlySummary,
   MonthlyTrendPoint,
   RateQuote,
+  RecurrenceFrequency,
+  RecurringRule,
   Transaction,
   TransactionKind
 } from "./types";
@@ -85,16 +87,17 @@ export async function loadSummaryData(
   });
   const currencyQuery = new URLSearchParams({ currency });
   const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  const [accounts, categories, budgets, monthly, cashFlow, balance, loans] = await Promise.all([
+  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Budget[]>(`/api/budgets?${budgetQuery}`),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
-    request<Loan[]>("/api/loans")
+    request<Loan[]>("/api/loans"),
+    request<RecurringRule[]>("/api/recurring")
   ]);
-  return { accounts, categories, budgets, monthly, cashFlow, balance, loans };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring };
 }
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
@@ -184,6 +187,30 @@ export function setBudget(
 export function clearBudget(categoryId: number, year: number, month: number): Promise<Budget> {
   const query = new URLSearchParams({ year: String(year), month: String(month) });
   return request(`/api/budgets/${categoryId}?${query.toString()}`, { method: "DELETE" });
+}
+
+export function createRecurringRule(input: {
+  kind: "expense" | "income";
+  account_id: number;
+  category_id: number;
+  amount: string;
+  note?: string;
+  frequency: RecurrenceFrequency;
+  next_due_at: string;
+}): Promise<RecurringRule> {
+  return request("/api/recurring", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteRecurringRule(id: number): Promise<RecurringRule> {
+  return request(`/api/recurring/${id}`, { method: "DELETE" });
+}
+
+/** 触发周期交易的到期生成（请求驱动，无后台任务），返回本次生成的流水。 */
+export function runRecurring(): Promise<Transaction[]> {
+  return request("/api/recurring/run", { method: "POST" });
 }
 
 export function createTransaction(input: {

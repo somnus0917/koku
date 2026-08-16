@@ -30,6 +30,7 @@ import type {
   Loan,
   LoanType,
   RateQuote,
+  RecurrenceFrequency,
   Transaction,
   TransactionKind
 } from "../types";
@@ -965,6 +966,99 @@ export function CategoryModal({ categories, onClose, onSubmit, onDelete }: { cat
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>完成</button><button className="primary-button" disabled={submitting || !name}>{submitting && <LoaderCircle className="spin" size={17} />}添加分类</button></div>
+      </form>
+    </ModalShell>
+  );
+}
+
+export function RecurringModal({
+  accounts,
+  categories,
+  onClose,
+  onSubmit
+}: {
+  accounts: Account[];
+  categories: Category[];
+  onClose: () => void;
+  onSubmit: (input: {
+    kind: "expense" | "income";
+    account_id: number;
+    category_id: number;
+    amount: string;
+    note?: string;
+    frequency: RecurrenceFrequency;
+    next_due_at: string;
+  }) => Promise<void>;
+}) {
+  const [kind, setKind] = useState<"expense" | "income">("expense");
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
+  const [categoryId, setCategoryId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [frequency, setFrequency] = useState<RecurrenceFrequency>("monthly");
+  const [startDate, setStartDate] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const kindCategories = categories.filter((category) => category.kind === kind);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      const next_due_at = new Date(`${startDate}T00:00:00`).toISOString();
+      await onSubmit({
+        kind,
+        account_id: Number(accountId),
+        category_id: Number(categoryId),
+        amount,
+        note: note || undefined,
+        frequency,
+        next_due_at
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "操作失败");
+      setSubmitting(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="RECURRING" title="新建周期交易" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="form-grid">
+          <label><span>类型</span>
+            <select value={kind} onChange={(event) => { setKind(event.target.value as "expense" | "income"); setCategoryId(""); }}>
+              <option value="expense">支出</option>
+              <option value="income">收入</option>
+            </select>
+          </label>
+          <label><span>金额</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
+          <label><span>资金账户</span>
+            <select required value={accountId} onChange={(event) => setAccountId(Number(event.target.value))}>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label><span>分类</span>
+            <select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+              <option value="" disabled>选择分类</option>
+              {kindCategories.map((category) => (
+                <option key={category.id} value={category.id}>{category.name}</option>
+              ))}
+            </select>
+          </label>
+          <label><span>周期</span>
+            <select value={frequency} onChange={(event) => setFrequency(event.target.value as RecurrenceFrequency)}>
+              <option value="monthly">每月</option>
+              <option value="weekly">每周</option>
+            </select>
+          </label>
+          <label><span>首次日期</span><input required type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label className="span-two"><span>备注</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="可选，例如：房租 / 视频会员" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建</button>
+        </div>
       </form>
     </ModalShell>
   );

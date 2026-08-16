@@ -18,8 +18,8 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
-    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Transaction,
-    TransactionKind,
+    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
+    RecurrenceFrequency, RecurringRule, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -217,6 +217,18 @@ struct BudgetQuery {
 #[derive(Debug, Deserialize)]
 struct SetBudgetRequest {
     limit_amount: Decimal,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateRecurringRequest {
+    kind: TransactionKind,
+    account_id: i64,
+    category_id: i64,
+    amount: Decimal,
+    #[serde(default)]
+    note: String,
+    frequency: RecurrenceFrequency,
+    next_due_at: DateTime<Utc>,
 }
 
 fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
@@ -432,6 +444,44 @@ async fn api_clear_budget(
 ) -> Result<Json<ApiResponse<Budget>>> {
     let budget = lock_service(&state)?.clear_budget(category_id, query.year, query.month)?;
     Ok(Json(ApiResponse::new(budget)))
+}
+
+async fn api_recurring_rules(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<RecurringRule>>>> {
+    let rules = lock_service(&state)?.recurring_rules()?;
+    Ok(Json(ApiResponse::new(rules)))
+}
+
+async fn api_create_recurring(
+    State(state): State<AppState>,
+    Json(request): Json<CreateRecurringRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<RecurringRule>>)> {
+    let rule = lock_service(&state)?.create_recurring_rule(
+        request.kind,
+        request.account_id,
+        request.category_id,
+        request.amount,
+        request.note,
+        request.frequency,
+        request.next_due_at,
+    )?;
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(rule))))
+}
+
+async fn api_delete_recurring(
+    State(state): State<AppState>,
+    AxumPath(rule_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<RecurringRule>>> {
+    let rule = lock_service(&state)?.delete_recurring_rule(rule_id)?;
+    Ok(Json(ApiResponse::new(rule)))
+}
+
+async fn api_run_recurring(
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
+    let generated = lock_service(&state)?.run_recurring()?;
+    Ok(Json(ApiResponse::new(generated)))
 }
 
 async fn api_transactions(
@@ -803,6 +853,9 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             "/api/budgets/{category_id}",
             put(api_set_budget).delete(api_clear_budget),
         )
+        .route("/api/recurring", get(api_recurring_rules).post(api_create_recurring))
+        .route("/api/recurring/run", post(api_run_recurring))
+        .route("/api/recurring/{rule_id}", delete(api_delete_recurring))
         .route(
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),

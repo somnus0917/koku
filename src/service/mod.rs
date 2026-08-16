@@ -25,6 +25,7 @@ mod accounts;
 mod budgets;
 mod loans;
 mod rates;
+mod recurring;
 mod reimbursements;
 mod summaries;
 mod transactions;
@@ -77,6 +78,19 @@ impl BookkeepingService {
                 limit_amount TEXT NOT NULL,
                 created_at   TEXT NOT NULL,
                 UNIQUE(category_id, year, month)
+            );
+
+            CREATE TABLE IF NOT EXISTS recurring_rules (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind        TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+                account_id  INTEGER NOT NULL REFERENCES accounts(id),
+                category_id INTEGER NOT NULL REFERENCES categories(id),
+                amount      TEXT NOT NULL,
+                note        TEXT NOT NULL DEFAULT '',
+                frequency   TEXT NOT NULL CHECK (frequency IN ('monthly', 'weekly')),
+                next_due_at TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                paused_at   TEXT
             );
 
             CREATE TABLE IF NOT EXISTS loans (
@@ -754,7 +768,7 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{RateQuote, DEFAULT_CATEGORIES};
+    use crate::domain::{RateQuote, RecurrenceFrequency, DEFAULT_CATEGORIES};
     use chrono::{Datelike, Duration as ChronoDuration};
 
     fn test_service() -> Result<BookkeepingService> {
@@ -1087,6 +1101,43 @@ mod tests {
         service.clear_budget(food.id, 2026, 8)?;
         let summary = service.monthly_summary(2026, 8, "CNY")?;
         assert_eq!(summary.expenses_by_category[0].budget_limit, None);
+        Ok(())
+    }
+
+    #[test]
+    fn recurring_rules_generate_due_transactions_and_advance() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let due = Utc::now() - ChronoDuration::days(1);
+        let rule = service.create_recurring_rule(
+            TransactionKind::Expense,
+            cash.id,
+            food.id,
+            Decimal::from(50_u32),
+            "房租".to_owned(),
+            RecurrenceFrequency::Monthly,
+            due,
+        )?;
+        assert_eq!(rule.frequency, RecurrenceFrequency::Monthly);
+
+        // 到期生成一笔并推进到下一个周期。
+        let generated = service.run_recurring()?;
+        assert_eq!(generated.len(), 1);
+        assert_eq!(generated[0].note, "房租");
+        assert_eq!(generated[0].amount, Decimal::from(50_u32));
+        let updated = service.recurring_rule(rule.id)?;
+        assert!(updated.next_due_at > due);
+        // 已推进，未到期不再生成。
+        assert!(service.run_recurring()?.is_empty());
+
+        // 删除规则后无法再查询。
+        service.delete_recurring_rule(rule.id)?;
+        assert!(matches!(
+            service.recurring_rule(rule.id),
+            Err(KokuError::NotFound { entity, .. }) if entity == "recurring rule"
+        ));
         Ok(())
     }
 

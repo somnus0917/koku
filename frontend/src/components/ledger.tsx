@@ -46,6 +46,7 @@ import type {
   Loan,
   MonthlySummary,
   MonthlyTrendPoint,
+  RecurringRule,
   Transaction,
   TransactionKind
 } from "../types";
@@ -319,7 +320,9 @@ export function AccountsPage({
   onDeposit,
   onSettle,
   onCreateLoan,
-  onRepay
+  onRepay,
+  onCreateRecurring,
+  onDeleteRecurring
 }: {
   data: AppData;
   onAddAccount: () => void;
@@ -328,6 +331,8 @@ export function AccountsPage({
   onSettle: (account: Account) => void;
   onCreateLoan: () => void;
   onRepay: (loan: Loan) => void;
+  onCreateRecurring: () => void;
+  onDeleteRecurring: (id: number) => void;
 }) {
   const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
   const cash = group("cash");
@@ -381,6 +386,13 @@ export function AccountsPage({
         rates={rates}
         onCreateLoan={onCreateLoan}
         onRepay={onRepay}
+      />
+      <RecurringSection
+        rules={data.recurring}
+        accounts={data.accounts}
+        categories={data.categories}
+        onCreate={onCreateRecurring}
+        onDelete={onDeleteRecurring}
       />
     </div>
   );
@@ -1385,6 +1397,55 @@ export function LoansSection({
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+export function RecurringSection({
+  rules,
+  accounts,
+  categories,
+  onCreate,
+  onDelete
+}: {
+  rules: RecurringRule[];
+  accounts: Account[];
+  categories: Category[];
+  onCreate: () => void;
+  onDelete: (id: number) => void;
+}) {
+  const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const categoryMap = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+  return (
+    <section className="section-block account-group">
+      <div className="section-heading compact-heading">
+        <div><span>RECURRING</span><h2>周期交易</h2></div>
+        <button className="text-button" onClick={onCreate}><Plus size={16} /> 新建周期</button>
+      </div>
+      <div className="account-grid">
+        {rules.map((rule) => {
+          const account = accountMap.get(rule.account_id);
+          const category = categoryMap.get(rule.category_id);
+          const isExpense = rule.kind === "expense";
+          const Icon = isExpense ? ArrowUpRight : ArrowDownLeft;
+          return (
+            <article className="account-detail-card" key={rule.id}>
+              <span className={`large-account-icon ${isExpense ? "tone-1" : "tone-2"}`}><Icon size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>{rule.note || category?.name || "周期交易"}</h3>
+                <span>
+                  {category?.name ?? "未知分类"} · {rule.frequency === "monthly" ? "每月" : "每周"} · 下次 {formatDate(rule.next_due_at)} · {account?.name ?? "未知账户"}
+                </span>
+              </div>
+              <strong className={isExpense ? "expense-text" : "income-text"}>
+                {isExpense ? "−" : "+"}{formatMoney(rule.amount, account?.currency ?? "CNY")}
+              </strong>
+              <button className="row-action" onClick={() => onDelete(rule.id)} title="删除周期交易" aria-label="删除周期交易"><Trash2 size={16} /></button>
+            </article>
+          );
+        })}
+        {rules.length === 0 && <EmptyState title="还没有周期交易" detail="房租、订阅等固定收支可设为自动重复。" />}
+      </div>
     </section>
   );
 }
