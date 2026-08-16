@@ -282,7 +282,8 @@ impl BookkeepingService {
                 }
             });
             let market_value = (shares * per_share).round_dp(2);
-            total_assets += self.convert_amount(market_value, &account_currency, &currency, today)?;
+            total_assets +=
+                self.convert_amount(market_value, &account_currency, &currency, today)?;
         }
         Ok(BalanceSummary {
             currency,

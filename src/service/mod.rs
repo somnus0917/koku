@@ -900,9 +900,15 @@ mod tests {
         let mut service = test_service()?;
         assert_eq!(service.get_setting("password_hash")?, None);
         service.set_setting("password_hash", "hashed")?;
-        assert_eq!(service.get_setting("password_hash")?.as_deref(), Some("hashed"));
+        assert_eq!(
+            service.get_setting("password_hash")?.as_deref(),
+            Some("hashed")
+        );
         service.set_setting("password_hash", "new")?;
-        assert_eq!(service.get_setting("password_hash")?.as_deref(), Some("new"));
+        assert_eq!(
+            service.get_setting("password_hash")?.as_deref(),
+            Some("new")
+        );
 
         let token = service.create_auth_session("somnus", 3600)?;
         assert!(service.authenticated_username(&token)?.is_some());
@@ -1109,7 +1115,13 @@ mod tests {
             .and_utc();
         service.record_expense(cash.id, food.id, Decimal::from(10_u32), august, "八月餐")?;
         service.record_expense(cash.id, food.id, Decimal::from(20_u32), september, "九月餐")?;
-        service.record_income(cash.id, salary.id, Decimal::from(100_u32), september, "九月工资")?;
+        service.record_income(
+            cash.id,
+            salary.id,
+            Decimal::from(100_u32),
+            september,
+            "九月工资",
+        )?;
 
         // 按月过滤：八月只有一条，九月有两条。
         let august_txs = service.transactions_in_month(2026, 8, 100, 0)?;
@@ -1138,7 +1150,13 @@ mod tests {
         let now = Utc::now();
         let previous = now - ChronoDuration::days(40);
         service.record_expense(cash.id, food.id, Decimal::from(250_u32), now, "本月支出")?;
-        service.record_income(cash.id, salary.id, Decimal::from(1000_u32), previous, "上月收入")?;
+        service.record_income(
+            cash.id,
+            salary.id,
+            Decimal::from(1000_u32),
+            previous,
+            "上月收入",
+        )?;
 
         let trend = service.monthly_trend(12, "CNY")?;
         assert_eq!(trend.len(), 12);
@@ -1152,7 +1170,9 @@ mod tests {
         let prev_point = trend
             .iter()
             .find(|point| point.year == previous.year() && point.month == previous.month())
-            .ok_or_else(|| KokuError::InvalidInput("previous month missing from trend".to_owned()))?;
+            .ok_or_else(|| {
+                KokuError::InvalidInput("previous month missing from trend".to_owned())
+            })?;
         assert_eq!(prev_point.total_income, Decimal::from(1000_u32));
         assert_eq!(prev_point.total_expense, Decimal::ZERO);
         assert_eq!(prev_point.net, Decimal::from(1000_u32));
@@ -1290,10 +1310,8 @@ mod tests {
         assert!(expense.tags.is_empty());
 
         // 设置标签：自动创建 + 回读。
-        let tags = service.set_transaction_tags(
-            expense.id,
-            vec!["旅行".to_owned(), "出差".to_owned()],
-        )?;
+        let tags =
+            service.set_transaction_tags(expense.id, vec!["旅行".to_owned(), "出差".to_owned()])?;
         assert_eq!(tags.len(), 2);
         assert!(service.all_tags()?.iter().any(|tag| tag.name == "旅行"));
 

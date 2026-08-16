@@ -118,9 +118,7 @@ impl BookkeepingService {
     }
 }
 
-fn budget_from_row(
-    row: (i64, String, String, i32, u32, String),
-) -> Result<Budget> {
+fn budget_from_row(row: (i64, String, String, i32, u32, String)) -> Result<Budget> {
     Ok(Budget {
         category_id: row.0,
         category_name: row.1,

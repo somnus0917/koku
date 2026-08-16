@@ -31,11 +31,11 @@ impl BookkeepingService {
                 "INSERT INTO tags(name, created_at) VALUES (?1, ?2) ON CONFLICT(name) DO NOTHING",
                 params![name, timestamp(Utc::now())],
             )?;
-            let tag_id = self.conn.query_row(
-                "SELECT id FROM tags WHERE name = ?1",
-                [&name],
-                |row| row.get::<_, i64>(0),
-            )?;
+            let tag_id =
+                self.conn
+                    .query_row("SELECT id FROM tags WHERE name = ?1", [&name], |row| {
+                        row.get::<_, i64>(0)
+                    })?;
             tags.push(Tag { id: tag_id, name });
         }
 
@@ -56,7 +56,9 @@ impl BookkeepingService {
 
     /// 全部标签（按名称排序），供表单建议与列表筛选。
     pub fn all_tags(&self) -> Result<Vec<Tag>> {
-        let mut statement = self.conn.prepare("SELECT id, name FROM tags ORDER BY name")?;
+        let mut statement = self
+            .conn
+            .prepare("SELECT id, name FROM tags ORDER BY name")?;
         let rows = statement.query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
@@ -71,7 +73,9 @@ impl BookkeepingService {
 fn validate_tag_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(KokuError::InvalidInput("tag name cannot be empty".to_owned()));
+        return Err(KokuError::InvalidInput(
+            "tag name cannot be empty".to_owned(),
+        ));
     }
     if trimmed.contains(',') {
         return Err(KokuError::InvalidInput(

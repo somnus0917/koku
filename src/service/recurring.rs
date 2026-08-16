@@ -5,7 +5,9 @@ use rusqlite::{params, OptionalExtension};
 use rust_decimal::Decimal;
 
 use super::*;
-use crate::domain::{CategoryKind, RecurrenceFrequency, RecurringRule, Transaction, TransactionKind};
+use crate::domain::{
+    CategoryKind, RecurrenceFrequency, RecurringRule, Transaction, TransactionKind,
+};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
@@ -103,12 +105,20 @@ impl BookkeepingService {
             let mut produced = 0_u32;
             while next <= now && produced < MAX_CATCHUP_PER_RULE {
                 let result = match rule.kind {
-                    TransactionKind::Expense => {
-                        self.record_expense(rule.account_id, rule.category_id, rule.amount, next, rule.note.clone())
-                    }
-                    TransactionKind::Income => {
-                        self.record_income(rule.account_id, rule.category_id, rule.amount, next, rule.note.clone())
-                    }
+                    TransactionKind::Expense => self.record_expense(
+                        rule.account_id,
+                        rule.category_id,
+                        rule.amount,
+                        next,
+                        rule.note.clone(),
+                    ),
+                    TransactionKind::Income => self.record_income(
+                        rule.account_id,
+                        rule.category_id,
+                        rule.amount,
+                        next,
+                        rule.note.clone(),
+                    ),
                     _ => unreachable!("validated at creation"),
                 };
                 match result {

@@ -90,7 +90,15 @@ impl BookkeepingService {
              DO UPDATE SET shares = excluded.shares, cost_basis = excluded.cost_basis, updated_at = excluded.updated_at",
             params![account_id, symbol, decimal_to_db(new_shares), decimal_to_db(new_cost), timestamp(Utc::now())],
         )?;
-        insert_trade_transaction(&tx, account_id, -cash, &account.currency, occurred_at, description, note)?;
+        insert_trade_transaction(
+            &tx,
+            account_id,
+            -cash,
+            &account.currency,
+            occurred_at,
+            description,
+            note,
+        )?;
         let transaction_id = tx.last_insert_rowid();
         tx.commit()?;
         self.transaction(transaction_id)
@@ -118,9 +126,8 @@ impl BookkeepingService {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let account = Self::account_in_tx(&tx, account_id)?;
         ensure_stock_account(&account)?;
-        let (shares0, cost0) = existing_position(&tx, account_id, &symbol)?.ok_or_else(|| {
-            KokuError::InvalidInput(format!("no holding for symbol {symbol}"))
-        })?;
+        let (shares0, cost0) = existing_position(&tx, account_id, &symbol)?
+            .ok_or_else(|| KokuError::InvalidInput(format!("no holding for symbol {symbol}")))?;
         if shares0 < shares {
             return Err(KokuError::InvalidInput(format!(
                 "not enough shares of {symbol}: holding {shares0}, selling {shares}"
@@ -157,7 +164,15 @@ impl BookkeepingService {
                 ],
             )?;
         }
-        insert_trade_transaction(&tx, account_id, cash, &account.currency, occurred_at, description, note)?;
+        insert_trade_transaction(
+            &tx,
+            account_id,
+            cash,
+            &account.currency,
+            occurred_at,
+            description,
+            note,
+        )?;
         let transaction_id = tx.last_insert_rowid();
         tx.commit()?;
         self.transaction(transaction_id)

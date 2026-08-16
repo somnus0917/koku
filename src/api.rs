@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
-use axum::extract::{ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path as AxumPath, Query, Request, State};
+use axum::extract::{
+    ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path as AxumPath, Query, Request, State,
+};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -403,26 +405,35 @@ async fn api_change_password(
         .read()
         .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))?
         .clone();
-    let old_matches = tokio::task::spawn_blocking(move || bcrypt::verify(old_password, &current_hash))
-        .await
-        .map_err(|error| KokuError::AuthConfiguration(format!("password verification task failed: {error}")))?
-        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+    let old_matches =
+        tokio::task::spawn_blocking(move || bcrypt::verify(old_password, &current_hash))
+            .await
+            .map_err(|error| {
+                KokuError::AuthConfiguration(format!("password verification task failed: {error}"))
+            })?
+            .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
     if !old_matches {
         return Err(KokuError::InvalidCredentials);
     }
-    let new_hash = tokio::task::spawn_blocking(move || bcrypt::hash(new_password, bcrypt::DEFAULT_COST))
-        .await
-        .map_err(|error| KokuError::AuthConfiguration(format!("password hashing task failed: {error}")))?
-        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
+    let new_hash =
+        tokio::task::spawn_blocking(move || bcrypt::hash(new_password, bcrypt::DEFAULT_COST))
+            .await
+            .map_err(|error| {
+                KokuError::AuthConfiguration(format!("password hashing task failed: {error}"))
+            })?
+            .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
 
     lock_service(&state)?.set_setting("password_hash", &new_hash)?;
     *state
         .password_hash
         .write()
-        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))? = new_hash;
+        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))? =
+        new_hash;
     lock_service(&state)?.delete_all_auth_sessions()?;
     tracing::info!(target: "auth", "password changed; all sessions invalidated");
-    Ok(Json(ApiResponse::new(serde_json::json!({ "changed": true }))))
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "changed": true }),
+    )))
 }
 
 async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
@@ -524,8 +535,12 @@ async fn api_set_budget(
     Query(query): Query<BudgetQuery>,
     Json(request): Json<SetBudgetRequest>,
 ) -> Result<Json<ApiResponse<Budget>>> {
-    let budget =
-        lock_service(&state)?.set_budget(category_id, query.year, query.month, request.limit_amount)?;
+    let budget = lock_service(&state)?.set_budget(
+        category_id,
+        query.year,
+        query.month,
+        request.limit_amount,
+    )?;
     Ok(Json(ApiResponse::new(budget)))
 }
 
@@ -649,7 +664,9 @@ async fn api_export_transactions(
     let mut offset = 0_u32;
     loop {
         let page = match (query.year, query.month) {
-            (Some(year), Some(month)) => service.transactions_in_month(year, month, 1000, offset)?,
+            (Some(year), Some(month)) => {
+                service.transactions_in_month(year, month, 1000, offset)?
+            }
             (None, None) => service.transactions(1000, offset)?,
             _ => {
                 return Err(KokuError::InvalidInput(
@@ -853,10 +870,9 @@ async fn api_upload_receipt(
     {
         if field.name() == Some("file") {
             content_type = field.content_type().map(|value| value.to_string());
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|error| KokuError::InvalidInput(format!("could not read upload: {error}")))?;
+            let bytes = field.bytes().await.map_err(|error| {
+                KokuError::InvalidInput(format!("could not read upload: {error}"))
+            })?;
             data = Some(bytes.to_vec());
         }
     }
@@ -1138,13 +1154,19 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             "/api/budgets/{category_id}",
             put(api_set_budget).delete(api_clear_budget),
         )
-        .route("/api/recurring", get(api_recurring_rules).post(api_create_recurring))
+        .route(
+            "/api/recurring",
+            get(api_recurring_rules).post(api_create_recurring),
+        )
         .route("/api/recurring/run", post(api_run_recurring))
         .route("/api/recurring/{rule_id}", delete(api_delete_recurring))
         .route("/api/holdings", get(api_holdings))
         .route("/api/holdings/buy", post(api_buy_stock))
         .route("/api/holdings/sell", post(api_sell_stock))
-        .route("/api/holdings/{holding_id}/price", put(api_set_holding_price))
+        .route(
+            "/api/holdings/{holding_id}/price",
+            put(api_set_holding_price),
+        )
         .route(
             "/api/transactions",
             get(api_transactions).post(api_create_transaction),
