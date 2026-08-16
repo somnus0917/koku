@@ -20,7 +20,7 @@ use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
     DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Receipt,
-    RecurrenceFrequency, RecurringRule, Transaction, TransactionKind,
+    RecurrenceFrequency, RecurringRule, Tag, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -78,6 +78,8 @@ struct CreateTransactionRequest {
     occurred_at: Option<DateTime<Utc>>,
     #[serde(default)]
     note: String,
+    #[serde(default)]
+    tag_names: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +141,8 @@ struct UpdateTransactionRequest {
     amount: Option<Decimal>,
     account_id: Option<i64>,
     settled_amount: Option<Decimal>,
+    /// 提供时整体替换标签；不提供则保持不变。
+    tag_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -434,6 +438,11 @@ async fn api_delete_category(
     Ok(Json(ApiResponse::new(category)))
 }
 
+async fn api_tags(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Tag>>>> {
+    let tags = lock_service(&state)?.all_tags()?;
+    Ok(Json(ApiResponse::new(tags)))
+}
+
 async fn api_budgets(
     State(state): State<AppState>,
     Query(query): Query<BudgetQuery>,
@@ -662,6 +671,10 @@ async fn api_create_transaction(
             ))
         }
     };
+    if !request.tag_names.is_empty() {
+        service.set_transaction_tags(transaction.id, request.tag_names)?;
+    }
+    let transaction = service.transaction(transaction.id)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -693,7 +706,8 @@ async fn api_update_transaction(
     AxumPath(transaction_id): AxumPath<i64>,
     Json(request): Json<UpdateTransactionRequest>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_service(&state)?.update_transaction(
+    let mut service = lock_service(&state)?;
+    service.update_transaction(
         transaction_id,
         request.note,
         request.occurred_at,
@@ -702,6 +716,10 @@ async fn api_update_transaction(
         request.account_id,
         request.settled_amount,
     )?;
+    if let Some(tag_names) = request.tag_names {
+        service.set_transaction_tags(transaction_id, tag_names)?;
+    }
+    let transaction = service.transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -997,6 +1015,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             get(api_categories).post(api_create_category),
         )
         .route("/api/categories/{category_id}", delete(api_delete_category))
+        .route("/api/tags", get(api_tags))
         .route("/api/budgets", get(api_budgets))
         .route(
             "/api/budgets/{category_id}",

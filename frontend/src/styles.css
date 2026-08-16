@@ -1065,6 +1065,50 @@ button:disabled {
   font-size: 11px;
 }
 
+.tag-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-raised);
+}
+
+.tag-editor input {
+  flex: 1;
+  min-width: 90px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--transfer-soft);
+  color: var(--transfer);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.tag-chip button {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .month-card {
   display: flex;
   flex-direction: column;
@@ -1642,6 +1686,18 @@ button:disabled {
 .export-button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.tag-filter {
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .transaction-table {
@@ -2620,6 +2676,16 @@ button:disabled {
   align-items: center;
   gap: 3px;
   color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.transaction-meta .transaction-tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--transfer-soft);
+  color: var(--transfer);
   font-size: 9px;
   font-weight: 650;
 }

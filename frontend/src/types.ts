@@ -47,6 +47,7 @@ export interface Transaction {
   reimbursed_at: string | null;
   reimbursed_amount: string;
   has_receipt: boolean;
+  tags: string[];
 }
 
 export interface Loan {
@@ -102,6 +103,11 @@ export interface Receipt {
   content_type: string;
   byte_length: number;
   created_at: string;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
 }
 
 export interface MonthlySummary {
@@ -170,4 +176,5 @@ export interface AppData {
   loans: Loan[];
   budgets: Budget[];
   recurring: RecurringRule[];
+  tags: Tag[];
 }

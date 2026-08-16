@@ -31,6 +31,7 @@ import type {
   LoanType,
   RateQuote,
   RecurrenceFrequency,
+  Tag,
   Transaction,
   TransactionKind
 } from "../types";
@@ -116,6 +117,50 @@ function RateHintLine({
     );
   }
   return null;
+}
+
+/** 标签编辑：回车添加、点击 × 移除，附带已有标签建议。 */
+export function TagEditor({
+  value,
+  onChange,
+  suggestions
+}: {
+  value: string[];
+  onChange: (tags: string[]) => void;
+  suggestions: string[];
+}) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const name = draft.trim();
+    if (name && !value.includes(name)) onChange([...value, name]);
+    setDraft("");
+  };
+  return (
+    <div className="tag-editor">
+      {value.map((name) => (
+        <span className="tag-chip" key={name}>
+          {name}
+          <button type="button" onClick={() => onChange(value.filter((item) => item !== name))} aria-label={`移除${name}`}><X size={11} /></button>
+        </span>
+      ))}
+      <input
+        list="koku-tag-suggestions"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            add();
+          }
+        }}
+        onBlur={add}
+        placeholder="添加标签"
+      />
+      <datalist id="koku-tag-suggestions">
+        {suggestions.map((name) => <option key={name} value={name} />)}
+      </datalist>
+    </div>
+  );
 }
 
 export function DepositModal({
@@ -532,11 +577,13 @@ export type TransactionSubmit =
 export function TransactionModal({
   accounts,
   categories,
+  tags,
   onClose,
   onSubmit
 }: {
   accounts: Account[];
   categories: Category[];
+  tags: Tag[];
   onClose: () => void;
   onSubmit: (input: TransactionSubmit) => Promise<void>;
 }) {
@@ -551,6 +598,7 @@ export function TransactionModal({
   const [targetAmount, setTargetAmount] = useState("");
   const [note, setNote] = useState("");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
+  const [tagNames, setTagNames] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const matchingCategories = categories.filter((item) => item.kind === kind);
@@ -608,7 +656,8 @@ export function TransactionModal({
             currency: sourceCurrency,
             settled_amount: foreignTransaction ? settledAmount : amount,
             occurred_at: isoDate,
-            note
+            note,
+            tag_names: tagNames
           }
         });
       }
@@ -649,6 +698,9 @@ export function TransactionModal({
           {crossCurrency && <label><span>转入金额 · {target?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
           <label><span>时间</span><input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} /></label>
           <label className={kind === "transfer" && crossCurrency ? "" : "span-two"}><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="这笔钱花在了哪里？" /></label>
+          {kind !== "transfer" && (
+            <label className="span-two"><span>标签</span><TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} /></label>
+          )}
         </div>
         {sameTransferEndpoint && <div className="form-error">转出与转入账户不能相同。</div>}
         {formError && <div className="form-error">{formError}</div>}
@@ -662,12 +714,14 @@ export function EditTransactionModal({
   transaction,
   accounts,
   categories,
+  tags,
   onClose,
   onSubmit
 }: {
   transaction: Transaction;
   accounts: Account[];
   categories: Category[];
+  tags: Tag[];
   onClose: () => void;
   onSubmit: (input: {
     note?: string;
@@ -676,6 +730,7 @@ export function EditTransactionModal({
     amount?: string;
     account_id?: number;
     settled_amount?: string;
+    tag_names?: string[];
   }) => Promise<void>;
 }) {
   const account = accounts.find((item) => item.id === transaction.account_id);
@@ -692,6 +747,7 @@ export function EditTransactionModal({
   const [amount, setAmount] = useState(transaction.amount);
   const [settledAmount, setSettledAmount] = useState(transaction.settled_amount);
   const [accountId, setAccountId] = useState(transaction.account_id);
+  const [tagNames, setTagNames] = useState<string[]>(transaction.tags);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -706,6 +762,7 @@ export function EditTransactionModal({
         amount?: string;
         account_id?: number;
         settled_amount?: string;
+        tag_names?: string[];
       } = {};
       if (note !== transaction.note) input.note = note;
       if (occurredAt !== toLocalDateTimeValue(transaction.occurred_at)) {
@@ -717,6 +774,9 @@ export function EditTransactionModal({
       // 外币交易：金额与结算额一起提交，保证后端校验通过；同币种结算额恒等于金额。
       if (foreign && (amount !== transaction.amount || settledAmount !== transaction.settled_amount)) {
         input.settled_amount = settledAmount;
+      }
+      if (tagNames.join(",") !== transaction.tags.join(",")) {
+        input.tag_names = tagNames;
       }
       if (Object.keys(input).length === 0) {
         onClose();
@@ -789,6 +849,9 @@ export function EditTransactionModal({
           </label>
           <label className="span-two"><span>备注</span>
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" />
+          </label>
+          <label className="span-two"><span>标签</span>
+            <TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} />
           </label>
         </div>
         {reimbursementLocked && <p className="fx-hint">该笔支出已发生报销，仅可修改备注、分类和时间。</p>}

@@ -214,6 +214,9 @@ pub struct Transaction {
     pub reimbursed_amount: Decimal,
     /// 是否已挂有小票/发票附件
     pub has_receipt: bool,
+    /// 关联标签（标签名，按创建顺序）
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +323,13 @@ impl RecurrenceFrequency {
             ))),
         }
     }
+}
+
+/// 标签（跨类目聚合用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
 }
 
 /// 交易的小票/发票附件元数据（不含图片字节）。

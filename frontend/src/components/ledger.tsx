@@ -504,6 +504,7 @@ export function TransactionsPage({
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
+  const [tagFilter, setTagFilter] = useState<string>("all");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const handleExport = async () => {
@@ -529,7 +530,8 @@ export function TransactionsPage({
     const category = item.category_id ? categoriesById.get(item.category_id)?.name ?? "" : "转账";
     const account = accountsById.get(item.account_id)?.name ?? "";
     const matchesSearch = `${item.note} ${category} ${account}`.toLowerCase().includes(search.toLowerCase());
-    return matchesSearch && (kind === "all" || item.kind === kind);
+    const matchesTag = tagFilter === "all" || item.tags.includes(tagFilter);
+    return matchesSearch && matchesTag && (kind === "all" || item.kind === kind);
   });
   return (
     <div className="page page-enter">
@@ -547,6 +549,19 @@ export function TransactionsPage({
             </button>
           ))}
         </div>
+        {data.tags.length > 0 && (
+          <select
+            className="tag-filter"
+            value={tagFilter}
+            onChange={(event) => setTagFilter(event.target.value)}
+            aria-label="按标签筛选"
+          >
+            <option value="all">全部标签</option>
+            {data.tags.map((tag) => (
+              <option key={tag.id} value={tag.name}>{tag.name}</option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           className="text-button export-button"
@@ -732,6 +747,9 @@ export function TransactionRow({
             <span>{meta.label}</span>
             {reimbursable ? <span className="reimburse-status">待报销</span> : ""}
             {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> 小票</span> : ""}
+            {transaction.tags.map((tag) => (
+              <span className="transaction-tag" key={tag}>#{tag}</span>
+            ))}
           </span>
         </div>
       </div>

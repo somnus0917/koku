@@ -17,6 +17,7 @@ import type {
   Receipt,
   RecurrenceFrequency,
   RecurringRule,
+  Tag,
   Transaction,
   TransactionKind
 } from "./types";
@@ -88,7 +89,7 @@ export async function loadSummaryData(
   });
   const currencyQuery = new URLSearchParams({ currency });
   const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring] = await Promise.all([
+  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Budget[]>(`/api/budgets?${budgetQuery}`),
@@ -96,9 +97,10 @@ export async function loadSummaryData(
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
     request<Loan[]>("/api/loans"),
-    request<RecurringRule[]>("/api/recurring")
+    request<RecurringRule[]>("/api/recurring"),
+    request<Tag[]>("/api/tags")
   ]);
-  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags };
 }
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
@@ -277,6 +279,7 @@ export function createTransaction(input: {
   settled_amount?: string;
   occurred_at: string;
   note: string;
+  tag_names?: string[];
 }): Promise<Transaction> {
   return request("/api/transactions", {
     method: "POST",
@@ -311,6 +314,7 @@ export function updateTransaction(
     amount?: string;
     account_id?: number;
     settled_amount?: string;
+    tag_names?: string[];
   }
 ): Promise<Transaction> {
   return request(`/api/transactions/${id}`, {

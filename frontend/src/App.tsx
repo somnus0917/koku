@@ -521,6 +521,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
         <TransactionModal
           accounts={data.accounts}
           categories={data.categories}
+          tags={data.tags}
           onClose={() => setModal(null)}
           onSubmit={(input) =>
             mutate(
@@ -642,6 +643,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
           transaction={editTransaction}
           accounts={data.accounts}
           categories={data.categories}
+          tags={data.tags}
           onClose={() => setModal(null)}
           onSubmit={(input) =>
             mutate(

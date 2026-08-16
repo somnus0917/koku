@@ -29,6 +29,7 @@ mod receipts;
 mod recurring;
 mod reimbursements;
 mod summaries;
+mod tags;
 mod transactions;
 
 impl BookkeepingService {
@@ -99,6 +100,18 @@ impl BookkeepingService {
                 content_type   TEXT NOT NULL,
                 data           BLOB NOT NULL,
                 created_at     TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tags (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS transaction_tags (
+                transaction_id INTEGER NOT NULL REFERENCES transactions(id),
+                tag_id         INTEGER NOT NULL REFERENCES tags(id),
+                PRIMARY KEY (transaction_id, tag_id)
             );
 
             CREATE TABLE IF NOT EXISTS loans (
@@ -343,7 +356,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -470,6 +483,7 @@ type TransactionRow = (
     Option<String>,
     String,
     bool,
+    String,
 );
 
 fn account_from_row(row: AccountRow) -> Result<Account> {
@@ -513,6 +527,7 @@ fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> 
         row.get(15)?,
         row.get(16)?,
         row.get(17)?,
+        row.get(18)?,
     ))
 }
 
@@ -536,7 +551,17 @@ fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         reimbursed_at: row.15.as_deref().map(parse_timestamp).transpose()?,
         reimbursed_amount: decimal_from_db(&row.16)?,
         has_receipt: row.17,
+        tags: split_tags(&row.18),
     })
+}
+
+/// 把 group_concat 得到的逗号分隔标签串拆成去空白的标签名列表。
+fn split_tags(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 type LoanRow = (
@@ -1176,6 +1201,47 @@ mod tests {
         let (content_type, data) = service.receipt_bytes(expense.id)?;
         assert_eq!(content_type, "image/png");
         assert_eq!(data, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn tags_attach_to_transactions_and_round_trip() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(10_u32), at, "餐费")?;
+        assert!(expense.tags.is_empty());
+
+        // 设置标签：自动创建 + 回读。
+        let tags = service.set_transaction_tags(
+            expense.id,
+            vec!["旅行".to_owned(), "出差".to_owned()],
+        )?;
+        assert_eq!(tags.len(), 2);
+        assert!(service.all_tags()?.iter().any(|tag| tag.name == "旅行"));
+
+        let tx = service.transaction(expense.id)?;
+        assert_eq!(tx.tags.len(), 2);
+        assert!(tx.tags.iter().any(|name| name == "旅行"));
+
+        // 整体替换成单个标签。
+        service.set_transaction_tags(expense.id, vec!["报销".to_owned()])?;
+        let tx = service.transaction(expense.id)?;
+        assert_eq!(tx.tags, vec!["报销".to_owned()]);
+
+        // 非法标签名被拒。
+        assert!(service
+            .set_transaction_tags(expense.id, vec!["a,b".to_owned()])
+            .is_err());
+        assert!(service
+            .set_transaction_tags(expense.id, vec!["  ".to_owned()])
+            .is_err());
         Ok(())
     }
 
