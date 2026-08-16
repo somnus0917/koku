@@ -1,8 +1,12 @@
 //! 登录失败限流：固定窗口计数，防止对公网单账户系统的暴力破解。
 //!
-//! 生产环境位于 edge-caddy 之后，`RemoteAddr` 恒为反向代理地址，因此优先用
-//! `X-Forwarded-For` 首段还原真实客户端 IP；取不到时回退到对端地址（单用户
-//! 场景下等价于全局限流）。
+//! 生产环境位于 edge-caddy 之后，`RemoteAddr` 恒为反向代理地址，因此用
+//! `X-Forwarded-For` 首段作为客户端标识。**前提契约**：边缘代理（Caddy）
+//! 必须在离客户端最近的一跳用 `header_up X-Forwarded-For
+//! {http.request.remote.host}` 把该头重置为真实客户端 IP（见
+//! `deploy/Caddyfile.example`）。Caddy/nginx 默认都是追加而非覆盖，若未重置，
+//! 攻击者自带的伪造首段会直接成为限流键，每次换值即可绕过限流。
+//! 取不到该头时回退到对端地址（单用户场景下等价于全局限流）。
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -22,7 +26,8 @@ pub struct LoginThrottle {
 }
 
 impl LoginThrottle {
-    /// 解析限流键：优先 `X-Forwarded-For` 首段，其次对端 IP。
+    /// 解析限流键：取 `X-Forwarded-For` 首段（须由边缘代理重置为真实客户端 IP），
+    /// 其次对端 IP。
     pub fn client_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
         headers
             .get("x-forwarded-for")
@@ -96,6 +101,8 @@ mod tests {
 
     #[test]
     fn reads_first_x_forwarded_for_entry() {
+        // 边缘 Caddy 已把头重置为真实客户端 IP，nginx 再追加一跳是安全的：
+        // 限流键取首段（真实客户端 IP），而不是被追加的代理内网地址。
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "198.51.100.7, 10.0.0.2".parse().unwrap());
         assert_eq!(

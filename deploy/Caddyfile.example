@@ -10,5 +10,11 @@ koku.example.com {
 		-Server
 	}
 
-	reverse_proxy koku-web:8080
+	reverse_proxy koku-web:8080 {
+		# 在离客户端最近、无法被伪造的这一跳，把 X-Forwarded-For 重置为
+		# Caddy 实际看到的对端 IP（而不是默认的追加）。Koku 的登录限流
+		# 信任该头的首段作为真实客户端 IP；若不重置，攻击者可在请求里
+		# 自带伪造的 X-Forwarded-For 首段，每次换值即可绕过限流。
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
 }

@@ -5,10 +5,10 @@
 //! 本模块只负责「拉取 + 解析」；SQLite 缓存读写见 `service::rates`。
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::time::Duration;
 
 use chrono::NaiveDate;
-use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -96,7 +96,13 @@ impl RateClient {
 #[derive(Debug, Deserialize)]
 struct FrankfurterResponse {
     date: String,
-    rates: HashMap<String, f64>,
+    rates: HashMap<String, serde_json::Number>,
+}
+
+/// 把 JSON 数字原样转成 `Decimal`：经字符串往返，避免 f64 中间精度损失
+/// （与项目其余地方"全程用 `rust_decimal`"的原则一致）。
+fn json_number_to_decimal(value: &serde_json::Number) -> Option<Decimal> {
+    Decimal::from_str(&value.to_string()).ok()
 }
 
 /// 解析 Frankfurter 响应为 `RateQuote`（纯函数，便于单测）。
@@ -104,7 +110,7 @@ fn parse_frankfurter(payload: FrankfurterResponse, from: &str, to: &str) -> Resu
     let rate = payload
         .rates
         .get(to)
-        .and_then(|value| Decimal::from_f64(*value))
+        .and_then(json_number_to_decimal)
         .ok_or_else(|| {
             KokuError::RateSource(format!("rate for {to} missing from source payload"))
         })?;
@@ -127,7 +133,7 @@ fn parse_frankfurter(payload: FrankfurterResponse, from: &str, to: &str) -> Resu
 struct CurrencyApiResponse {
     date: String,
     #[serde(flatten)]
-    currencies: HashMap<String, HashMap<String, f64>>,
+    currencies: HashMap<String, HashMap<String, serde_json::Number>>,
 }
 
 /// 解析 fawazahmed0/currency-api 响应为 `RateQuote`（纯函数，便于单测）。
@@ -137,7 +143,7 @@ fn parse_currency_api(payload: CurrencyApiResponse, from: &str, to: &str) -> Res
         .currencies
         .get(&from.to_lowercase())
         .and_then(|quotes| quotes.get(&to.to_lowercase()))
-        .and_then(|value| Decimal::from_f64(*value))
+        .and_then(json_number_to_decimal)
         .ok_or_else(|| {
             KokuError::RateSource(format!("rate for {to} missing from currency-api payload"))
         })?;
