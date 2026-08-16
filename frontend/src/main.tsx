@@ -14,3 +14,12 @@ createRoot(root).render(
   </StrictMode>
 );
 
+// PWA：注册基础 Service Worker（离线缓存应用外壳，账本 API 仍走网络）。
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((error) => {
+      console.error("Service worker registration failed", error);
+    });
+  });
+}
+
