@@ -333,6 +333,150 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
+    /// 编辑一笔收入/支出流水：原子地撤销旧余额影响并应用新影响。
+    ///
+    /// 可改字段：备注、时间、分类、金额、账户（须与旧账户同币种）、结算额。
+    /// 不可改：已撤销的流水、转账/借款/调整流水、已发生报销的支出、报销收入
+    /// 流水的金额/账户/结算额（这些只允许改备注/分类/时间）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_transaction(
+        &mut self,
+        transaction_id: i64,
+        note: Option<String>,
+        occurred_at: Option<DateTime<Utc>>,
+        category_id: Option<i64>,
+        amount: Option<Decimal>,
+        account_id: Option<i64>,
+        settled_amount: Option<Decimal>,
+    ) -> Result<Transaction> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+
+        if transaction.voided_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "voided transactions cannot be edited".to_owned(),
+            ));
+        }
+        if !matches!(
+            transaction.kind,
+            TransactionKind::Expense | TransactionKind::Income
+        ) {
+            return Err(KokuError::InvalidInput(
+                "only expense and income transactions can be edited".to_owned(),
+            ));
+        }
+        // 已发生报销的支出，或报销产生的收入流水：金额/账户/结算额不可改。
+        let reimbursement_linked = Self::reimbursement_for_income_in_tx(&tx, transaction_id)?
+            .is_some()
+            || !transaction.reimbursed_amount.is_zero();
+        if reimbursement_linked
+            && (amount.is_some() || account_id.is_some() || settled_amount.is_some())
+        {
+            return Err(KokuError::InvalidInput(
+                "reimbursed transactions can only edit note, category, or time".to_owned(),
+            ));
+        }
+
+        let new_amount = amount.unwrap_or(transaction.amount);
+        positive_amount(new_amount)?;
+        let new_account_id = account_id.unwrap_or(transaction.account_id);
+
+        let old_account = Self::account_in_tx(&tx, transaction.account_id)?;
+        let new_account = if new_account_id == transaction.account_id {
+            old_account.clone()
+        } else {
+            let account = Self::account_in_tx(&tx, new_account_id)?;
+            if account.currency != old_account.currency {
+                return Err(KokuError::InvalidInput(format!(
+                    "cannot move a transaction to an account with a different currency ({} != {})",
+                    old_account.currency, account.currency
+                )));
+            }
+            account
+        };
+        // 结算额：同币种交易恒等于金额（显式给出且不一致则报错）；外币交易需显式
+        // 给出，且改金额时必须一并提供。
+        let new_settled = if transaction.currency == new_account.currency {
+            if let Some(settled) = settled_amount {
+                if settled != new_amount {
+                    return Err(KokuError::InvalidInput(
+                        "same-currency transactions must settle for the original amount".to_owned(),
+                    ));
+                }
+            }
+            new_amount
+        } else {
+            if amount.is_some() && settled_amount.is_none() {
+                return Err(KokuError::InvalidInput(format!(
+                    "settled_amount in {} is required when changing the amount of a foreign-currency transaction",
+                    new_account.currency
+                )));
+            }
+            let settled = settled_amount.unwrap_or(transaction.settled_amount);
+            positive_amount(settled)?;
+            settled
+        };
+        if let Some(category_id) = category_id {
+            let category = Self::category_in_tx(&tx, category_id)?;
+            let expected = match transaction.kind {
+                TransactionKind::Expense => CategoryKind::Expense,
+                TransactionKind::Income => CategoryKind::Income,
+                _ => unreachable!(),
+            };
+            if category.kind != expected {
+                return Err(KokuError::CategoryKindMismatch {
+                    expected: expected.as_str(),
+                    actual: category.kind.as_str(),
+                });
+            }
+        }
+
+        // 撤销旧影响（按旧账户类型）→ 应用新影响（按新账户类型）。
+        let undo_old = |balance: Decimal| match transaction.kind {
+            TransactionKind::Expense => old_account
+                .account_type
+                .apply_inflow(balance, transaction.settled_amount),
+            TransactionKind::Income => old_account
+                .account_type
+                .apply_outflow(balance, transaction.settled_amount),
+            _ => unreachable!(),
+        };
+        let apply_new = |balance: Decimal| match transaction.kind {
+            TransactionKind::Expense => {
+                new_account.account_type.apply_outflow(balance, new_settled)
+            }
+            TransactionKind::Income => new_account.account_type.apply_inflow(balance, new_settled),
+            _ => unreachable!(),
+        };
+        if new_account_id == transaction.account_id {
+            let balance = apply_new(undo_old(old_account.balance));
+            Self::set_balance(&tx, transaction.account_id, balance)?;
+        } else {
+            Self::set_balance(&tx, transaction.account_id, undo_old(old_account.balance))?;
+            Self::set_balance(&tx, new_account_id, apply_new(new_account.balance))?;
+        }
+
+        tx.execute(
+            "UPDATE transactions
+             SET note = ?1, occurred_at = ?2, category_id = ?3,
+                 amount = ?4, account_id = ?5, settled_amount = ?6
+             WHERE id = ?7",
+            params![
+                note.unwrap_or(transaction.note),
+                timestamp(occurred_at.unwrap_or(transaction.occurred_at)),
+                category_id.or(transaction.category_id),
+                decimal_to_db(new_amount),
+                new_account_id,
+                decimal_to_db(new_settled),
+                transaction_id
+            ],
+        )?;
+        tx.commit()?;
+        self.transaction(transaction_id)
+    }
+
     pub fn transaction(&self, id: i64) -> Result<Transaction> {
         let raw = self
             .conn

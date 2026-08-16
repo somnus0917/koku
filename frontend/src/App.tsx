@@ -50,6 +50,7 @@ import {
   settleDeposit,
   unmarkReimbursable,
   updateAccount,
+  updateTransaction,
   voidTransaction
 } from "./api";
 import {
@@ -57,6 +58,7 @@ import {
   CategoryModal,
   DepositModal,
   EditAccountModal,
+  EditTransactionModal,
   LoanModal,
   ReimburseModal,
   RepayModal,
@@ -93,7 +95,7 @@ import type {
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "insights";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -201,6 +203,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
+  const [editTransaction, setEditTransaction] = useState<Transaction | null>(null);
   const [depositFrom, setDepositFrom] = useState<Account | null>(null);
   const [settleTarget, setSettleTarget] = useState<Account | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
@@ -303,6 +306,10 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onReimburse={(transaction) => {
               setReimburseTarget(transaction);
               setModal("reimburse");
+            }}
+            onEdit={(transaction) => {
+              setEditTransaction(transaction);
+              setModal("edit-transaction");
             }}
           />
         );
@@ -531,6 +538,20 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             mutate(
               () => repayLoan(loanTarget.id, input),
               "还款已入账"
+            )
+          }
+        />
+      )}
+      {modal === "edit-transaction" && data && editTransaction && (
+        <EditTransactionModal
+          transaction={editTransaction}
+          accounts={data.accounts}
+          categories={data.categories}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => updateTransaction(editTransaction.id, input),
+              "交易已更新"
             )
           }
         />

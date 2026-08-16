@@ -1,5 +1,5 @@
 //! 页面级组件：总览、账户、交易、分析、借贷区块。
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -461,7 +461,8 @@ export function TransactionsPage({
   onVoid,
   onMarkReimbursable,
   onUnmarkReimbursable,
-  onReimburse
+  onReimburse,
+  onEdit
 }: {
   data: AppData;
   onAdd: () => void;
@@ -469,6 +470,7 @@ export function TransactionsPage({
   onMarkReimbursable: (transaction: Transaction) => void;
   onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
+  onEdit: (transaction: Transaction) => void;
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
@@ -504,7 +506,7 @@ export function TransactionsPage({
         </div>
       </div>
       <article className="panel transaction-table">
-        <div className="table-header"><span>交易</span><span>账户</span><span>日期</span><span>金额</span><span /></div>
+        <div className="table-header"><span>交易</span><span>账户</span><span>日期</span><span>金额</span><span /><span /></div>
         {filtered.map((transaction) => (
           <TransactionRow
             key={transaction.id}
@@ -518,6 +520,7 @@ export function TransactionsPage({
             onMarkReimbursable={() => onMarkReimbursable(transaction)}
             onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
             onReimburse={() => onReimburse(transaction)}
+            onEdit={() => onEdit(transaction)}
           />
         ))}
         {filtered.length === 0 && <EmptyState title="没有找到交易" detail="换个关键词，或记录一笔新的交易。" />}
@@ -573,7 +576,8 @@ export function TransactionRow({
   onVoid,
   onMarkReimbursable,
   onUnmarkReimbursable,
-  onReimburse
+  onReimburse,
+  onEdit
 }: {
   transaction: Transaction;
   account?: Account;
@@ -588,7 +592,22 @@ export function TransactionRow({
   onMarkReimbursable?: () => void;
   onUnmarkReimbursable?: () => void;
   onReimburse?: () => void;
+  /** 传入后在行最右侧显示 ⋯ 菜单（编辑交易） */
+  onEdit?: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  // 点击菜单外部时关闭。
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [menuOpen]);
   const meta = {
     expense: { icon: ArrowUpRight, label: category?.name ?? "支出", className: "expense" },
     income: { icon: ArrowDownLeft, label: category?.name ?? "收入", className: "income" },
@@ -682,6 +701,26 @@ export function TransactionRow({
             title="撤销并恢复余额"
             aria-label="撤销交易"
           ><Trash2 size={16} /></button>
+        </div>
+      )}
+      {onEdit && (
+        <div className="row-menu-wrap" ref={menuRef}>
+          <button
+            type="button"
+            className={`row-action ${menuOpen ? "active" : ""}`}
+            onClick={() => setMenuOpen((open) => !open)}
+            title="更多操作"
+            aria-label="更多操作"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          ><MoreHorizontal size={16} /></button>
+          {menuOpen && (
+            <div className="row-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onEdit(); }}>
+                编辑交易
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

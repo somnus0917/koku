@@ -172,6 +172,23 @@ export function voidTransaction(id: number): Promise<Transaction> {
   return request(`/api/transactions/${id}`, { method: "DELETE" });
 }
 
+export function updateTransaction(
+  id: number,
+  input: {
+    note?: string;
+    occurred_at?: string;
+    category_id?: number;
+    amount?: string;
+    account_id?: number;
+    settled_amount?: string;
+  }
+): Promise<Transaction> {
+  return request(`/api/transactions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input)
+  });
+}
+
 export function markReimbursable(id: number): Promise<Transaction> {
   return request(`/api/transactions/${id}/reimbursable`, { method: "POST" });
 }

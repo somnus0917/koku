@@ -135,6 +135,13 @@ export function localDateTimeValue(): string {
   return new Date(now.getTime() - offset).toISOString().slice(0, 16);
 }
 
+/** 把 ISO 时间戳转成该时间所在时区的 datetime-local 值（YYYY-MM-DDTHH:mm）。 */
+export function toLocalDateTimeValue(value: string): string {
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
 /** 简短日期时间（如 "8月15日 14:30"）。 */
 export function formatDate(value: string): string {
   return new Intl.DateTimeFormat("zh-CN", {

@@ -1078,6 +1078,250 @@ mod tests {
     }
 
     #[test]
+    fn expense_can_be_edited_and_balance_adjusts() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(500_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let transit = service.create_category("交通", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 10)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "午餐")?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(400_u32));
+
+        // 改备注/分类/时间：余额不变。
+        let later = at + ChronoDuration::days(3);
+        service.update_transaction(
+            expense.id,
+            Some("晚餐".to_owned()),
+            Some(later),
+            Some(transit.id),
+            None,
+            None,
+            None,
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(400_u32));
+        let edited = service.transaction(expense.id)?;
+        assert_eq!(edited.note, "晚餐");
+        assert_eq!(edited.category_id, Some(transit.id));
+        assert_eq!(edited.occurred_at, later);
+
+        // 改金额 100 → 150：余额 400 → 350。
+        service.update_transaction(
+            expense.id,
+            None,
+            None,
+            None,
+            Some(Decimal::from(150_u32)),
+            None,
+            None,
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(350_u32));
+        // 改回 100。
+        service.update_transaction(
+            expense.id,
+            None,
+            None,
+            None,
+            Some(Decimal::from(100_u32)),
+            None,
+            None,
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(400_u32));
+        // 只改备注：余额不变。
+        service.update_transaction(
+            expense.id,
+            Some("更正".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(400_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn income_edit_moves_balance_between_same_currency_accounts() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let savings =
+            service.create_account("储蓄", AccountType::Savings, "CNY", Decimal::from(1000_u32))?;
+        let salary = service.create_category("工资", CategoryKind::Income)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 10)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let income =
+            service.record_income(cash.id, salary.id, Decimal::from(200_u32), at, "工资")?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(300_u32));
+
+        // 从零钱移到储蓄：零钱 100、储蓄 1200。
+        service.update_transaction(income.id, None, None, None, None, Some(savings.id), None)?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(100_u32));
+        assert_eq!(
+            service.account(savings.id)?.balance,
+            Decimal::from(1200_u32)
+        );
+        assert_eq!(service.transaction(income.id)?.account_id, savings.id);
+        Ok(())
+    }
+
+    #[test]
+    fn editing_credit_expense_keeps_liability_direction() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account(
+            "信用卡",
+            AccountType::Credit,
+            "CNY",
+            Decimal::from(1000_u32),
+        )?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 10)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        // 信用账户：支出增加欠款。
+        let expense =
+            service.record_expense(credit.id, food.id, Decimal::from(100_u32), at, "刷卡")?;
+        assert_eq!(service.account(credit.id)?.balance, Decimal::from(1100_u32));
+        // 金额改 250：欠款 1100 → 1250。
+        service.update_transaction(
+            expense.id,
+            None,
+            None,
+            None,
+            Some(Decimal::from(250_u32)),
+            None,
+            None,
+        )?;
+        assert_eq!(service.account(credit.id)?.balance, Decimal::from(1250_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn edit_is_rejected_for_voided_loans_transfers_and_reimbursed() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 10)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+
+        // 已撤销的流水不可编辑。
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "餐费")?;
+        service.void_transaction(expense.id)?;
+        assert!(service
+            .update_transaction(
+                expense.id,
+                Some("x".to_owned()),
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+            .is_err());
+
+        // 转账/借款流水不可编辑。
+        let usd = service.create_account("美元", AccountType::Cash, "USD", Decimal::ZERO)?;
+        let transfer = service.record_transfer(
+            cash.id,
+            usd.id,
+            Decimal::from(10_u32),
+            Decimal::from(10_u32),
+            at,
+            "换汇",
+        )?;
+        assert!(service
+            .update_transaction(transfer.id, None, None, None, None, None, None)
+            .is_err());
+        let loan = service.create_loan(
+            crate::domain::LoanType::Lend,
+            "张三",
+            "CNY",
+            Decimal::from(100_u32),
+            cash.id,
+            "借款",
+        )?;
+        let loan_tx = service
+            .transactions(100, 0)?
+            .into_iter()
+            .find(|item| item.loan_id == Some(loan.id))
+            .ok_or_else(|| KokuError::InvalidInput("loan transaction not found".to_owned()))?;
+        assert!(service
+            .update_transaction(loan_tx.id, None, None, None, None, None, None)
+            .is_err());
+
+        // 已报销的支出只能改备注/分类/时间。
+        let expense2 =
+            service.record_expense(cash.id, food.id, Decimal::from(200_u32), at, "出差")?;
+        service.mark_reimbursable(expense2.id)?;
+        service.reimburse(
+            expense2.id,
+            cash.id,
+            Decimal::from(200_u32),
+            "CNY",
+            None,
+            "报销",
+        )?;
+        assert!(service
+            .update_transaction(
+                expense2.id,
+                None,
+                None,
+                None,
+                Some(Decimal::from(150_u32)),
+                None,
+                None
+            )
+            .is_err());
+        service.update_transaction(
+            expense2.id,
+            Some("改备注".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+
+        // 报销收入流水也不可改金额。
+        let income = service
+            .transactions(100, 0)?
+            .into_iter()
+            .find(|item| item.kind == TransactionKind::Income)
+            .ok_or_else(|| KokuError::InvalidInput("reimbursement income not found".to_owned()))?;
+        assert!(service
+            .update_transaction(
+                income.id,
+                None,
+                None,
+                None,
+                Some(Decimal::from(300_u32)),
+                None,
+                None
+            )
+            .is_err());
+
+        // 跨币种迁移账户被拒绝。
+        let expense3 =
+            service.record_expense(cash.id, food.id, Decimal::from(50_u32), at, "跨币种")?;
+        assert!(service
+            .update_transaction(expense3.id, None, None, None, None, Some(usd.id), None)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn transfer_updates_both_balances_exactly_and_is_atomic() -> Result<()> {
         let mut service = test_service()?;
         let source = service.create_account(

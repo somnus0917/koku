@@ -229,6 +229,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000） |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
+| `PATCH` | `/api/transactions/{id}` | 编辑收入/支出（备注/时间/分类/金额/账户/结算额，余额原子联动；已撤销、转账/借款、已报销的流水有编辑限制） |
 | `POST/DELETE` | `/api/transactions/{id}/reimbursable` | 标记/取消"待报销"（已发生报销的支出不可取消） |
 | `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水；撤销支出会级联撤销报销收入） |
 | `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |

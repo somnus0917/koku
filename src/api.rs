@@ -120,6 +120,16 @@ struct UpdateAccountRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateTransactionRequest {
+    note: Option<String>,
+    occurred_at: Option<DateTime<Utc>>,
+    category_id: Option<i64>,
+    amount: Option<Decimal>,
+    account_id: Option<i64>,
+    settled_amount: Option<Decimal>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdjustBalanceRequest {
     /// 带符号增量：正数增加余额、负数减少余额
     amount: Decimal,
@@ -462,6 +472,23 @@ async fn api_void_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+async fn api_update_transaction(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+    Json(request): Json<UpdateTransactionRequest>,
+) -> Result<Json<ApiResponse<Transaction>>> {
+    let transaction = lock_service(&state)?.update_transaction(
+        transaction_id,
+        request.note,
+        request.occurred_at,
+        request.category_id,
+        request.amount,
+        request.account_id,
+        request.settled_amount,
+    )?;
+    Ok(Json(ApiResponse::new(transaction)))
+}
+
 async fn api_create_deposit(
     State(state): State<AppState>,
     Json(request): Json<CreateDepositRequest>,
@@ -706,7 +733,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/transfers", post(api_create_transfer))
         .route(
             "/api/transactions/{transaction_id}",
-            delete(api_void_transaction),
+            delete(api_void_transaction).patch(api_update_transaction),
         )
         .route(
             "/api/transactions/{transaction_id}/reimbursable",

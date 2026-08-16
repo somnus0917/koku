@@ -14,7 +14,13 @@ import {
 } from "lucide-react";
 import { rateHint } from "../api";
 import type { createTransaction, createTransfer } from "../api";
-import { availableCurrencies, formatDate, formatMoney, localDateTimeValue } from "../lib";
+import {
+  availableCurrencies,
+  formatDate,
+  formatMoney,
+  localDateTimeValue,
+  toLocalDateTimeValue
+} from "../lib";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -646,6 +652,150 @@ export function TransactionModal({
         {sameTransferEndpoint && <div className="form-error">转出与转入账户不能相同。</div>}
         {formError && <div className="form-error">{formError}</div>}
         <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (foreignTransaction && !settledAmount) || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? "保存中" : "确认记录"}</button></div>
+      </form>
+    </ModalShell>
+  );
+}
+
+export function EditTransactionModal({
+  transaction,
+  accounts,
+  categories,
+  onClose,
+  onSubmit
+}: {
+  transaction: Transaction;
+  accounts: Account[];
+  categories: Category[];
+  onClose: () => void;
+  onSubmit: (input: {
+    note?: string;
+    occurred_at?: string;
+    category_id?: number;
+    amount?: string;
+    account_id?: number;
+    settled_amount?: string;
+  }) => Promise<void>;
+}) {
+  const account = accounts.find((item) => item.id === transaction.account_id);
+  const accountCurrency = account?.currency ?? transaction.currency;
+  const foreign = transaction.currency !== accountCurrency;
+  const sameCurrencyAccounts = accounts.filter((item) => item.currency === accountCurrency);
+  const matchingCategories = categories.filter((item) => item.kind === transaction.kind);
+  // 已发生报销的支出：金额/账户/结算额不可改（报销收入流水由后端兜底拒绝）。
+  const reimbursementLocked = transaction.reimbursed_amount !== "0";
+
+  const [note, setNote] = useState(transaction.note);
+  const [occurredAt, setOccurredAt] = useState(toLocalDateTimeValue(transaction.occurred_at));
+  const [categoryId, setCategoryId] = useState(transaction.category_id ?? 0);
+  const [amount, setAmount] = useState(transaction.amount);
+  const [settledAmount, setSettledAmount] = useState(transaction.settled_amount);
+  const [accountId, setAccountId] = useState(transaction.account_id);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      const input: {
+        note?: string;
+        occurred_at?: string;
+        category_id?: number;
+        amount?: string;
+        account_id?: number;
+        settled_amount?: string;
+      } = {};
+      if (note !== transaction.note) input.note = note;
+      if (occurredAt !== toLocalDateTimeValue(transaction.occurred_at)) {
+        input.occurred_at = new Date(occurredAt).toISOString();
+      }
+      if (categoryId !== (transaction.category_id ?? 0)) input.category_id = categoryId;
+      if (accountId !== transaction.account_id) input.account_id = accountId;
+      if (amount !== transaction.amount) input.amount = amount;
+      // 外币交易：金额与结算额一起提交，保证后端校验通过；同币种结算额恒等于金额。
+      if (foreign && (amount !== transaction.amount || settledAmount !== transaction.settled_amount)) {
+        input.settled_amount = settledAmount;
+      }
+      if (Object.keys(input).length === 0) {
+        onClose();
+        return;
+      }
+      await onSubmit(input);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存失败");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ModalShell eyebrow="EDIT ENTRY" title="编辑交易" onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p>
+            {transaction.kind === "expense" ? "支出" : "收入"} · {formatMoney(transaction.amount, transaction.currency)}
+            {foreign ? `，结算 ${formatMoney(transaction.settled_amount, accountCurrency)}` : ""}
+          </p>
+        </div>
+        <div className="form-grid">
+          <label><span>账户</span>
+            <select
+              value={accountId}
+              disabled={reimbursementLocked || sameCurrencyAccounts.length <= 1}
+              onChange={(e) => setAccountId(Number(e.target.value))}
+            >
+              {sameCurrencyAccounts.map((item) => (
+                <option key={item.id} value={item.id}>{item.name}（{item.currency}）</option>
+              ))}
+            </select>
+          </label>
+          <label><span>分类</span>
+            <div className="category-input">
+              <CategoryAvatar name={matchingCategories.find((item) => item.id === categoryId)?.name ?? "其他"} size="small" />
+              <select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>
+                {matchingCategories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+            </div>
+          </label>
+          <label><span>金额（{transaction.currency}）</span>
+            <input
+              required
+              min="0.01"
+              step="0.01"
+              inputMode="decimal"
+              disabled={reimbursementLocked}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+          {foreign && (
+            <label><span>计入账户余额 · {accountCurrency}</span>
+              <input
+                required
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                disabled={reimbursementLocked}
+                value={settledAmount}
+                onChange={(e) => setSettledAmount(e.target.value)}
+              />
+            </label>
+          )}
+          <label><span>时间</span>
+            <input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
+          </label>
+          <label className="span-two"><span>备注</span>
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" />
+          </label>
+        </div>
+        {reimbursementLocked && <p className="fx-hint">该笔支出已发生报销，仅可修改备注、分类和时间。</p>}
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" disabled={submitting || !amount}>{submitting && <LoaderCircle className="spin" size={17} />}保存修改</button>
+        </div>
       </form>
     </ModalShell>
   );
