@@ -82,6 +82,14 @@ export interface MonthlySummary {
   expenses_by_category: CategoryExpense[];
 }
 
+export interface MonthlyTrendPoint {
+  year: number;
+  month: number;
+  total_income: string;
+  total_expense: string;
+  net: string;
+}
+
 export interface CashFlowItem {
   category_id: number;
   category_name: string;

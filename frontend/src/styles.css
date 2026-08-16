@@ -642,6 +642,28 @@ button:disabled {
   width: 112px;
 }
 
+.period-control input:disabled {
+  opacity: 0.45;
+}
+
+.all-months-toggle {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.all-months-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface-raised);
+}
+
 .currency-select {
   position: relative;
   padding: 9px 10px;
@@ -902,6 +924,75 @@ button:disabled {
   color: var(--text-faint);
   font-size: 9px;
 }
+
+.trend-panel {
+  margin-top: 18px;
+}
+
+.trend-note {
+  color: var(--text-faint);
+  font-size: 12px;
+  padding: 10px 0;
+}
+
+.monthly-trend-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.trend-zero-line {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.trend-series {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.trend-series.income { stroke: var(--income); }
+.trend-series.expense { stroke: var(--expense); }
+.trend-series.net { stroke: var(--transfer); }
+
+.trend-point {
+  fill: var(--surface-raised);
+  stroke: var(--transfer);
+  stroke-width: 2.5;
+}
+
+.chart-axis-label {
+  fill: var(--text-faint);
+  font-size: 10px;
+}
+
+.trend-legend {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 6px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.trend-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.trend-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.legend-income i { background: var(--income); }
+.legend-expense i { background: var(--expense); }
+.legend-net i { background: var(--transfer); }
 
 .month-card {
   display: flex;
@@ -1487,6 +1578,21 @@ button:disabled {
 
 .table-header span:nth-child(4) {
   text-align: right;
+}
+
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 4px;
+}
+
+.load-more-button {
+  font-size: 12px;
+}
+
+.load-more-button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .insights-grid {

@@ -41,7 +41,8 @@ import {
   createTransfer,
   deleteCategory,
   getAuthSession,
-  loadAppData,
+  loadSummaryData,
+  loadTransactions,
   login,
   logout,
   markReimbursable,
@@ -103,6 +104,10 @@ const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "transactions", label: "交易", icon: ReceiptText },
   { id: "insights", label: "分析", icon: ChartNoAxesCombined }
 ];
+
+/** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
+const TRANSACTIONS_PAGE_SIZE = 200;
+const MONTH_TRANSACTIONS_LIMIT = 1000;
 
 export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -211,16 +216,31 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [toast, setToast] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
+  const [txOffset, setTxOffset] = useState(0);
+  const [txHasMore, setTxHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  const [year, month] = monthValue.split("-").map(Number);
+  // monthValue 为空字符串表示「全部月份」；此时 year/month 为 undefined。
+  const monthParts = monthValue ? monthValue.split("-").map(Number) : [];
+  const year = monthParts[0];
+  const month = monthParts[1];
 
   const refresh = useCallback(
     async (quiet = false) => {
       if (quiet) setRefreshing(true);
       else setLoading(true);
       try {
-        const nextData = await loadAppData(year, month, currency);
-        setData(nextData);
+        const now = new Date();
+        const summaryYear = year ?? now.getFullYear();
+        const summaryMonth = month ?? now.getMonth() + 1;
+        const limit = month === undefined ? TRANSACTIONS_PAGE_SIZE : MONTH_TRANSACTIONS_LIMIT;
+        const [summary, transactions] = await Promise.all([
+          loadSummaryData(summaryYear, summaryMonth, currency),
+          loadTransactions(0, limit, year, month)
+        ]);
+        setData({ ...summary, transactions });
+        setTxOffset(transactions.length);
+        setTxHasMore(month === undefined && transactions.length === TRANSACTIONS_PAGE_SIZE);
         setError(null);
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "无法连接 Koku API");
@@ -231,6 +251,23 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
     },
     [currency, month, year]
   );
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !txHasMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await loadTransactions(txOffset, TRANSACTIONS_PAGE_SIZE);
+      setData((current) =>
+        current ? { ...current, transactions: [...current.transactions, ...page] } : current
+      );
+      setTxOffset((offset) => offset + page.length);
+      setTxHasMore(page.length === TRANSACTIONS_PAGE_SIZE);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "无法加载更多交易");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, txHasMore, txOffset]);
 
   useEffect(() => {
     void refresh();
@@ -311,6 +348,9 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               setEditTransaction(transaction);
               setModal("edit-transaction");
             }}
+            onLoadMore={loadMore}
+            loadingMore={loadingMore}
+            hasMore={txHasMore}
           />
         );
       case "insights":
@@ -385,8 +425,18 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               aria-label="统计月份"
               type="month"
               value={monthValue}
+              disabled={monthValue === ""}
               onChange={(event) => setMonthValue(event.target.value)}
             />
+            <button
+              type="button"
+              className={`all-months-toggle ${monthValue === "" ? "active" : ""}`}
+              onClick={() => setMonthValue((value) => (value === "" ? currentMonthValue() : ""))}
+              aria-pressed={monthValue === ""}
+              title={monthValue === "" ? "切回按月查看" : "查看全部月份（交易列表分页加载）"}
+            >
+              全部
+            </button>
           </div>
           <div className="topbar-actions">
             <label className="currency-select">

@@ -289,6 +289,16 @@ pub struct MonthlySummary {
     pub expenses_by_category: Vec<CategoryExpense>,
 }
 
+/// 跨月趋势中的一个自然月点：收入/支出/结余均已折算到显示币种。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonthlyTrendPoint {
+    pub year: i32,
+    pub month: u32,
+    pub total_income: Decimal,
+    pub total_expense: Decimal,
+    pub net: Decimal,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CashFlowItem {
     pub category_id: i64,

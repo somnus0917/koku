@@ -961,6 +961,79 @@ mod tests {
     }
 
     #[test]
+    fn transactions_can_be_filtered_by_month_and_paginated() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let salary = service.create_category("工资", CategoryKind::Income)?;
+        let august = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let september = NaiveDate::from_ymd_opt(2026, 9, 2)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        service.record_expense(cash.id, food.id, Decimal::from(10_u32), august, "八月餐")?;
+        service.record_expense(cash.id, food.id, Decimal::from(20_u32), september, "九月餐")?;
+        service.record_income(cash.id, salary.id, Decimal::from(100_u32), september, "九月工资")?;
+
+        // 按月过滤：八月只有一条，九月有两条。
+        let august_txs = service.transactions_in_month(2026, 8, 100, 0)?;
+        assert_eq!(august_txs.len(), 1);
+        assert_eq!(august_txs[0].note, "八月餐");
+        let september_txs = service.transactions_in_month(2026, 9, 100, 0)?;
+        assert_eq!(september_txs.len(), 2);
+
+        // 月内分页：limit=1 且 offset=1 返回第二笔（时间倒序、id 倒序）。
+        let page = service.transactions_in_month(2026, 9, 1, 1)?;
+        assert_eq!(page.len(), 1);
+        assert_ne!(page[0].id, september_txs[0].id);
+
+        // 无流水的月份返回空；非法月份报错。
+        assert!(service.transactions_in_month(2026, 7, 100, 0)?.is_empty());
+        assert!(service.transactions_in_month(2026, 13, 100, 0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn monthly_trend_aggregates_recent_months_in_display_currency() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let salary = service.create_category("工资", CategoryKind::Income)?;
+        let now = Utc::now();
+        let previous = now - ChronoDuration::days(40);
+        service.record_expense(cash.id, food.id, Decimal::from(250_u32), now, "本月支出")?;
+        service.record_income(cash.id, salary.id, Decimal::from(1000_u32), previous, "上月收入")?;
+
+        let trend = service.monthly_trend(12, "CNY")?;
+        assert_eq!(trend.len(), 12);
+        // 升序：最后一点是当前月。
+        let current = trend.last().unwrap();
+        assert_eq!((current.year, current.month), (now.year(), now.month()));
+        assert_eq!(current.total_income, Decimal::ZERO);
+        assert_eq!(current.total_expense, Decimal::from(250_u32));
+        assert_eq!(current.net, Decimal::from(-250_i32));
+        // 上一个自然月：只有收入。
+        let prev_point = trend
+            .iter()
+            .find(|point| point.year == previous.year() && point.month == previous.month())
+            .ok_or_else(|| KokuError::InvalidInput("previous month missing from trend".to_owned()))?;
+        assert_eq!(prev_point.total_income, Decimal::from(1000_u32));
+        assert_eq!(prev_point.total_expense, Decimal::ZERO);
+        assert_eq!(prev_point.net, Decimal::from(1000_u32));
+        // 其余月份补零。
+        let nonzero = trend
+            .iter()
+            .filter(|point| !point.total_income.is_zero() || !point.total_expense.is_zero())
+            .count();
+        assert_eq!(nonzero, 2);
+        Ok(())
+    }
+
+    #[test]
     fn balance_summary_converts_all_account_and_loan_currencies() -> Result<()> {
         let mut service = test_service()?;
         service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;

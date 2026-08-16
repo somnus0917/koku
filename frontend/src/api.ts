@@ -11,6 +11,7 @@ import type {
   Loan,
   LoanType,
   MonthlySummary,
+  MonthlyTrendPoint,
   RateQuote,
   Transaction,
   TransactionKind
@@ -68,27 +69,53 @@ export function logout(): Promise<{ logged_out: boolean }> {
   return request("/api/auth/logout", { method: "POST" });
 }
 
-export async function loadAppData(
+/** 汇总侧数据（除交易流水外的所有首屏数据）。 */
+export type SummaryData = Omit<AppData, "transactions">;
+
+export async function loadSummaryData(
   year: number,
   month: number,
   currency: string
-): Promise<AppData> {
+): Promise<SummaryData> {
   const query = new URLSearchParams({
     year: String(year),
     month: String(month),
     currency
   });
   const currencyQuery = new URLSearchParams({ currency });
-  const [accounts, categories, transactions, monthly, cashFlow, balance, loans] = await Promise.all([
+  const [accounts, categories, monthly, cashFlow, balance, loans] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
-    request<Transaction[]>("/api/transactions"),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
     request<Loan[]>("/api/loans")
   ]);
-  return { accounts, categories, transactions, monthly, cashFlow, balance, loans };
+  return { accounts, categories, monthly, cashFlow, balance, loans };
+}
+
+/** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
+export function loadTransactions(
+  offset: number,
+  limit: number,
+  year?: number,
+  month?: number
+): Promise<Transaction[]> {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset)
+  });
+  if (year !== undefined && month !== undefined) {
+    query.set("year", String(year));
+    query.set("month", String(month));
+  }
+  return request<Transaction[]>(`/api/transactions?${query.toString()}`);
+}
+
+/** 查询最近 `months` 个月的收支趋势（收入/支出/结余逐月折算到显示币种）。 */
+export function loadTrend(months: number, currency: string): Promise<MonthlyTrendPoint[]> {
+  const query = new URLSearchParams({ months: String(months), currency });
+  return request<MonthlyTrendPoint[]>(`/api/summary/trend?${query.toString()}`);
 }
 
 export function createAccount(input: {

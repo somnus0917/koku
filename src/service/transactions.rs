@@ -493,17 +493,57 @@ impl BookkeepingService {
         transaction_from_row(raw)
     }
 
-    /// 分页读取流水，按时间倒序。`limit` 必须为 1..=1000，`offset` 从 0 开始。
+    /// 分页读取全部流水，按时间倒序。`limit` 必须为 1..=1000，`offset` 从 0 开始。
     pub fn transactions(&self, limit: u32, offset: u32) -> Result<Vec<Transaction>> {
+        self.transactions_in_range(None, limit, offset)
+    }
+
+    /// 分页读取某自然月的流水（时间倒序）。区间语义复用 `month_bounds`，
+    /// 与月度汇总保持一致：`occurred_at >= 当月 0 点` 且 `< 下月 0 点`。
+    pub fn transactions_in_month(
+        &self,
+        year: i32,
+        month: u32,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Transaction>> {
+        let (start, end) = month_bounds(year, month)?;
+        self.transactions_in_range(Some((start, end)), limit, offset)
+    }
+
+    fn transactions_in_range(
+        &self,
+        range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Transaction>> {
         if !(1..=1000).contains(&limit) {
             return Err(KokuError::InvalidInput(
                 "transactions limit must be between 1 and 1000".to_owned(),
             ));
         }
-        let mut statement = self.conn.prepare(
-            "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2",
-        )?;
-        let rows = statement.query_map(params![limit, offset], transaction_row)?;
-        rows.map(|row| transaction_from_row(row?)).collect()
+        const COLUMNS: &str = "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount FROM transactions";
+        let rows: Vec<rusqlite::Result<TransactionRow>> = match range {
+            Some((start, end)) => {
+                let mut statement = self.conn.prepare(&format!(
+                    "{COLUMNS} WHERE occurred_at >= ?1 AND occurred_at < ?2 ORDER BY occurred_at DESC, id DESC LIMIT ?3 OFFSET ?4"
+                ))?;
+                let mapped = statement.query_map(
+                    params![timestamp(start), timestamp(end), limit, offset],
+                    transaction_row,
+                )?;
+                mapped.collect()
+            }
+            None => {
+                let mut statement = self.conn.prepare(&format!(
+                    "{COLUMNS} ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2"
+                ))?;
+                let mapped = statement.query_map(params![limit, offset], transaction_row)?;
+                mapped.collect()
+            }
+        };
+        rows.into_iter()
+            .map(|row| transaction_from_row(row?))
+            .collect()
     }
 }

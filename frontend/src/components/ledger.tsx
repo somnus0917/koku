@@ -15,6 +15,7 @@ import {
   EyeOff,
   Handshake,
   LayoutDashboard,
+  LoaderCircle,
   MoreHorizontal,
   PiggyBank,
   Plus,
@@ -31,7 +32,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
-import { rateHint } from "../api";
+import { loadTrend, rateHint } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -42,6 +43,7 @@ import type {
   CategoryKind,
   Loan,
   MonthlySummary,
+  MonthlyTrendPoint,
   Transaction,
   TransactionKind
 } from "../types";
@@ -462,7 +464,10 @@ export function TransactionsPage({
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
-  onEdit
+  onEdit,
+  onLoadMore,
+  loadingMore = false,
+  hasMore = false
 }: {
   data: AppData;
   onAdd: () => void;
@@ -471,6 +476,9 @@ export function TransactionsPage({
   onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
   onEdit: (transaction: Transaction) => void;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  hasMore?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
@@ -525,6 +533,20 @@ export function TransactionsPage({
         ))}
         {filtered.length === 0 && <EmptyState title="没有找到交易" detail="换个关键词，或记录一笔新的交易。" />}
       </article>
+      {hasMore && (
+        <div className="load-more-row">
+          <button
+            type="button"
+            className="text-button load-more-button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore
+              ? <><LoaderCircle className="spin" size={16} /> 正在加载…</>
+              : `加载更多（已显示 ${data.transactions.length} 条）`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -737,6 +759,7 @@ export function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; c
         <SummaryCard label="本月支出" value={summary.total_expense} currency={summary.currency} tone="orange" />
         <SummaryCard label="本月结余" value={summary.net} currency={summary.currency} tone="blue" />
       </section>
+      <MonthlyTrendPanel currency={summary.currency} />
       <CashFlowSankey summary={cashFlow} />
       <section className="insights-grid">
         <article className="panel donut-panel">
@@ -761,6 +784,102 @@ export function InsightsPage({ summary, cashFlow }: { summary: MonthlySummary; c
         <span className="callout-icon"><ChartNoAxesCombined size={22} /></span>
         <div><span>KOKU NOTE</span><h3>你保留了 {healthScore(summary)}% 的本月收入</h3></div>
       </article>
+    </div>
+  );
+}
+
+export function MonthlyTrendPanel({ currency }: { currency: string }) {
+  const [points, setPoints] = useState<MonthlyTrendPoint[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadTrend(12, currency)
+      .then((data) => {
+        if (!cancelled) {
+          setPoints(data);
+          setError(null);
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载趋势");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currency]);
+  return (
+    <section className="panel trend-panel">
+      <div className="section-heading compact-heading">
+        <div><span>TREND</span><h2>近 12 个月趋势</h2></div>
+      </div>
+      {error && <div className="trend-note">趋势加载失败：{error}</div>}
+      {!error && !points && <div className="trend-note">正在加载…</div>}
+      {points && <MonthlyTrendChart points={points} currency={currency} />}
+    </section>
+  );
+}
+
+export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPoint[]; currency: string }) {
+  if (points.length === 0) {
+    return <EmptyState title="暂无趋势数据" detail="记录交易后，这里会显示最近几个月的收支走势。" />;
+  }
+  const width = 720;
+  const height = 250;
+  const padL = 54;
+  const padR = 16;
+  const padT = 18;
+  const padB = 34;
+  const incomes = points.map((point) => Number(point.total_income));
+  const expenses = points.map((point) => Number(point.total_expense));
+  const nets = points.map((point) => Number(point.net));
+  const max = Math.max(1, ...incomes, ...expenses, ...nets);
+  const min = Math.min(0, ...nets);
+  const range = Math.max(1, max - min);
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const x = (index: number) =>
+    padL + (points.length === 1 ? innerW / 2 : (index / (points.length - 1)) * innerW);
+  const y = (value: number) => padT + ((max - value) / range) * innerH;
+  const path = (values: number[]) =>
+    values.map((value, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((fraction) => padT + fraction * innerH);
+  return (
+    <div className="monthly-trend-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="近 12 个月收支趋势">
+        <title>近 12 个月收支趋势（{currency}）</title>
+        {gridLines.map((gy) => (
+          <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
+        ))}
+        <line x1={padL} x2={width - padR} y1={y(0)} y2={y(0)} className="trend-zero-line" />
+        <path d={path(expenses)} className="trend-series expense" />
+        <path d={path(incomes)} className="trend-series income" />
+        <path d={path(nets)} className="trend-series net" />
+        {points.map((point, index) => (
+          <circle
+            key={point.year * 100 + point.month}
+            cx={x(index)}
+            cy={y(Number(point.net))}
+            r="3.2"
+            className="trend-point"
+          />
+        ))}
+        {points.map((point, index) => (
+          <text
+            key={`label-${point.year}-${point.month}`}
+            x={x(index)}
+            y={height - 10}
+            textAnchor="middle"
+            className="chart-axis-label"
+          >
+            {point.month === 1 ? `${point.year}年` : `${point.month}月`}
+          </text>
+        ))}
+      </svg>
+      <div className="trend-legend">
+        <span className="legend-income"><i />收入</span>
+        <span className="legend-expense"><i />支出</span>
+        <span className="legend-net"><i />结余</span>
+      </div>
     </div>
   );
 }

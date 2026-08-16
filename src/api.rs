@@ -18,7 +18,8 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, CashFlowSummary, Category, CategoryKind,
-    DepositSettlement, Loan, LoanType, MonthlySummary, RateQuote, Transaction, TransactionKind,
+    DepositSettlement, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote, Transaction,
+    TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -108,6 +109,16 @@ struct TransactionQuery {
     limit: Option<u32>,
     /// 跳过条数，默认 0。
     offset: Option<u32>,
+    /// 与 `month` 成对出现时，只返回该自然月的流水。
+    year: Option<i32>,
+    month: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrendQuery {
+    /// 返回最近多少个月，默认 12，上限 120（由 service 校验）。
+    months: Option<u32>,
+    currency: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,8 +399,18 @@ async fn api_transactions(
     State(state): State<AppState>,
     Query(query): Query<TransactionQuery>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
-    let transactions = lock_service(&state)?
-        .transactions(query.limit.unwrap_or(500), query.offset.unwrap_or(0))?;
+    let limit = query.limit.unwrap_or(500);
+    let offset = query.offset.unwrap_or(0);
+    let service = lock_service(&state)?;
+    let transactions = match (query.year, query.month) {
+        (Some(year), Some(month)) => service.transactions_in_month(year, month, limit, offset)?,
+        (None, None) => service.transactions(limit, offset)?,
+        _ => {
+            return Err(KokuError::InvalidInput(
+                "year and month must be provided together".to_owned(),
+            ))
+        }
+    };
     Ok(Json(ApiResponse::new(transactions)))
 }
 
@@ -620,6 +641,18 @@ async fn api_cash_flow_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+async fn api_monthly_trend(
+    State(state): State<AppState>,
+    Query(query): Query<TrendQuery>,
+) -> Result<Json<ApiResponse<Vec<MonthlyTrendPoint>>>> {
+    let months = query.months.unwrap_or(12);
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_service(&state)?.trend_currencies(months)?;
+    ensure_summary_rates(&state, &display, currencies).await?;
+    let trend = lock_service(&state)?.monthly_trend(months, &display)?;
+    Ok(Json(ApiResponse::new(trend)))
+}
+
 async fn api_balance_summary(
     State(state): State<AppState>,
     Query(query): Query<BalanceQuery>,
@@ -749,6 +782,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/loans/{loan_id}/repay", post(api_repay_loan))
         .route("/api/summary/monthly", get(api_monthly_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
+        .route("/api/summary/trend", get(api_monthly_trend))
         .route("/api/summary/balance", get(api_balance_summary))
         .route("/api/rates", get(api_rate_hint))
         .route("/api/auth/session", get(api_auth_session))

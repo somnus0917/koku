@@ -226,7 +226,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/accounts/{id}/adjust-balance` | 余额调整（带符号增量，生成可追溯的调整流水） |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
-| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000） |
+| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤 |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
 | `PATCH` | `/api/transactions/{id}` | 编辑收入/支出（备注/时间/分类/金额/账户/结算额，余额原子联动；已撤销、转账/借款、已报销的流水有编辑限制） |
@@ -238,6 +238,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/loans/{id}/repay` | 还款（任意账户进出，归零自动结清） |
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支；所有币种的流水统一按汇率折算到该币种 |
 | `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流（多币种按汇率折算） |
+| `GET` | `/api/summary/trend` | 查询最近 `?months=`（默认 12，上限 120）个月的收支趋势，逐月返回收入/支出/结余 |
 | `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（所有币种账户与未结借款按汇率折算） |
 | `GET` | `/api/rates?from=&to=` | 汇率提示：1 from = rate to（Frankfurter/ECB 参考中间价，本地缓存，源不可达时回退旧缓存） |
 
