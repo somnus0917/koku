@@ -23,6 +23,7 @@ pub struct BookkeepingService {
 
 mod accounts;
 mod budgets;
+mod deposits;
 mod holdings;
 mod loans;
 mod rates;
@@ -126,6 +127,19 @@ impl BookkeepingService {
                 UNIQUE(account_id, symbol)
             );
 
+            CREATE TABLE IF NOT EXISTS deposits (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_account_id INTEGER NOT NULL REFERENCES accounts(id),
+                amount            TEXT NOT NULL,
+                currency          TEXT NOT NULL,
+                rate              TEXT NOT NULL,
+                term_days         INTEGER NOT NULL,
+                opened_at         TEXT NOT NULL,
+                maturity_at       TEXT NOT NULL,
+                settled_at        TEXT,
+                note              TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS loans (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 loan_type    TEXT NOT NULL CHECK (loan_type IN ('lend', 'borrow')),
@@ -159,7 +173,7 @@ impl BookkeepingService {
 
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade')),
+                kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade', 'deposit')),
                 account_id    INTEGER NOT NULL REFERENCES accounts(id),
                 to_account_id INTEGER REFERENCES accounts(id),
                 category_id   INTEGER REFERENCES categories(id),
@@ -182,7 +196,7 @@ impl BookkeepingService {
                     (kind = 'transfer' AND category_id IS NULL
                      AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                     OR
-                    (kind IN ('loan', 'adjustment', 'trade') AND category_id IS NULL
+                    (kind IN ('loan', 'adjustment', 'trade', 'deposit') AND category_id IS NULL
                      AND to_account_id IS NULL AND target_amount IS NULL)
                 )
             );
@@ -267,6 +281,9 @@ impl BookkeepingService {
         if !table_sql_contains(&conn, "transactions", "'trade'")? {
             rebuild_transactions_table(&conn)?;
         }
+        if !table_sql_contains(&conn, "transactions", "'deposit'")? {
+            rebuild_transactions_table(&conn)?;
+        }
         conn.execute_batch(
             r#"
             UPDATE transactions
@@ -289,6 +306,7 @@ impl BookkeepingService {
                 ON transactions(currency, occurred_at, voided_at);
             "#,
         )?;
+        migrate_deposit_accounts(&conn)?;
         Ok(Self { conn })
     }
 
@@ -361,7 +379,7 @@ impl BookkeepingService {
     fn account_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Account> {
         let row = tx
             .query_row(
-                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -371,8 +389,6 @@ impl BookkeepingService {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -505,16 +521,7 @@ impl BookkeepingService {
     }
 }
 
-type AccountRow = (
-    i64,
-    String,
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+type AccountRow = (i64, String, String, String, String, Option<String>);
 type CategoryRow = (i64, String, String);
 type TransactionRow = (
     i64,
@@ -545,9 +552,7 @@ fn account_from_row(row: AccountRow) -> Result<Account> {
         account_type: AccountType::from_db(&row.2)?,
         currency: row.3,
         balance: decimal_from_db(&row.4)?,
-        interest_rate: row.5.as_deref().map(decimal_from_db).transpose()?,
-        maturity_at: row.6.as_deref().map(parse_timestamp).transpose()?,
-        credit_limit: row.7.as_deref().map(decimal_from_db).transpose()?,
+        credit_limit: row.5.as_deref().map(decimal_from_db).transpose()?,
     })
 }
 
@@ -734,7 +739,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
         PRAGMA foreign_keys = OFF;
         CREATE TABLE transactions_new (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade')),
+            kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade', 'deposit')),
             account_id    INTEGER NOT NULL REFERENCES accounts(id),
             to_account_id INTEGER REFERENCES accounts(id),
             category_id   INTEGER REFERENCES categories(id),
@@ -757,7 +762,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
                 (kind = 'transfer' AND category_id IS NULL
                  AND to_account_id IS NOT NULL AND target_amount IS NOT NULL)
                 OR
-                (kind IN ('loan', 'adjustment', 'trade') AND category_id IS NULL
+                (kind IN ('loan', 'adjustment', 'trade', 'deposit') AND category_id IS NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
             )
         );
@@ -775,6 +780,60 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
         PRAGMA foreign_keys = ON;
         "#,
     )?;
+    Ok(())
+}
+
+/// 把旧的「定期即账户」模型迁移到独立 deposits 表：带利率标记的储蓄账户转为存款记录，
+/// 本金从账户余额移入 deposits，账户归零并清掉利率标记（保留为普通储蓄账户）。
+fn migrate_deposit_accounts(conn: &Connection) -> Result<()> {
+    let legacy = {
+        let mut statement = conn.prepare(
+            "SELECT id, currency, balance, interest_rate, maturity_at, created_at
+             FROM accounts WHERE interest_rate IS NOT NULL",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+        let mut list = Vec::new();
+        for row in rows {
+            list.push(row?);
+        }
+        list
+    };
+
+    for (id, currency, balance, rate, maturity_at, created_at) in legacy {
+        // 源账户 = 当初转入这笔定期的 transfer 流水的转出账户。
+        let source: Option<i64> = conn
+            .query_row(
+                "SELECT account_id FROM transactions WHERE to_account_id = ?1 AND kind = 'transfer' ORDER BY id LIMIT 1",
+                [id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let Some(source_account_id) = source else {
+            tracing::warn!(target: "migration", deposit_account = id, "skipping legacy fixed deposit: no source transfer found");
+            continue;
+        };
+        let opened = parse_timestamp(&created_at)?;
+        let maturity = parse_timestamp(&maturity_at)?;
+        let term_days = (maturity - opened).num_days().max(1) as u32;
+        conn.execute(
+            "INSERT INTO deposits(source_account_id, amount, currency, rate, term_days, opened_at, maturity_at, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '')",
+            params![source_account_id, balance, currency, rate, term_days, created_at, maturity_at],
+        )?;
+        conn.execute(
+            "UPDATE accounts SET balance = '0', interest_rate = NULL, maturity_at = NULL WHERE id = ?1",
+            [id],
+        )?;
+    }
     Ok(())
 }
 
@@ -1633,6 +1692,73 @@ mod tests {
     }
 
     #[test]
+    fn legacy_fixed_deposit_accounts_are_migrated_to_deposits() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                account_type TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                balance TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                interest_rate TEXT,
+                maturity_at TEXT,
+                credit_limit TEXT
+            );
+            CREATE TABLE deposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_account_id INTEGER NOT NULL,
+                amount TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                rate TEXT NOT NULL,
+                term_days INTEGER NOT NULL,
+                opened_at TEXT NOT NULL,
+                maturity_at TEXT NOT NULL,
+                settled_at TEXT,
+                note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                account_id INTEGER NOT NULL,
+                to_account_id INTEGER,
+                amount TEXT NOT NULL,
+                occurred_at TEXT NOT NULL
+            );
+            INSERT INTO accounts(name, account_type, currency, balance, created_at)
+                VALUES ('储蓄', 'savings', 'CNY', '5000', '2026-01-01T00:00:00Z');
+            INSERT INTO accounts(name, account_type, currency, balance, created_at, interest_rate, maturity_at)
+                VALUES ('定期', 'savings', 'CNY', '5000', '2026-02-01T00:00:00Z', '2.10', '2027-02-01T00:00:00Z');
+            INSERT INTO transactions(kind, account_id, to_account_id, amount, occurred_at)
+                VALUES ('transfer', 1, 2, '5000', '2026-02-01T00:00:00Z');
+            "#,
+        )?;
+
+        migrate_deposit_accounts(&conn)?;
+
+        let (source, amount, rate, term_days): (i64, String, String, i64) = conn.query_row(
+            "SELECT source_account_id, amount, rate, term_days FROM deposits",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        assert_eq!(source, 1);
+        assert_eq!(decimal_from_db(&amount)?, Decimal::from(5000_u32));
+        assert_eq!(decimal_from_db(&rate)?, Decimal::from_str("2.10")?);
+        assert_eq!(term_days, 365);
+
+        let (balance, tagged): (String, Option<String>) = conn.query_row(
+            "SELECT balance, interest_rate FROM accounts WHERE id = 2",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(decimal_from_db(&balance)?, Decimal::ZERO);
+        assert_eq!(tagged, None);
+        Ok(())
+    }
+
+    #[test]
     fn expense_can_be_edited_and_balance_adjusts() -> Result<()> {
         let mut service = test_service()?;
         let cash =
@@ -2065,7 +2191,7 @@ mod tests {
             "CNY",
             Decimal::from(10000_u32),
         )?;
-        let deposit = service.create_fixed_deposit(
+        let deposit = service.create_deposit(
             savings.id,
             Decimal::from(5000_u32),
             "CNY",
@@ -2073,30 +2199,36 @@ mod tests {
             365,
             "一年定期",
         )?;
-        assert_eq!(deposit.account_type, AccountType::Savings);
-        assert_eq!(deposit.interest_rate, Some(Decimal::from_str("2.10")?));
-        assert!(deposit.maturity_at.is_some());
+        assert_eq!(deposit.source_account_id, savings.id);
+        assert_eq!(deposit.amount, Decimal::from(5000_u32));
+        assert_eq!(deposit.rate, Decimal::from_str("2.10")?);
+        assert!(deposit.settled_at.is_none());
         assert_eq!(
             service.account(savings.id)?.balance,
             Decimal::from(5000_u32)
         );
-        assert_eq!(deposit.balance, Decimal::from(5000_u32));
+        // 净资产保持 10000：账户余额 5000 + 定期本金 5000（不再是一个账户）。
+        let balance = service.balance_summary("CNY")?;
+        assert_eq!(balance.total_assets, Decimal::from(10000_u32));
 
         // 把起存日期拨回 100 天，制造利息
         let start = Utc::now() - ChronoDuration::days(100);
         service.conn.execute(
-            "UPDATE accounts SET created_at = ?1 WHERE id = ?2",
+            "UPDATE deposits SET opened_at = ?1 WHERE id = ?2",
             params![timestamp(start), deposit.id],
         )?;
         let settlement = service.settle_deposit(deposit.id, savings.id)?;
         // 5000 * 2.10% * 100/365 ≈ 28.77
         assert_eq!(settlement.interest, Decimal::from_str("28.77")?);
-        assert_eq!(settlement.transfer.kind, TransactionKind::Transfer);
+        assert_eq!(settlement.transfer.kind, TransactionKind::Deposit);
         assert_eq!(
             service.account(savings.id)?.balance,
             Decimal::from_str("10028.77")?
         );
-        assert_eq!(service.account(deposit.id)?.balance, Decimal::ZERO);
+        // 结清后定期不再计入净资产（本金已回到账户）。
+        assert!(service.deposit(deposit.id)?.settled_at.is_some());
+        let balance = service.balance_summary("CNY")?;
+        assert_eq!(balance.total_assets, Decimal::from_str("10028.77")?);
 
         // 已结清的定期不能再结
         assert!(matches!(

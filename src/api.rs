@@ -20,7 +20,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
-    Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind,
+    Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind, Deposit,
     DepositSettlement, Holding, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
     Receipt, RecurrenceFrequency, RecurringRule, Tag, Transaction, TransactionKind,
 };
@@ -832,6 +832,11 @@ async fn api_create_transaction(
                 "use /api/holdings/buy or /api/holdings/sell for trades".to_owned(),
             ))
         }
+        TransactionKind::Deposit => {
+            return Err(KokuError::InvalidInput(
+                "use /api/deposits for fixed deposits".to_owned(),
+            ))
+        }
     };
     if !request.tag_names.is_empty() {
         service.set_transaction_tags(transaction.id, request.tag_names)?;
@@ -927,14 +932,19 @@ async fn api_get_receipt(
     Ok(response)
 }
 
+async fn api_deposits(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Deposit>>>> {
+    let deposits = lock_service(&state)?.deposits()?;
+    Ok(Json(ApiResponse::new(deposits)))
+}
+
 async fn api_create_deposit(
     State(state): State<AppState>,
     Json(request): Json<CreateDepositRequest>,
-) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
+) -> Result<(StatusCode, Json<ApiResponse<Deposit>>)> {
     let mut service = lock_service(&state)?;
     let source = service.account(request.from_account_id)?;
     let currency = request.currency.unwrap_or_else(|| source.currency.clone());
-    let deposit = service.create_fixed_deposit(
+    let deposit = service.create_deposit(
         request.from_account_id,
         request.amount,
         currency,
@@ -947,10 +957,10 @@ async fn api_create_deposit(
 
 async fn api_settle_deposit(
     State(state): State<AppState>,
-    AxumPath(account_id): AxumPath<i64>,
+    AxumPath(deposit_id): AxumPath<i64>,
     Json(request): Json<SettleDepositRequest>,
 ) -> Result<Json<ApiResponse<DepositSettlement>>> {
-    let settlement = lock_service(&state)?.settle_deposit(account_id, request.to_account_id)?;
+    let settlement = lock_service(&state)?.settle_deposit(deposit_id, request.to_account_id)?;
     Ok(Json(ApiResponse::new(settlement)))
 }
 
@@ -1218,9 +1228,9 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
                 .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route("/api/reimbursements", post(api_reimburse))
-        .route("/api/deposits", post(api_create_deposit))
+        .route("/api/deposits", get(api_deposits).post(api_create_deposit))
         .route(
-            "/api/deposits/{account_id}/settle",
+            "/api/deposits/{deposit_id}/settle",
             post(api_settle_deposit),
         )
         .route("/api/loans", get(api_loans).post(api_create_loan))

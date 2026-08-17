@@ -103,6 +103,7 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  Deposit,
   Loan,
   LoanType,
   MonthlySummary,
@@ -225,7 +226,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [editTransaction, setEditTransaction] = useState<Transaction | null>(null);
   const [depositFrom, setDepositFrom] = useState<Account | null>(null);
-  const [settleTarget, setSettleTarget] = useState<Account | null>(null);
+  const [settleTarget, setSettleTarget] = useState<Deposit | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
   const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
   const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
@@ -335,8 +336,8 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
               setDepositFrom(account);
               setModal("deposit");
             }}
-            onSettle={(account) => {
-              setSettleTarget(account);
+            onSettle={(deposit) => {
+              setSettleTarget(deposit);
               setModal("settle");
             }}
             onCreateLoan={() => setModal("loan")}

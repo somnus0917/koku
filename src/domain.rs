@@ -110,6 +110,8 @@ pub enum TransactionKind {
     Adjustment,
     /// 股票买卖（现金进出），amount 为带符号现金额，不计入收支统计
     Trade,
+    /// 定期存取（转入/到期转回），amount 为带符号现金额，不计入收支统计
+    Deposit,
 }
 
 impl TransactionKind {
@@ -121,6 +123,7 @@ impl TransactionKind {
             Self::Loan => "loan",
             Self::Adjustment => "adjustment",
             Self::Trade => "trade",
+            Self::Deposit => "deposit",
         }
     }
 
@@ -132,6 +135,7 @@ impl TransactionKind {
             "loan" => Ok(Self::Loan),
             "adjustment" => Ok(Self::Adjustment),
             "trade" => Ok(Self::Trade),
+            "deposit" => Ok(Self::Deposit),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown transaction kind in database: {other}"
             ))),
@@ -178,10 +182,6 @@ pub struct Account {
     pub account_type: AccountType,
     pub currency: String,
     pub balance: Decimal,
-    /// 定期利率（百分比，如 2.10 = 2.10%）；仅定期存款账户有值
-    pub interest_rate: Option<Decimal>,
-    /// 定期到期日；仅定期存款账户有值
-    pub maturity_at: Option<DateTime<Utc>>,
     /// 信用额度；仅信用账户有值
     pub credit_limit: Option<Decimal>,
 }
@@ -273,6 +273,22 @@ pub struct Loan {
     pub closed_at: Option<DateTime<Utc>>,
     /// 约定还款/到期日（可选，用于到期提醒）
     pub due_at: Option<DateTime<Utc>>,
+}
+
+/// 一笔定期存款（独立实体，不再是一个账户）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deposit {
+    pub id: i64,
+    pub source_account_id: i64,
+    pub amount: Decimal,
+    pub currency: String,
+    /// 年化利率（百分比，如 2.10 = 2.10%）
+    pub rate: Decimal,
+    pub term_days: u32,
+    pub opened_at: DateTime<Utc>,
+    pub maturity_at: DateTime<Utc>,
+    pub settled_at: Option<DateTime<Utc>>,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ import type {
   AccountType,
   Category,
   CategoryKind,
+  Deposit,
   Loan,
   LoanType,
   RateQuote,
@@ -218,7 +219,7 @@ export function SettleDepositModal({
   onClose,
   onSubmit
 }: {
-  deposit: Account;
+  deposit: Deposit;
   accounts: Account[];
   onClose: () => void;
   onSubmit: (toAccountId: number) => Promise<void>;
@@ -226,7 +227,6 @@ export function SettleDepositModal({
   const [targetId, setTargetId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const targets = accounts.filter((account) => account.id !== deposit.id);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
@@ -241,14 +241,14 @@ export function SettleDepositModal({
     <ModalShell eyebrow="MATURE DEPOSIT" title="结清定期" onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p><strong>{deposit.name}</strong> · 年利率 {deposit.interest_rate}%{deposit.maturity_at ? ` · ${formatDate(deposit.maturity_at)} 到期` : ""}</p>
-          <p>当前本金 {formatMoney(deposit.balance, deposit.currency)}，结清时按实际持有天数计息，本息一并转回。</p>
+          <p><strong>定期 · {deposit.term_days} 天</strong> · 年利率 {deposit.rate}%{deposit.maturity_at ? ` · ${formatDate(deposit.maturity_at)} 到期` : ""}</p>
+          <p>当前本金 {formatMoney(deposit.amount, deposit.currency)}，结清时按实际持有天数计息，本息一并转回。</p>
         </div>
         <div className="form-grid">
           <label className="span-two"><span>转回账户</span>
             <select required value={targetId} onChange={(e) => setTargetId(e.target.value)}>
               <option value="" disabled>选择目标账户</option>
-              {targets.map((account) => (
+              {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
@@ -594,7 +594,7 @@ export function TransactionModal({
 }) {
   const [lastEntry] = useState(() => readQuickEntry());
   const initialAccountId = lastEntry?.account_id ?? accounts[0]?.id ?? 0;
-  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment" | "trade">>(lastEntry?.kind ?? "expense");
+  const [kind, setKind] = useState<Exclude<TransactionKind, "loan" | "adjustment" | "trade" | "deposit">>(lastEntry?.kind ?? "expense");
   const [accountId, setAccountId] = useState(initialAccountId);
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? accounts[0]?.id ?? 0);
   const [sourceCurrency, setSourceCurrency] = useState(accounts.find((account) => account.id === initialAccountId)?.currency ?? "CNY");
@@ -627,7 +627,7 @@ export function TransactionModal({
     }
   }, [foreignTransaction, status, hint, amount, settledTouched]);
 
-  const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment" | "trade">) => {
+  const changeKind = (nextKind: Exclude<TransactionKind, "loan" | "adjustment" | "trade" | "deposit">) => {
     setKind(nextKind);
     if (nextKind !== "transfer") {
       setCategoryId(categories.find((item) => item.kind === nextKind)?.id ?? 0);

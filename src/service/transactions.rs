@@ -111,20 +111,23 @@ impl BookkeepingService {
         positive_amount(amount)?;
         positive_amount(settled_amount)?;
         let currency = normalize_currency(currency)?;
-        let expected_category_kind = match kind {
-            TransactionKind::Expense => CategoryKind::Expense,
-            TransactionKind::Income => CategoryKind::Income,
-            TransactionKind::Transfer => {
-                return Err(KokuError::InvalidInput(
-                    "categorized transactions cannot be transfers".to_owned(),
-                ))
-            }
-            TransactionKind::Loan | TransactionKind::Adjustment | TransactionKind::Trade => {
-                return Err(KokuError::InvalidInput(
-                    "categorized transactions cannot be loans, adjustments, or trades".to_owned(),
-                ))
-            }
-        };
+        let expected_category_kind =
+            match kind {
+                TransactionKind::Expense => CategoryKind::Expense,
+                TransactionKind::Income => CategoryKind::Income,
+                TransactionKind::Transfer => {
+                    return Err(KokuError::InvalidInput(
+                        "categorized transactions cannot be transfers".to_owned(),
+                    ))
+                }
+                TransactionKind::Loan
+                | TransactionKind::Adjustment
+                | TransactionKind::Trade
+                | TransactionKind::Deposit => return Err(KokuError::InvalidInput(
+                    "categorized transactions cannot be loans, adjustments, trades, or deposits"
+                        .to_owned(),
+                )),
+            };
 
         let tx = self
             .conn
@@ -154,7 +157,8 @@ impl BookkeepingService {
             TransactionKind::Transfer
             | TransactionKind::Loan
             | TransactionKind::Adjustment
-            | TransactionKind::Trade => {
+            | TransactionKind::Trade
+            | TransactionKind::Deposit => {
                 unreachable!("validated above")
             }
         };
@@ -321,6 +325,11 @@ impl BookkeepingService {
                 return Err(KokuError::InvalidInput(
                     "trade transactions cannot be voided; record an opposite trade instead"
                         .to_owned(),
+                ))
+            }
+            TransactionKind::Deposit => {
+                return Err(KokuError::InvalidInput(
+                    "deposit transactions cannot be voided; settle the deposit instead".to_owned(),
                 ))
             }
             // 余额调整的撤销：把带符号增量反向应用即可恢复原余额。

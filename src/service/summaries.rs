@@ -105,7 +105,8 @@ impl BookkeepingService {
                 TransactionKind::Transfer
                 | TransactionKind::Loan
                 | TransactionKind::Adjustment
-                | TransactionKind::Trade => {}
+                | TransactionKind::Trade
+                | TransactionKind::Deposit => {}
             }
         }
 
@@ -199,7 +200,8 @@ impl BookkeepingService {
                 TransactionKind::Transfer
                 | TransactionKind::Loan
                 | TransactionKind::Adjustment
-                | TransactionKind::Trade => {}
+                | TransactionKind::Trade
+                | TransactionKind::Deposit => {}
             }
         }
 

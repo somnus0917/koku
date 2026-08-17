@@ -1,12 +1,11 @@
 //! 账户与分类：创建/编辑/余额调整/信用额度、分类管理、定期存款。
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 use rust_decimal::Decimal;
 
 use super::*;
 use crate::domain::{
-    Account, AccountType, BalanceSummary, Category, CategoryKind, DepositSettlement, Transaction,
-    DEFAULT_CATEGORIES,
+    Account, AccountType, BalanceSummary, Category, CategoryKind, Transaction, DEFAULT_CATEGORIES,
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
@@ -155,7 +154,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -165,8 +164,6 @@ impl BookkeepingService {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
@@ -180,7 +177,7 @@ impl BookkeepingService {
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, account_type, currency, balance, interest_rate, maturity_at, credit_limit FROM accounts ORDER BY id",
+            "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -190,8 +187,6 @@ impl BookkeepingService {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         rows.map(|row| account_from_row(row?)).collect()
@@ -285,6 +280,22 @@ impl BookkeepingService {
             total_assets +=
                 self.convert_amount(market_value, &account_currency, &currency, today)?;
         }
+        // 未结清的定期本金计入资产（本金已不在任何账户余额里）。
+        let mut statement = self
+            .conn
+            .prepare("SELECT currency, amount FROM deposits WHERE settled_at IS NULL")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (deposit_currency, amount) = row?;
+            total_assets += self.convert_amount(
+                decimal_from_db(&amount)?,
+                &deposit_currency,
+                &currency,
+                today,
+            )?;
+        }
         Ok(BalanceSummary {
             currency,
             total_assets,
@@ -293,12 +304,14 @@ impl BookkeepingService {
         })
     }
 
-    /// 资产负债涉及的所有币种（账户币种 ∪ 未结借款币种），供调用方确保折算汇率可用。
+    /// 资产负债涉及的所有币种（账户 ∪ 未结借款 ∪ 未结定期），供调用方确保折算汇率可用。
     pub fn balance_currencies(&self) -> Result<Vec<String>> {
         let mut statement = self.conn.prepare(
             "SELECT DISTINCT currency FROM accounts
              UNION
-             SELECT DISTINCT currency FROM loans WHERE closed_at IS NULL",
+             SELECT DISTINCT currency FROM loans WHERE closed_at IS NULL
+             UNION
+             SELECT DISTINCT currency FROM deposits WHERE settled_at IS NULL",
         )?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         let mut currencies = Vec::new();
@@ -364,109 +377,5 @@ impl BookkeepingService {
         )?;
         transaction.commit()?;
         Ok(category)
-    }
-
-    /// 把储蓄账户中的一笔钱转为定期：自动创建带利率和到期日的定期账户并原子转账。
-    pub fn create_fixed_deposit(
-        &mut self,
-        from_account_id: i64,
-        amount: Decimal,
-        currency: impl Into<String>,
-        rate: Decimal,
-        term_days: u32,
-        note: impl Into<String>,
-    ) -> Result<Account> {
-        positive_amount(amount)?;
-        if rate < Decimal::ZERO {
-            return Err(KokuError::InvalidInput(
-                "interest rate cannot be negative".to_owned(),
-            ));
-        }
-        if term_days == 0 {
-            return Err(KokuError::InvalidInput(
-                "deposit term must be at least one day".to_owned(),
-            ));
-        }
-        let source = self.account(from_account_id)?;
-        if source.account_type != AccountType::Savings {
-            return Err(KokuError::InvalidInput(
-                "fixed deposits can only be opened from a savings account".to_owned(),
-            ));
-        }
-        let currency = normalize_currency(currency.into())?;
-        if currency != source.currency {
-            return Err(KokuError::InvalidInput(
-                "deposit currency must match the source account currency".to_owned(),
-            ));
-        }
-        let now = Utc::now();
-        let maturity = now + ChronoDuration::days(term_days as i64);
-        let name = format!("定期·{term_days}天 {rate}%");
-        let deposit =
-            self.create_account(name, AccountType::Savings, currency.clone(), Decimal::ZERO)?;
-        self.conn.execute(
-            "UPDATE accounts SET interest_rate = ?1, maturity_at = ?2 WHERE id = ?3",
-            params![decimal_to_db(rate), timestamp(maturity), deposit.id],
-        )?;
-        self.record_transfer(from_account_id, deposit.id, amount, amount, now, note)?;
-        self.account(deposit.id)
-    }
-
-    /// 结清定期：按实际持有天数计算利息（记一笔利息收入），再把本息转回目标账户。
-    pub fn settle_deposit(
-        &mut self,
-        deposit_id: i64,
-        to_account_id: i64,
-    ) -> Result<DepositSettlement> {
-        let deposit = self.account(deposit_id)?;
-        let Some(rate) = deposit.interest_rate else {
-            return Err(KokuError::InvalidInput(
-                "account is not a fixed deposit".to_owned(),
-            ));
-        };
-        if deposit.balance <= Decimal::ZERO {
-            return Err(KokuError::InvalidInput(
-                "deposit has no balance left to settle".to_owned(),
-            ));
-        }
-        let target = self.account(to_account_id)?;
-        if target.currency != deposit.currency {
-            return Err(KokuError::InvalidInput(
-                "settlement target must use the same currency as the deposit".to_owned(),
-            ));
-        }
-        let created_at: String = self.conn.query_row(
-            "SELECT created_at FROM accounts WHERE id = ?1",
-            [deposit_id],
-            |row| row.get(0),
-        )?;
-        let start = parse_timestamp(&created_at)?;
-        let days = (Utc::now() - start).num_days().max(0);
-        let hundred = Decimal::from(100_u32);
-        let year = Decimal::from(365_u32);
-        let interest = (deposit.balance * rate / hundred * Decimal::from(days) / year).round_dp(2);
-        let now = Utc::now();
-        if interest > Decimal::ZERO {
-            let interest_category = self.create_category("利息", CategoryKind::Income)?;
-            self.record_income_in_currency(
-                deposit_id,
-                interest_category.id,
-                interest,
-                deposit.currency.clone(),
-                interest,
-                now,
-                "定期利息",
-            )?;
-        }
-        let final_balance = self.account(deposit_id)?.balance;
-        let transfer = self.record_transfer(
-            deposit_id,
-            to_account_id,
-            final_balance,
-            final_balance,
-            now,
-            "定期到期转回",
-        )?;
-        Ok(DepositSettlement { interest, transfer })
     }
 }

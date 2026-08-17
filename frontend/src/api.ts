@@ -8,6 +8,7 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  Deposit,
   DepositSettlement,
   Holding,
   Loan,
@@ -100,7 +101,7 @@ export async function loadSummaryData(
   });
   const currencyQuery = new URLSearchParams({ currency });
   const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings] = await Promise.all([
+  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings, deposits] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Budget[]>(`/api/budgets?${budgetQuery}`),
@@ -110,9 +111,10 @@ export async function loadSummaryData(
     request<Loan[]>("/api/loans"),
     request<RecurringRule[]>("/api/recurring"),
     request<Tag[]>("/api/tags"),
-    request<Holding[]>("/api/holdings")
+    request<Holding[]>("/api/holdings"),
+    request<Deposit[]>("/api/deposits")
   ]);
-  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings, deposits };
 }
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
@@ -404,7 +406,7 @@ export function createDeposit(input: {
   rate: string;
   term_days: number;
   note?: string;
-}): Promise<Account> {
+}): Promise<Deposit> {
   return request("/api/deposits", {
     method: "POST",
     body: JSON.stringify(input)
@@ -412,10 +414,10 @@ export function createDeposit(input: {
 }
 
 export function settleDeposit(
-  accountId: number,
+  depositId: number,
   to_account_id: number
 ): Promise<DepositSettlement> {
-  return request(`/api/deposits/${accountId}/settle`, {
+  return request(`/api/deposits/${depositId}/settle`, {
     method: "POST",
     body: JSON.stringify({ to_account_id })
   });

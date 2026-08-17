@@ -46,6 +46,7 @@ import type {
   CashFlowSummary,
   Category,
   CategoryKind,
+  Deposit,
   Holding,
   Loan,
   MonthlySummary,
@@ -124,10 +125,10 @@ function useConversionRates(currencies: string[], display: string) {
   return rates;
 }
 
-function ReminderBanner({ accounts, loans }: { accounts: Account[]; loans: Loan[] }) {
+function ReminderBanner({ deposits, loans }: { deposits: Deposit[]; loans: Loan[] }) {
   const now = Date.now();
-  const maturedDeposits = accounts.filter(
-    (account) => account.interest_rate && account.maturity_at && new Date(account.maturity_at).getTime() <= now
+  const maturedDeposits = deposits.filter(
+    (deposit) => !deposit.settled_at && new Date(deposit.maturity_at).getTime() <= now
   );
   const overdueLoans = loans.filter(
     (loan) => !loan.closed_at && loan.due_at && new Date(loan.due_at).getTime() <= now
@@ -137,8 +138,8 @@ function ReminderBanner({ accounts, loans }: { accounts: Account[]; loans: Loan[
     <aside className="reminder-banner" role="status">
       <BellRing size={18} />
       <div>
-        {maturedDeposits.map((account) => (
-          <p key={account.id}>定期「{account.name}」已于 {formatDate(account.maturity_at!)} 到期，可结清转回。</p>
+        {maturedDeposits.map((deposit) => (
+          <p key={deposit.id}>定期「{deposit.term_days} 天」已于 {formatDate(deposit.maturity_at)} 到期，可结清转回。</p>
         ))}
         {overdueLoans.map((loan) => (
           <p key={loan.id}>
@@ -176,7 +177,7 @@ export function Dashboard({
   return (
     <div className="page page-enter">
       <PageTitle eyebrow="WELCOME BACK" title="今天，也把生活记清楚。" />
-      <ReminderBanner accounts={data.accounts} loans={data.loans} />
+      <ReminderBanner deposits={data.deposits} loans={data.loans} />
       <section className="hero-grid">
         <article className="net-worth-card">
           <div className="card-heading">
@@ -362,7 +363,7 @@ export function AccountsPage({
   onAddAccount: () => void;
   onEdit: (account: Account) => void;
   onDeposit: (account: Account) => void;
-  onSettle: (account: Account) => void;
+  onSettle: (deposit: Deposit) => void;
   onCreateLoan: () => void;
   onRepay: (loan: Loan) => void;
   onCreateRecurring: () => void;
@@ -400,19 +401,14 @@ export function AccountsPage({
         <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
       <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} display={display} rates={rates} />
-      <AccountGroup
-        title="储蓄"
-        subtitle={`${savings.length} 个账户`}
-        accounts={savings}
-        onEdit={onEdit}
+      <AccountGroup title="储蓄" subtitle={`${savings.length} 个账户`} accounts={savings} onEdit={onEdit} display={display} rates={rates} />
+      <DepositSection
+        deposits={data.deposits}
+        accounts={data.accounts}
         display={display}
         rates={rates}
-        headingAction={savings.length > 0 ? <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> 转定期</button> : undefined}
-        renderAction={(account) => (
-          account.interest_rate
-            ? <button className="row-action" title="结清定期并转回" aria-label="结清定期" onClick={() => onSettle(account)}><RotateCcw size={16} /></button>
-            : <button className="row-action" title="转入定期" aria-label="转入定期" onClick={() => onDeposit(account)}><PiggyBank size={16} /></button>
-        )}
+        onDeposit={onDeposit}
+        onSettle={onSettle}
       />
       <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} display={display} rates={rates} />
       <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} display={display} rates={rates} />
@@ -458,8 +454,6 @@ export function AccountGroup({
   subtitle,
   accounts,
   onEdit,
-  renderAction,
-  headingAction,
   display,
   rates
 }: {
@@ -467,8 +461,6 @@ export function AccountGroup({
   subtitle: string;
   accounts: Account[];
   onEdit?: (account: Account) => void;
-  renderAction?: (account: Account) => React.ReactNode;
-  headingAction?: React.ReactNode;
   /** 显示币种（右上角切换）；传入后余额/额度按汇率折算显示，并标注原币 */
   display: string;
   /** 折算汇率表：账户币种 → 1 unit = factor display */
@@ -478,7 +470,6 @@ export function AccountGroup({
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
         <div><span>{subtitle}</span><h2>{title}</h2></div>
-        {headingAction}
       </div>
       <div className="account-grid">
         {accounts.map((account, index) => {
@@ -498,14 +489,11 @@ export function AccountGroup({
                   {isConverted ? `原币 ${formatMoney(account.balance, account.currency)} · ` : ""}
                   {account.credit_limit
                     ? `额度 ${formatMoney(limitShown?.amount ?? account.credit_limit, limitShown?.currency ?? account.currency)}`
-                    : account.interest_rate && account.maturity_at
-                      ? `${formatDate(account.maturity_at)}到期`
-                      : ""}
+                    : ""}
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
               <div className="account-card-actions">
-                {renderAction ? renderAction(account) : null}
                 <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
               </div>
             </article>
@@ -746,13 +734,14 @@ export function TransactionRow({
     transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" },
     loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" },
     adjustment: { icon: RotateCcw, label: "余额调整", className: "transfer" },
-    trade: { icon: TrendingUp, label: "股票交易", className: "transfer" }
+    trade: { icon: TrendingUp, label: "股票交易", className: "transfer" },
+    deposit: { icon: PiggyBank, label: "定期存款", className: "transfer" }
   }[transaction.kind];
   const Icon = meta.icon;
   const prefix =
     transaction.kind === "expense" ? "−"
     : transaction.kind === "income" ? "+"
-    : transaction.kind === "adjustment" || transaction.kind === "trade"
+    : transaction.kind === "adjustment" || transaction.kind === "trade" || transaction.kind === "deposit"
       ? (Number(transaction.amount) > 0 ? "+" : "")
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
@@ -779,7 +768,7 @@ export function TransactionRow({
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
-        {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" || transaction.kind === "trade" ? (
+        {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" || transaction.kind === "trade" || transaction.kind === "deposit" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
           <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
@@ -834,7 +823,7 @@ export function TransactionRow({
           )}
           <button
             className="row-action"
-            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan" || transaction.kind === "trade"}
+            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan" || transaction.kind === "trade" || transaction.kind === "deposit"}
             onClick={onVoid}
             title="撤销并恢复余额"
             aria-label="撤销交易"
@@ -1579,6 +1568,72 @@ export function RecurringSection({
         })}
         {rules.length === 0 && <EmptyState title="还没有周期交易" detail="房租、订阅等固定收支可设为自动重复。" />}
       </div>
+    </section>
+  );
+}
+
+export function DepositSection({
+  deposits,
+  accounts,
+  display,
+  rates,
+  onDeposit,
+  onSettle
+}: {
+  deposits: Deposit[];
+  accounts: Account[];
+  display: string;
+  rates: Record<string, number>;
+  onDeposit: (account: Account) => void;
+  onSettle: (deposit: Deposit) => void;
+}) {
+  const savings = accounts.filter((account) => account.account_type === "savings");
+  const open = deposits.filter((deposit) => !deposit.settled_at);
+  const closed = deposits.filter((deposit) => deposit.settled_at);
+  const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const shown = (value: string, from: string) =>
+    convertedMoney(value, from, display, rates) ?? { amount: value, currency: from };
+  return (
+    <section className="section-block account-group">
+      <div className="section-heading compact-heading">
+        <div><span>DEPOSITS</span><h2>定期存款</h2></div>
+        {savings.length > 0 && (
+          <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> 转定期</button>
+        )}
+      </div>
+      <div className="account-grid">
+        {open.map((deposit) => {
+          const principal = shown(deposit.amount, deposit.currency);
+          return (
+            <article className="account-detail-card" key={deposit.id}>
+              <span className="large-account-icon tone-1"><PiggyBank size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>定期 · {deposit.term_days} 天</h3>
+                <span>
+                  年利率 {deposit.rate}% · {formatDate(deposit.maturity_at)} 到期 · {accountMap.get(deposit.source_account_id)?.name ?? "未知账户"}
+                </span>
+              </div>
+              <strong>{formatMoney(principal.amount, principal.currency)}</strong>
+              <button className="row-action" onClick={() => onSettle(deposit)} title="结清定期并转回" aria-label="结清定期"><RotateCcw size={16} /></button>
+            </article>
+          );
+        })}
+        {open.length === 0 && <EmptyState title="没有进行中的定期" detail="从储蓄账户转入一笔定期，到期自动计息。" />}
+      </div>
+      {closed.length > 0 && (
+        <div className="account-grid closed-loans">
+          {closed.map((deposit) => (
+            <article className="account-detail-card muted" key={deposit.id}>
+              <span className="large-account-icon"><PiggyBank size={23} /></span>
+              <div className="account-detail-copy">
+                <h3>定期 · {deposit.term_days} 天</h3>
+                <span>{formatDate(deposit.opened_at)} 开立{deposit.settled_at ? ` · ${formatDate(deposit.settled_at)} 结清` : ""}</span>
+              </div>
+              <strong>已结清</strong>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

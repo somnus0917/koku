@@ -1,6 +1,6 @@
 export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
-export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment" | "trade";
+export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment" | "trade" | "deposit";
 export type LoanType = "lend" | "borrow";
 export type RecurrenceFrequency = "monthly" | "weekly";
 
@@ -10,10 +10,6 @@ export interface Account {
   account_type: AccountType;
   currency: string;
   balance: string;
-  /** 定期利率（百分比），仅定期存款账户有值 */
-  interest_rate: string | null;
-  /** 定期到期日，仅定期存款账户有值 */
-  maturity_at: string | null;
   /** 信用额度，仅信用账户有值 */
   credit_limit: string | null;
 }
@@ -62,6 +58,19 @@ export interface Loan {
   note: string;
   closed_at: string | null;
   due_at: string | null;
+}
+
+export interface Deposit {
+  id: number;
+  source_account_id: number;
+  amount: string;
+  currency: string;
+  rate: string;
+  term_days: number;
+  opened_at: string;
+  maturity_at: string;
+  settled_at: string | null;
+  note: string;
 }
 
 export interface DepositSettlement {
@@ -189,4 +198,5 @@ export interface AppData {
   recurring: RecurringRule[];
   tags: Tag[];
   holdings: Holding[];
+  deposits: Deposit[];
 }
