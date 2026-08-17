@@ -109,8 +109,9 @@ pub fn create_backup(db_path: &Path, ledger_dir: &Path, keep: usize) -> Result<B
     let archive_path = dir.join(&filename);
 
     let files = collect_db_files(db_path, ledger_dir)?;
-    let snapshot_dir =
-        std::env::temp_dir().join(format!("koku-snapshot-{id}-{}", std::process::id()));
+    // 快照与打包都放在备份目录内（生产容器 read_only + 小 tmpfs /tmp，
+    // 数据库可能远大于 tmpfs 容量，不能用系统临时目录）。
+    let snapshot_dir = dir.join(format!(".snapshots-{id}-{}", std::process::id()));
     fs::create_dir_all(&snapshot_dir)?;
 
     let mut snapshots: Vec<(PathBuf, String)> = Vec::new();
@@ -263,8 +264,8 @@ pub fn restore_backup(db_path: &Path, ledger_dir: &Path, id: &str) -> Result<()>
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| KokuError::InvalidInput(format!("invalid backup archive: {error}")))?;
 
-    // 先全部解压到临时目录，确认无 zip-slip 路径后再逐个覆盖。
-    let staging = std::env::temp_dir().join(format!("koku-restore-{id}-{}", std::process::id()));
+    // 先全部解压到备份目录内的临时目录，确认无 zip-slip 路径后再逐个覆盖。
+    let staging = dir.join(format!(".restore-{id}-{}", std::process::id()));
     if staging.exists() {
         fs::remove_dir_all(&staging)?;
     }

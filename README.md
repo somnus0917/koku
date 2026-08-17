@@ -23,28 +23,42 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 周期交易：房租/订阅等固定收支按月/周自动生成（请求驱动，无后台任务）
 - CSV 导出：全部或按月的交易流水，浏览器直接下载
 - 标签：跨类目聚合（多对多），表单自由输入 + 列表筛选
-- 股票持仓：买入/卖出（摊薄成本）、市价更新，持仓市值计入净资产
+- 股票持仓：买入/卖出（摊薄成本）、市价更新，持仓市值计入净资产；支持一键从 Stooq 拉取市价（可配置缓存有效期，Dashboard 加载时自动懒刷新）
+- 账户对账：以对账单余额为目标余额，完成时自动生成可审计的调整流水（撤销即回滚）
+- 到期提醒：API 返回未来 N 天内到期（含逾期）的定存与借款；可选 SMTP 每日邮件摘要
 - 报销附件：交易可挂小票/发票图片（存 SQLite BLOB）
 - 到期提醒：Dashboard 顶部提示已到期未结的定存与借款
 - 应用内改密码（修改后旧会话全部失效）
+- TOTP 二步验证：登录分两步，应用内自助开启/关闭（基于 `totp-rs`）
+- 数据库备份/恢复：管理员一键备份（共享库 + 全部用户账本打包 zip）、下载、恢复；可选定时备份
+- CSV 导入：支持 Koku 导出 CSV 往返、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），逐行去重与错误汇总
+- 年度汇总与滚动平均：按年统计逐月收支与分类明细，最近 N 个月收支的滚动均值视图
+- 通用 API 限流：除健康检查外所有 `/api` 请求按客户端限流（默认 300 次/分钟）
+- 深色/浅色/跟随系统三种主题，本地持久化并实时跟随系统偏好
 - PWA：可添加到主屏幕，离线缓存应用外壳（账本 API 仍走网络）
 - 快速记账：记住上次使用的账户/分类，打开即预填
 - 响应式桌面/移动界面、底部快捷导航、浅色/深色主题
 - 本地 SQLite 持久化，首次启动自动生成演示账本
 - 旧版 SQLite 数据启动时自动迁移（含 asset/liability → 零钱/信用），无需手工转换
 - Docker Compose 生产部署、HTTPS 入口、访问认证与 GitHub Actions 自动发布
-- 安全：登录失败限流（5 分钟窗口内 5 次即锁定该来源）、结构化日志（登录审计 + 请求级 tracing）、500 错误不回显内部细节
+- 安全：登录失败限流（5 分钟窗口内 5 次即锁定该来源）、可选 TOTP 二步验证、通用 API 限流（默认 300 次/分钟/客户端）、结构化日志（登录审计 + 请求级 tracing）、500 错误不回显内部细节
 
 ## 工程结构
 
 ```text
 koku/
 ├── Cargo.toml          # Rust API 与领域核心
-├── src/main.rs         # 进程入口与服务器启动
-├── src/domain.rs       # 领域类型：账户/分类/交易枚举与 DTO
+├── src/main.rs         # 进程入口、定时备份与 SMTP 提醒后台任务
+├── src/domain.rs       # 领域类型：账户/分类/交易/对账/提醒枚举与 DTO
 ├── src/service.rs      # SQLite 持久化、记账业务、软撤销与迁移
 ├── src/api.rs          # REST API 处理器、鉴权中间件与路由
 ├── src/auth.rs         # 登录配置与会话 Cookie/令牌工具
+├── src/totp.rs         # TOTP 密钥生成/校验/otpauth URI
+├── src/backup.rs       # 备份/恢复：VACUUM INTO 快照 + zip 打包
+├── src/importer.rs     # CSV/QIF/OFX 账单解析
+├── src/quotes.rs       # Stooq 行情客户端
+├── src/mailer.rs       # 可选 SMTP 邮件发送
+├── src/ratelimit.rs    # 通用 API 限流（固定窗口按客户端）
 ├── src/config.rs       # 环境变量解析
 ├── src/demo.rs         # 控制台演示与演示账本种子
 ├── src/error.rs        # 统一错误类型与 HTTP 映射
@@ -52,6 +66,7 @@ koku/
 └── frontend/
     ├── src/App.tsx     # 页面、业务交互和组件
     ├── src/api.ts      # 独立 API 客户端
+    ├── src/theme.ts    # 浅色/深色/跟随系统主题 hook
     ├── src/styles.css  # Koku 视觉系统与响应式布局
     └── vite.config.ts  # 开发代理 /api -> 127.0.0.1:8080
 ```
@@ -223,6 +238,16 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_AUTH_PASSWORD_HASH_FILE` | 未设置 | bcrypt 哈希文件；生产容器固定为 `/app/data/auth-password.hash` |
 | `KOKU_SESSION_TTL_DAYS` | `30` | 会话有效天数，范围 1–365 |
 | `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
+| `KOKU_RATE_LIMIT_PER_MINUTE` | `300` | 通用 API 限流：每客户端每分钟请求上限；`0` 关闭 |
+| `KOKU_BACKUP_INTERVAL_HOURS` | `0` | 定时备份间隔（小时）；`0` 关闭（仅管理员手动触发） |
+| `KOKU_BACKUP_KEEP` | `14` | 保留最近多少份备份，超出的自动清理 |
+| `KOKU_QUOTE_TTL_HOURS` | `24` | 持仓市价缓存有效期（小时），超过视为过期并在刷新时重新拉取 |
+| `KOKU_SMTP_HOST` | 未设置 | SMTP 服务器（设置后启用到期提醒邮件；不设置则仅应用内提醒） |
+| `KOKU_SMTP_PORT` | `587` | SMTP 端口 |
+| `KOKU_SMTP_TLS` | `starttls` | SMTP 加密方式：`starttls` / `implicit`（465）/ `none` |
+| `KOKU_SMTP_USERNAME` / `KOKU_SMTP_PASSWORD` | 未设置 | SMTP 认证（无认证服务器可留空） |
+| `KOKU_SMTP_FROM` / `KOKU_SMTP_TO` | 必填（启用时） | 发件人 / 收件人邮箱（管理员账本的到期摘要） |
+| `KOKU_SMTP_INTERVAL_HOURS` | `24` | 到期提醒邮件发送间隔（小时） |
 | `RUST_LOG` | `auth=info,koku=info,tower_http=info` | tracing 日志级别；如 `RUST_LOG=debug` 可看到请求级日志 |
 
 ## REST API
@@ -230,10 +255,14 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
-| `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话 |
+| `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话；已启用 TOTP 时返回 `totp_required` 进入第二步 |
+| `POST` | `/api/auth/totp` | TOTP 第二步：校验 6 位动态码并创建会话（一次性令牌 5 分钟有效） |
 | `GET` | `/api/auth/session` | 查询当前登录用户 |
 | `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
 | `POST` | `/api/auth/password` | 应用内改密码（校验旧密码，作废该用户全部会话） |
+| `POST` | `/api/auth/totp/setup` | （本人）TOTP 设置第一步：校验当前密码后生成新密钥（暂存，未启用） |
+| `POST` | `/api/auth/totp/enable` | （本人）用动态码确认后启用 TOTP |
+| `POST` | `/api/auth/totp/disable` | （本人）用动态码确认后关闭 TOTP |
 | `GET/POST` | `/api/users` | （管理员）用户列表 / 创建成员用户 |
 | `POST` | `/api/users/{id}/password` | （管理员）重置某用户密码（作废其会话） |
 | `POST` | `/api/users/{id}/enabled` | （管理员）启用/停用用户（停用立即作废其会话） |
@@ -245,6 +274,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤；记录时可带 `tag_names` |
 | `GET` | `/api/transactions/export` | 导出交易为 CSV（可选 `?year=&month=`），触发浏览器下载 |
+| `POST` | `/api/transactions/import` | 批量导入流水（multipart：`file`/`format`(auto,csv,qif,ofx)/`account_id`/`category_id`/`currency`），逐行去重并返回错误汇总 |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `POST` | `/api/transactions/{id}/void` | 撤销交易并恢复余额（软删除） |
 | `POST` | `/api/transactions/{id}/restore` | 撤销删除：恢复已撤销的流水（余额与报销状态一并恢复） |
@@ -258,20 +288,61 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET/POST` | `/api/recurring` | 查询或创建周期交易（每月/每周） |
 | `POST` | `/api/recurring/run` | 触发到期周期交易生成（请求驱动） |
 | `DELETE` | `/api/recurring/{id}` | 删除周期交易 |
-| `GET` | `/api/holdings` | 查询股票持仓 |
+| `GET/POST` | `/api/holdings` | 查询股票持仓 |
+| `POST` | `/api/holdings/refresh` | 刷新全部过期/缺失市价（Stooq，并发拉取），返回逐标的明细 |
 | `POST` | `/api/holdings/buy` / `/api/holdings/sell` | 买入/卖出股票（现金与持仓联动） |
 | `PUT` | `/api/holdings/{id}/price` | 更新持仓市价 |
+| `POST` | `/api/holdings/{id}/refresh` | 强制刷新单只持仓市价 |
 | `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |
 | `POST` | `/api/deposits/{id}/settle` | 结清定期：按持有天数计息并把本息转回 |
 | `GET/POST` | `/api/loans` | 查询或创建借出/借入 |
 | `POST` | `/api/loans/{id}/repay` | 还款（任意账户进出，归零自动结清） |
+| `GET/POST` | `/api/reconciliations` | 查询（`?account_id=`）或创建账户对账（对账单日期/目标余额/备注） |
+| `POST` | `/api/reconciliations/{id}/complete` | 完成对账：差额非零时自动生成可审计的调整流水 |
+| `POST` | `/api/reconciliations/{id}/cancel` | 取消对账（不产生调整） |
+| `GET` | `/api/reminders` | 到期提醒：未来 `?days=`（默认 30）天内到期（含逾期）的定存与借款 |
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支；所有币种的流水统一按汇率折算到该币种 |
 | `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流（多币种按汇率折算） |
 | `GET` | `/api/summary/by-tag?tags=旅行,报销&year=&month=` | 标签汇总：同时带有全部指定标签（AND 语义）的收支合计与分类明细；缺省 year/month 统计全部历史 |
 | `GET` | `/api/summary/trend` | 查询最近 `?months=`（默认 12，上限 120）个月的收支趋势，逐月返回收入/支出/结余 |
+| `GET` | `/api/summary/yearly` | 年度汇总：`?year=`（缺省当前年）逐月收支 + 全年合计 + 收入/支出分类明细 |
+| `GET` | `/api/summary/rolling` | 滚动平均：`?months=&window=`（默认 12/3）逐月给出 trailing window 的收入/支出/结余均值 |
 | `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（所有币种账户与未结借款按汇率折算） |
 | `GET` | `/api/rates?from=&to=` | 汇率提示：1 from = rate to（Frankfurter/ECB 参考中间价，本地缓存，源不可达时回退旧缓存） |
+| `GET` | `/api/admin/backups` | （管理员）备份列表 |
+| `POST` | `/api/admin/backup` | （管理员）立即创建备份（共享库 + 全部用户账本打包 zip） |
+| `GET` | `/api/admin/backups/{id}/download` | （管理员）下载备份 zip |
+| `POST` | `/api/admin/backups/{id}/restore` | （管理员）恢复备份（覆盖全部账本，所有会话失效） |
+| `POST` | `/api/admin/reminders/send` | （管理员）手动发送到期提醒邮件（需配置 SMTP） |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。
 
 创建收入/支出时通过 `currency` 指定原始交易币种。币种与账户结算币种不同时，同时提交 `settled_amount` 作为实际计入共享余额的金额，例如 `$10.00` 消费可按 `¥72.00` 入账。流水和月度收支按原始币种统计，账户余额始终使用账户结算币种。
+
+## 进阶功能说明
+
+### 交易导入（`/api/transactions/import`）
+
+支持三种格式，`format` 缺省 `auto`（按文件扩展名/内容自动识别）：
+
+- **CSV**：自动识别两类布局——Koku 自身导出的列（`kind/amount/currency/settled_amount/occurred_at/note/category`，支持导出→编辑→再导入的往返，非收支行自动跳过）与常见银行流水（日期/金额/备注列，支持 `date/日期/交易日期`、`amount/金额/发生额` 等中英文别名，可选 `类型/收支` 列显式指定方向）。
+- **QIF**：`!Type:Bank/CCard/Cash` 段的 `D/T/P/M` 记录。
+- **OFX**：`<STMTTRN>` 块（OFX 1.x SGML 与 2.x XML 均支持），取 `DTPOSTED/TRNAMT/NAME/MEMO/TRNTYPE`。
+
+金额符号约定：负数 = 支出、正数 = 收入（QIF/OFX 的 `TRNTYPE` 借贷方向可覆盖符号）。导入按「账户 + 类型 + 时间 + 结算金额 + 备注」指纹去重；跨币种流水在行内未给结算金额时用本地缓存的汇率折算。单行失败不中断整批，错误明细逐行返回。
+
+### TOTP 二步验证
+
+在「用户」页旁的侧边栏入口（钥匙图标旁的盾牌图标）可自助开启：输入当前密码 → 生成密钥（展示 Base32 密钥与 `otpauth://` URI，可用 Authenticator 扫码或粘贴）→ 输入一次 6 位动态码确认后启用。启用后登录分两步：先密码、后动态码；关闭同样需要当前动态码。开启后所有设备下次登录都必须通过二步验证。
+
+### 备份/恢复
+
+管理员在「系统」页可查看备份列表、立即备份、下载 zip、恢复。备份用 `VACUUM INTO` 在线一致性快照共享库与全部用户账本后打包；恢复会覆盖全部数据并使所有会话失效（恢复后需重新登录）。定时备份通过 `KOKU_BACKUP_INTERVAL_HOURS` 启用，`KOKU_BACKUP_KEEP` 控制保留份数。
+
+### 持仓市价
+
+「账户」页持仓区有「刷新市价」按钮：仅拉取过期（默认 24 小时，`KOKU_QUOTE_TTL_HOURS` 可调）或从未更新过的持仓，并发查询 Stooq 后写回；Dashboard 加载时会自动懒刷新过期市价。标的需要带 Stooq 后缀，如美股 `AAPL.US`、A 股 `600519.SS`、港股 `0700.HK`。单个标的可在「更新市价」处手动输入或强制刷新。
+
+### 到期提醒
+
+顶栏铃铛展示未来 30 天到期（含逾期）的定期存款与借款。可选 SMTP 推送：配置 `KOKU_SMTP_HOST/PORT/TLS/USERNAME/PASSWORD/FROM/TO` 后，服务端每 `KOKU_SMTP_INTERVAL_HOURS`（默认 24 小时）把管理员账本中的到期摘要发到 `KOKU_SMTP_TO`；管理员也可在「系统」页手动发送测试邮件。未配置 SMTP 时仅应用内提醒。
