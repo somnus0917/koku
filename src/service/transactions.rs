@@ -351,6 +351,173 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
+    /// 撤销删除：恢复一笔已撤销的流水，重新应用其余额影响并清除 voided_at。
+    ///
+    /// 与 `void_transaction` 完全对称：报销支出会一并恢复其级联撤销的报销收入
+    /// 流水并重建报销状态，报销收入会回写所属支出的累计已报销金额。
+    pub fn restore_transaction(&mut self, transaction_id: i64) -> Result<Transaction> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+        if transaction.voided_at.is_none() {
+            return Err(KokuError::NotVoided);
+        }
+
+        match transaction.kind {
+            TransactionKind::Expense => {
+                // 恢复撤销支出时级联撤销的报销收入，并重建报销状态。
+                let reimbursements = Self::reimbursements_for_expense_in_tx(&tx, transaction_id)?;
+                let mut reimbursed = Decimal::ZERO;
+                for (income_id, amount) in &reimbursements {
+                    Self::restore_reimbursement_income_in_tx(&tx, *income_id)?;
+                    reimbursed += *amount;
+                }
+                if !reimbursements.is_empty() {
+                    let fully = reimbursed >= transaction.amount;
+                    tx.execute(
+                        "UPDATE transactions
+                         SET reimbursed_amount = ?1, reimbursed_at = ?2, reimbursable_at = ?3
+                         WHERE id = ?4",
+                        params![
+                            decimal_to_db(reimbursed),
+                            fully.then(|| timestamp(Utc::now())),
+                            (!fully).then(|| timestamp(Utc::now())),
+                            transaction_id
+                        ],
+                    )?;
+                }
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source
+                        .account_type
+                        .apply_outflow(source.balance, transaction.settled_amount),
+                )?;
+            }
+            TransactionKind::Income => {
+                // 若这笔收入是某笔支出的报销，回写支出的累计已报销金额。
+                if let Some((expense_id, amount)) =
+                    Self::reimbursement_for_income_in_tx(&tx, transaction_id)?
+                {
+                    let expense = Self::transaction_in_tx(&tx, expense_id)?;
+                    let new_reimbursed = expense.reimbursed_amount + amount;
+                    let reimbursed_at = if new_reimbursed >= expense.amount {
+                        Some(Utc::now())
+                    } else {
+                        None
+                    };
+                    tx.execute(
+                        "UPDATE transactions SET reimbursed_amount = ?1, reimbursed_at = ?2 WHERE id = ?3",
+                        params![decimal_to_db(new_reimbursed), reimbursed_at.map(timestamp), expense_id],
+                    )?;
+                }
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source
+                        .account_type
+                        .apply_inflow(source.balance, transaction.settled_amount),
+                )?;
+            }
+            TransactionKind::Transfer => {
+                let target_id = transaction.to_account_id.ok_or_else(|| {
+                    KokuError::InvalidInput("transfer is missing its target account".to_owned())
+                })?;
+                let target_amount = transaction.target_amount.ok_or_else(|| {
+                    KokuError::InvalidInput("transfer is missing its target amount".to_owned())
+                })?;
+                let target = Self::account_in_tx(&tx, target_id)?;
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source
+                        .account_type
+                        .apply_outflow(source.balance, transaction.settled_amount),
+                )?;
+                Self::set_balance(
+                    &tx,
+                    target_id,
+                    target
+                        .account_type
+                        .apply_inflow(target.balance, target_amount),
+                )?;
+            }
+            TransactionKind::Adjustment => {
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source.balance + transaction.amount,
+                )?;
+            }
+            // 借款/股票/定期流水不允许撤销，因此也永远到不了这里；防御性报错。
+            TransactionKind::Loan
+            | TransactionKind::Trade
+            | TransactionKind::Deposit => {
+                return Err(KokuError::InvalidInput(
+                    "loan, trade, and deposit transactions cannot be restored".to_owned(),
+                ))
+            }
+        }
+
+        tx.execute(
+            "UPDATE transactions SET voided_at = NULL WHERE id = ?1 AND voided_at IS NOT NULL",
+            [transaction_id],
+        )?;
+        tx.commit()?;
+        self.transaction(transaction_id)
+    }
+
+    /// 永久删除一笔已撤销的流水（连带小票、标签与报销关联）。
+    ///
+    /// 只允许删除已撤销的流水：撤销时余额已恢复，删除不会改动任何余额。
+    /// 删除支出会级联永久删除其报销收入流水（均已随支出级联撤销）；若某笔
+    /// 报销收入被单独恢复过，则保留该笔收入、仅解除报销关联。
+    pub fn delete_transaction(&mut self, transaction_id: i64) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+        if transaction.voided_at.is_none() {
+            return Err(KokuError::NotVoided);
+        }
+        Self::delete_transaction_in_tx(&tx, transaction_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 删除单笔流水及其依赖（小票、标签、报销关联）；支出级联删除已撤销的报销收入。
+    fn delete_transaction_in_tx(tx: &SqlTransaction<'_>, transaction_id: i64) -> Result<()> {
+        let transaction = Self::transaction_in_tx(tx, transaction_id)?;
+        if matches!(transaction.kind, TransactionKind::Expense) {
+            let links = Self::reimbursements_for_expense_in_tx(tx, transaction_id)?;
+            for (income_id, _) in links {
+                // 仅级联删除已撤销的报销收入；被单独恢复的收入保留为普通收入。
+                if Self::transaction_in_tx(tx, income_id)?.voided_at.is_some() {
+                    Self::delete_transaction_in_tx(tx, income_id)?;
+                }
+            }
+        }
+        tx.execute(
+            "DELETE FROM receipts WHERE transaction_id = ?1",
+            [transaction_id],
+        )?;
+        tx.execute(
+            "DELETE FROM transaction_tags WHERE transaction_id = ?1",
+            [transaction_id],
+        )?;
+        tx.execute(
+            "DELETE FROM reimbursements WHERE expense_id = ?1 OR income_id = ?1",
+            [transaction_id],
+        )?;
+        tx.execute("DELETE FROM transactions WHERE id = ?1", [transaction_id])?;
+        Ok(())
+    }
+
     /// 编辑一笔收入/支出流水：原子地撤销旧余额影响并应用新影响。
     ///
     /// 可改字段：备注、时间、分类、金额、账户（须与旧账户同币种）、结算额。

@@ -356,7 +356,34 @@ export function createTransfer(input: {
 }
 
 export function voidTransaction(id: number): Promise<Transaction> {
-  return request(`/api/transactions/${id}`, { method: "DELETE" });
+  return request(`/api/transactions/${id}/void`, { method: "POST" });
+}
+
+/** 撤销删除：恢复一笔已撤销的流水，重新应用其余额影响。 */
+export function restoreTransaction(id: number): Promise<Transaction> {
+  return request(`/api/transactions/${id}/restore`, { method: "POST" });
+}
+
+/** 永久删除一笔已撤销的流水（连带小票、标签与报销关联），不可恢复。 */
+export async function deleteTransactionPermanently(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/transactions/${id}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" }
+  });
+  if (!response.ok) {
+    if (response.status === 401) {
+      window.dispatchEvent(new Event("koku:unauthorized"));
+    }
+    let message = `请求失败（${response.status}）`;
+    try {
+      const body = await response.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // 204/非 JSON 错误体直接使用默认文案。
+    }
+    throw new ApiError(message, response.status);
+  }
 }
 
 export function updateTransaction(

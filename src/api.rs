@@ -868,6 +868,22 @@ async fn api_void_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+async fn api_restore_transaction(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Transaction>>> {
+    let transaction = lock_service(&state)?.restore_transaction(transaction_id)?;
+    Ok(Json(ApiResponse::new(transaction)))
+}
+
+async fn api_delete_transaction(
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<StatusCode> {
+    lock_service(&state)?.delete_transaction(transaction_id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn api_update_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
@@ -1214,8 +1230,16 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/transactions/export", get(api_export_transactions))
         .route("/api/transfers", post(api_create_transfer))
         .route(
+            "/api/transactions/{transaction_id}/void",
+            post(api_void_transaction),
+        )
+        .route(
+            "/api/transactions/{transaction_id}/restore",
+            post(api_restore_transaction),
+        )
+        .route(
             "/api/transactions/{transaction_id}",
-            delete(api_void_transaction).patch(api_update_transaction),
+            delete(api_delete_transaction).patch(api_update_transaction),
         )
         .route(
             "/api/transactions/{transaction_id}/reimbursable",

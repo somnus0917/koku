@@ -31,6 +31,8 @@ pub enum KokuError {
     },
     #[error("a transaction that has already been voided cannot be voided again")]
     AlreadyVoided,
+    #[error("only voided transactions can be restored or permanently deleted")]
+    NotVoided,
     #[error("invalid username or password")]
     InvalidCredentials,
     #[error("authentication required")]
@@ -52,7 +54,7 @@ impl IntoResponse for KokuError {
     fn into_response(self) -> Response {
         let status = match &self {
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
-            Self::AlreadyVoided => StatusCode::CONFLICT,
+            Self::AlreadyVoided | Self::NotVoided => StatusCode::CONFLICT,
             Self::InvalidCredentials | Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::InvalidInput(_) | Self::CategoryKindMismatch { .. } => {

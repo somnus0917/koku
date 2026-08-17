@@ -1532,6 +1532,14 @@ button:disabled {
   background: var(--surface-muted);
 }
 
+.row-menu button.menu-danger {
+  color: var(--danger, #d64545);
+}
+
+.row-menu button.menu-danger:hover {
+  background: color-mix(in srgb, var(--danger, #d64545) 12%, transparent);
+}
+
 .transaction-row.voided {
   opacity: 0.45;
 }

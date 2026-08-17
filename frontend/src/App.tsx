@@ -64,7 +64,9 @@ import {
   updateAccount,
   updateTransaction,
   uploadReceipt,
-  voidTransaction
+  voidTransaction,
+  restoreTransaction,
+  deleteTransactionPermanently
 } from "./api";
 import {
   AccountModal,
@@ -372,6 +374,14 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             onVoid={(transaction) =>
               void mutate(() => voidTransaction(transaction.id), "交易已撤销，余额已恢复")
             }
+            onRestore={(transaction) =>
+              void mutate(() => restoreTransaction(transaction.id), "交易已恢复")
+            }
+            onDeletePermanently={(transaction) => {
+              const label = transaction.note || transaction.kind;
+              if (!window.confirm(`永久删除「${label}」？此操作不可恢复，将同时删除小票与报销记录。`)) return;
+              void mutate(() => deleteTransactionPermanently(transaction.id), "交易已永久删除");
+            }}
             onMarkReimbursable={(transaction) =>
               void mutate(() => markReimbursable(transaction.id), "已标记为待报销")
             }

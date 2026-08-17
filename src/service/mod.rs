@@ -519,6 +519,27 @@ impl BookkeepingService {
         )?;
         Ok(())
     }
+
+    /// 恢复一笔已撤销的报销收入流水：余额正向应用并清除 voided_at；未撤销则跳过。
+    fn restore_reimbursement_income_in_tx(tx: &SqlTransaction<'_>, income_id: i64) -> Result<()> {
+        let income = Self::transaction_in_tx(tx, income_id)?;
+        if income.voided_at.is_none() {
+            return Ok(());
+        }
+        let source = Self::account_in_tx(tx, income.account_id)?;
+        Self::set_balance(
+            tx,
+            income.account_id,
+            source
+                .account_type
+                .apply_inflow(source.balance, income.settled_amount),
+        )?;
+        tx.execute(
+            "UPDATE transactions SET voided_at = NULL WHERE id = ?1 AND voided_at IS NOT NULL",
+            [income_id],
+        )?;
+        Ok(())
+    }
 }
 
 type AccountRow = (i64, String, String, String, String, Option<String>);
@@ -2741,6 +2762,135 @@ mod tests {
         assert!(service.loan(borrow.id)?.closed_at.is_some());
         let balance = service.balance_summary("CNY")?;
         assert_eq!(balance.total_liabilities, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn voided_expense_can_be_restored_with_balances_reapplied() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(500_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let expense = service.record_expense(cash.id, food.id, Decimal::from(120_u32), at, "午餐")?;
+
+        service.void_transaction(expense.id)?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(500_u32));
+        assert!(service.transaction(expense.id)?.voided_at.is_some());
+
+        // 恢复：余额重新扣减、voided_at 清空
+        let restored = service.restore_transaction(expense.id)?;
+        assert!(restored.voided_at.is_none());
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(380_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_and_permanent_delete_require_a_voided_transaction() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let expense = service.record_expense(cash.id, food.id, Decimal::TEN, at, "咖啡")?;
+
+        assert!(matches!(
+            service.restore_transaction(expense.id),
+            Err(KokuError::NotVoided)
+        ));
+        assert!(matches!(
+            service.delete_transaction(expense.id),
+            Err(KokuError::NotVoided)
+        ));
+        // 未撤销前永久删除必须被拒绝，且流水仍在
+        assert_eq!(service.transaction(expense.id)?.id, expense.id);
+        Ok(())
+    }
+
+    #[test]
+    fn voided_transaction_can_be_permanently_deleted_with_dependents() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let expense = service.record_expense(cash.id, food.id, Decimal::from(30_u32), at, "打车")?;
+        service.void_transaction(expense.id)?;
+
+        // 挂一张小票和标签，确认随流水一起删除
+        service.attach_receipt(expense.id, "image/png".to_owned(), vec![1, 2, 3])?;
+        service.set_transaction_tags(expense.id, vec!["出差".to_owned()])?;
+
+        service.delete_transaction(expense.id)?;
+        assert!(matches!(
+            service.transaction(expense.id),
+            Err(KokuError::NotFound { .. })
+        ));
+        // 余额不变（撤销时已恢复）
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(100_u32));
+        // 依赖清理干净
+        let receipts = service.conn.query_row(
+            "SELECT COUNT(*) FROM receipts WHERE transaction_id = ?1",
+            [expense.id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        assert_eq!(receipts, 0);
+        let tags = service.conn.query_row(
+            "SELECT COUNT(*) FROM transaction_tags WHERE transaction_id = ?1",
+            [expense.id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        assert_eq!(tags, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn restoring_an_expense_also_restores_its_cascade_voided_reimbursements() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(500_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap().and_hms_opt(12, 0, 0).unwrap().and_utc();
+        let expense = service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "出差餐费")?;
+        service.mark_reimbursable(expense.id)?;
+        let income = service.reimburse(expense.id, cash.id, Decimal::from(100_u32), "CNY", None, "报销")?;
+
+        service.void_transaction(expense.id)?;
+        // 报销收入被级联撤销，支出报销状态清零
+        assert!(service.transaction(income.id)?.voided_at.is_some());
+        let voided = service.transaction(expense.id)?;
+        assert_eq!(voided.reimbursed_amount, Decimal::ZERO);
+        assert!(voided.reimbursed_at.is_none());
+
+        // 恢复支出：报销收入一并恢复，报销状态重建
+        service.restore_transaction(expense.id)?;
+        assert!(service.transaction(income.id)?.voided_at.is_none());
+        let restored = service.transaction(expense.id)?;
+        assert_eq!(restored.reimbursed_amount, Decimal::from(100_u32));
+        assert!(restored.reimbursed_at.is_some());
+        // 余额：支出 -100，报销 +100，回到起点
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(500_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn transfer_void_and_restore_roundtrip_keeps_both_balances() -> Result<()> {
+        let mut service = test_service()?;
+        let from = service.create_account("现金", AccountType::Cash, "CNY", Decimal::from(200_u32))?;
+        let to = service.create_account("储蓄", AccountType::Savings, "CNY", Decimal::from(50_u32))?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 2).unwrap().and_hms_opt(9, 0, 0).unwrap().and_utc();
+        let transfer = service.record_transfer(
+            from.id,
+            to.id,
+            Decimal::from(80_u32),
+            Decimal::from(80_u32),
+            at,
+            "存钱",
+        )?;
+
+        service.void_transaction(transfer.id)?;
+        assert_eq!(service.account(from.id)?.balance, Decimal::from(200_u32));
+        assert_eq!(service.account(to.id)?.balance, Decimal::from(50_u32));
+
+        service.restore_transaction(transfer.id)?;
+        assert_eq!(service.account(from.id)?.balance, Decimal::from(120_u32));
+        assert_eq!(service.account(to.id)?.balance, Decimal::from(130_u32));
         Ok(())
     }
 }

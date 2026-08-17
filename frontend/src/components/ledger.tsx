@@ -509,6 +509,8 @@ export function TransactionsPage({
   data,
   onAdd,
   onVoid,
+  onRestore,
+  onDeletePermanently,
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
@@ -523,6 +525,8 @@ export function TransactionsPage({
   data: AppData;
   onAdd: () => void;
   onVoid: (transaction: Transaction) => void;
+  onRestore: (transaction: Transaction) => void;
+  onDeletePermanently: (transaction: Transaction) => void;
   onMarkReimbursable: (transaction: Transaction) => void;
   onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
@@ -618,6 +622,8 @@ export function TransactionsPage({
             display={display}
             rates={rates}
             onVoid={() => onVoid(transaction)}
+            onRestore={() => onRestore(transaction)}
+            onDeletePermanently={() => onDeletePermanently(transaction)}
             onMarkReimbursable={() => onMarkReimbursable(transaction)}
             onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
             onReimburse={() => onReimburse(transaction)}
@@ -690,6 +696,8 @@ export function TransactionRow({
   display,
   rates,
   onVoid,
+  onRestore,
+  onDeletePermanently,
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
@@ -706,6 +714,10 @@ export function TransactionRow({
   /** 折算汇率表：交易币种 → 1 unit = factor display；缺汇率的币种回退原币显示 */
   rates?: Record<string, number>;
   onVoid?: () => void;
+  /** 已撤销的流水：恢复（撤销删除） */
+  onRestore?: () => void;
+  /** 已撤销的流水：永久删除（不可恢复） */
+  onDeletePermanently?: () => void;
   onMarkReimbursable?: () => void;
   onUnmarkReimbursable?: () => void;
   onReimburse?: () => void;
@@ -821,16 +833,27 @@ export function TransactionRow({
               aria-label={`已报销 ${reimbursedShown}`}
             ><CircleCheck size={16} /></span>
           )}
-          <button
-            className="row-action"
-            disabled={Boolean(transaction.voided_at) || transaction.kind === "loan" || transaction.kind === "trade" || transaction.kind === "deposit"}
-            onClick={onVoid}
-            title="撤销并恢复余额"
-            aria-label="撤销交易"
-          ><Trash2 size={16} /></button>
+          {transaction.voided_at
+            ? onRestore && (
+                <button
+                  className="row-action"
+                  onClick={onRestore}
+                  title="撤销删除，恢复这笔交易"
+                  aria-label="恢复交易"
+                ><RotateCcw size={16} /></button>
+              )
+            : (
+                <button
+                  className="row-action"
+                  disabled={transaction.kind === "loan" || transaction.kind === "trade" || transaction.kind === "deposit"}
+                  onClick={onVoid}
+                  title="撤销并恢复余额"
+                  aria-label="撤销交易"
+                ><Trash2 size={16} /></button>
+              )}
         </div>
       )}
-      {onEdit && (
+      {(onEdit || onRestore || onDeletePermanently) && (
         <div className="row-menu-wrap" ref={menuRef}>
           <button
             type="button"
@@ -843,14 +866,23 @@ export function TransactionRow({
           ><MoreHorizontal size={16} /></button>
           {menuOpen && (
             <div className="row-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onEdit(); }}>
-                编辑交易
-              </button>
-              {onUploadReceipt && (
+              {transaction.voided_at ? (
                 <>
-                  <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
-                    上传小票
-                  </button>
+                  {onRestore && (
+                    <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onRestore(); }}>
+                      恢复交易
+                    </button>
+                  )}
+                  {onDeletePermanently && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="menu-danger"
+                      onClick={() => { setMenuOpen(false); onDeletePermanently(); }}
+                    >
+                      永久删除
+                    </button>
+                  )}
                   {transaction.has_receipt && (
                     <button
                       type="button"
@@ -863,18 +895,45 @@ export function TransactionRow({
                       查看小票
                     </button>
                   )}
-                  <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*,application/pdf"
-                    hidden
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) onUploadReceipt(file);
-                      event.target.value = "";
-                      setMenuOpen(false);
-                    }}
-                  />
+                </>
+              ) : (
+                <>
+                  {onEdit && (
+                    <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onEdit(); }}>
+                      编辑交易
+                    </button>
+                  )}
+                  {onUploadReceipt && (
+                    <>
+                      <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
+                        上传小票
+                      </button>
+                      {transaction.has_receipt && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMenuOpen(false);
+                            window.open(receiptUrl(transaction.id), "_blank", "noopener");
+                          }}
+                        >
+                          查看小票
+                        </button>
+                      )}
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept="image/*,application/pdf"
+                        hidden
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) onUploadReceipt(file);
+                          event.target.value = "";
+                          setMenuOpen(false);
+                        }}
+                      />
+                    </>
+                  )}
                 </>
               )}
             </div>
