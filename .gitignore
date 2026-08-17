@@ -12,3 +12,4 @@
 /.release.next.env
 /.bench/
 /.cargo-home/
+/.npm-cache/
