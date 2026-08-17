@@ -20,6 +20,7 @@ mod error;
 mod importer;
 mod mailer;
 mod quotes;
+mod r2;
 mod ratelimit;
 mod rates;
 mod service;
@@ -39,6 +40,7 @@ use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
 use crate::quotes::QuoteClient;
+use crate::r2::{R2Client, R2Config};
 use crate::ratelimit::ApiRateLimiter;
 use crate::rates::RateClient;
 use crate::service::{ensure_multi_user, BookkeepingService};
@@ -78,6 +80,7 @@ async fn run_server() -> Result<()> {
         pending_totp: Arc::new(Mutex::new(HashMap::new())),
         rates: Arc::new(RateClient::new()),
         quotes: Arc::new(QuoteClient::new()),
+        r2: R2Config::from_env()?.map(|config| Arc::new(R2Client::new(config))),
     };
 
     // 演示账本：仅在全新安装（admin 账本为空）时填充。
@@ -108,6 +111,7 @@ async fn run_server() -> Result<()> {
     if backup_interval_hours > 0 {
         let backup_db_path = state.db_path.clone();
         let backup_ledger_dir = state.ledger_dir.clone();
+        let backup_r2 = state.r2.clone();
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(backup_interval_hours * 3600));
@@ -117,6 +121,25 @@ async fn run_server() -> Result<()> {
                 interval.tick().await;
                 match backup::create_backup(&backup_db_path, &backup_ledger_dir, backup_keep) {
                     Ok(meta) => {
+                        // 配置了 R2 时上传本次备份并清理超出保留份数的旧对象。
+                        if let Some(r2) = &backup_r2 {
+                            let dir = backup::backup_dir(&backup_db_path);
+                            let key = r2.object_key(&meta.filename);
+                            let upload = async {
+                                let bytes = std::fs::read(dir.join(&meta.filename))
+                                    .map_err(KokuError::from)?;
+                                r2.put_object(&key, &bytes, "application/zip").await
+                            };
+                            match upload.await {
+                                Ok(()) => {
+                                    tracing::info!(target: "koku", backup = %meta.id, "scheduled backup uploaded to R2");
+                                    r2::prune_old_objects(r2, &backup_db_path, backup_keep).await;
+                                }
+                                Err(error) => {
+                                    tracing::warn!(target: "koku", error = %error, "scheduled backup R2 upload failed")
+                                }
+                            }
+                        }
                         tracing::info!(target: "koku", backup = %meta.id, "scheduled backup completed")
                     }
                     Err(error) => {

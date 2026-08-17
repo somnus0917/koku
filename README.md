@@ -30,7 +30,7 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 到期提醒：Dashboard 顶部提示已到期未结的定存与借款
 - 应用内改密码（修改后旧会话全部失效）
 - TOTP 二步验证：登录分两步，应用内自助开启/关闭（基于 `totp-rs`）
-- 数据库备份/恢复：管理员一键备份（共享库 + 全部用户账本打包 zip）、下载、恢复；可选定时备份
+- 数据库备份/恢复：管理员一键备份（共享库 + 全部用户账本打包 zip）、下载、恢复；可选定时备份；可选自动上传 Cloudflare R2 实现异地冗余（含从 R2 恢复）
 - CSV 导入：支持 Koku 导出 CSV 往返、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），逐行去重与错误汇总
 - 年度汇总与滚动平均：按年统计逐月收支与分类明细，最近 N 个月收支的滚动均值视图
 - 通用 API 限流：除健康检查外所有 `/api` 请求按客户端限流（默认 300 次/分钟）
@@ -249,6 +249,9 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_SMTP_USERNAME` / `KOKU_SMTP_PASSWORD` | 未设置 | SMTP 认证（无认证服务器可留空） |
 | `KOKU_SMTP_FROM` / `KOKU_SMTP_TO` | 必填（启用时） | 发件人 / 收件人邮箱（管理员账本的到期摘要） |
 | `KOKU_SMTP_INTERVAL_HOURS` | `24` | 到期提醒邮件发送间隔（小时） |
+| `KOKU_R2_ACCOUNT_ID` | 未设置 | Cloudflare R2 账户 ID（设置后启用异地备份上传；需同时配置下面四项） |
+| `KOKU_R2_ACCESS_KEY_ID` / `KOKU_R2_SECRET_ACCESS_KEY` | 未设置 | R2 API 令牌的 S3 凭据（需授予「对象读写」权限） |
+| `KOKU_R2_BUCKET` / `KOKU_R2_PREFIX` | `backups` / `koku` | R2 桶名与对象前缀 |
 | `RUST_LOG` | `auth=info,koku=info,tower_http=info` | tracing 日志级别；如 `RUST_LOG=debug` 可看到请求级日志 |
 
 ## REST API
@@ -315,6 +318,10 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET` | `/api/admin/backups/{id}/download` | （管理员）下载备份 zip |
 | `POST` | `/api/admin/backups/{id}/restore` | （管理员）恢复备份（覆盖全部账本，所有会话失效） |
 | `POST` | `/api/admin/reminders/send` | （管理员）手动发送到期提醒邮件（需配置 SMTP） |
+| `GET` | `/api/admin/r2/status` | （管理员）R2 状态：是否启用、桶/前缀、最近上传 |
+| `POST` | `/api/admin/r2/upload/{id}` | （管理员）把某个本地备份补传到 R2 |
+| `POST` | `/api/admin/r2/delete/{id}` | （管理员）删除 R2 上的备份对象（不影响本地） |
+| `POST` | `/api/admin/r2/restore/{id}` | （管理员）从 R2 下载并恢复备份 |
 
 `DELETE` 使用审计友好的软撤销语义，不物理删除交易记录。
 
@@ -343,6 +350,12 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 ### 持仓市价
 
 「账户」页持仓区有「刷新市价」按钮：仅拉取过期（默认 24 小时，`KOKU_QUOTE_TTL_HOURS` 可调）或从未更新过的持仓，并发查询 Stooq 后写回；Dashboard 加载时会自动懒刷新过期市价。标的需要带 Stooq 后缀，如美股 `AAPL.US`、A 股 `600519.SS`、港股 `0700.HK`。单个标的可在「更新市价」处手动输入或强制刷新。
+
+### R2 异地备份
+
+配置 `KOKU_R2_ACCOUNT_ID/ACCESS_KEY_ID/SECRET_ACCESS_KEY/BUCKET/PREFIX` 后，每次备份（手动或定时）都会自动把 zip 上传到 Cloudflare R2（SigV4 签名，`PREFIX` 缺省 `koku`），并自动清理超出 `KOKU_BACKUP_KEEP` 的旧 R2 对象。「系统」页展示 R2 状态，支持补传、删除与**从 R2 恢复**（灾难恢复场景：服务器磁盘丢失后重建实例即可拉回备份）。
+
+R2 API 令牌需在 Cloudflare 控制台创建并授予「对象读写」权限（建议只作用于备份桶）。境内服务器到 Cloudflare 实测约 67ms RTT、2.4MB/s 吞吐，个人账本的备份包（几 MB～几十 MB）上传无压力。
 
 ### 到期提醒
 

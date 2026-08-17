@@ -34,6 +34,9 @@ pub struct BackupMeta {
     pub size_bytes: u64,
     /// 包内文件相对路径（`koku.db` 与 `ledgers/ledger-<id>.db`）。
     pub files: Vec<String>,
+    /// 已上传 R2 的对象键（如 `koku/koku-20260101-120000.zip`）；未上传为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r2_key: Option<String>,
 }
 
 /// 校验备份 id，防止路径穿越；合法字符集：字母数字、点、下划线、连字符。
@@ -157,6 +160,7 @@ pub fn create_backup(db_path: &Path, ledger_dir: &Path, keep: usize) -> Result<B
         created_at: now.to_rfc3339_opts(SecondsFormat::Secs, true),
         size_bytes,
         files: archive_files,
+        r2_key: None,
     })
 }
 
@@ -200,6 +204,7 @@ pub fn list_backups(db_path: &Path) -> Result<Vec<BackupMeta>> {
             created_at,
             size_bytes,
             files,
+            r2_key: None,
         });
     }
     backups.sort_by(|a, b| b.id.cmp(&a.id));
@@ -230,10 +235,12 @@ fn created_at_from_id(id: &str) -> String {
 }
 
 /// 删除最旧的备份，只保留最近 `keep` 个（按文件修改时间）。
-fn prune_old_backups(dir: &Path, keep: usize) {
+/// 返回被删除的文件名列表（供调用方同步清理 R2 上对应的对象）。
+fn prune_old_backups(dir: &Path, keep: usize) -> Vec<String> {
+    let mut removed = Vec::new();
     let mut backups: Vec<(String, std::time::SystemTime)> = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
-        return;
+        return removed;
     };
     for entry in entries.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
@@ -249,8 +256,11 @@ fn prune_old_backups(dir: &Path, keep: usize) {
     backups.sort_by_key(|(_, modified)| *modified);
     while backups.len() > keep {
         let (oldest, _) = backups.remove(0);
-        let _ = fs::remove_file(dir.join(oldest));
+        if fs::remove_file(dir.join(&oldest)).is_ok() {
+            removed.push(oldest);
+        }
     }
+    removed
 }
 
 /// 恢复备份：解压到临时目录后原子覆盖线上文件，并清理目标 WAL/SHM。

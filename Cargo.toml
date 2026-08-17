@@ -11,6 +11,7 @@ bcrypt = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
 csv = "1"
 getrandom = "0.4"
+hmac = "0.12"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -18,6 +19,7 @@ rust_decimal = { version = "1.36", features = ["serde-with-str"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
+sha2_010 = { package = "sha2", version = "0.10" }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 totp-rs = { version = "5", features = ["otpauth"] }

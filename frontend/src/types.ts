@@ -282,6 +282,17 @@ export interface BackupMeta {
   created_at: string;
   size_bytes: number;
   files: string[];
+  /** 已上传 R2 的对象键（如 `koku/koku-20260101-120000.zip`）；未上传为 null。 */
+  r2_key?: string | null;
+}
+
+/** 管理员可见的 R2 异地备份状态。 */
+export interface R2Status {
+  enabled: boolean;
+  bucket?: string;
+  prefix?: string;
+  endpoint?: string;
+  last_uploaded?: { backup_id: string; size_bytes: number } | null;
 }
 
 /** 导入时某行被跳过/失败的原因。 */

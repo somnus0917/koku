@@ -3619,3 +3619,40 @@ button:disabled {
   padding-top: 8px;
   border-top: 1px dashed var(--border);
 }
+
+/* —— R2 异地备份（系统页）—— */
+.r2-panel {
+  margin-bottom: 16px;
+}
+.r2-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.r2-badge.r2-on {
+  color: var(--green, #2c8765);
+  background: color-mix(in srgb, #2c8765 14%, transparent);
+}
+.r2-badge.r2-off {
+  color: var(--muted, #8b8fa3);
+  background: color-mix(in srgb, #8b8fa3 14%, transparent);
+}
+.r2-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 13px;
+  color: var(--muted, #8b8fa3);
+}
+.r2-meta strong {
+  color: var(--text, #1d2030);
+  font-weight: 600;
+}
+.r2-disabled-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.6;
+}

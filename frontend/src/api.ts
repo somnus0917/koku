@@ -17,6 +17,7 @@ import type {
   LoanType,
   MonthlySummary,
   MonthlyTrendPoint,
+  R2Status,
   RateQuote,
   Receipt,
   Reconciliation,
@@ -709,6 +710,26 @@ export function restoreBackup(id: string): Promise<{ restored: boolean }> {
   return request<{ restored: boolean }>(`/api/admin/backups/${id}/restore`, {
     method: "POST"
   });
+}
+
+/** 管理员：R2 异地备份状态。 */
+export function r2Status(): Promise<R2Status> {
+  return request("/api/admin/r2/status");
+}
+
+/** 管理员：把某个本地备份补传到 R2。 */
+export function r2Upload(backupId: string): Promise<BackupMeta> {
+  return request(`/api/admin/r2/upload/${backupId}`, { method: "POST" });
+}
+
+/** 管理员：删除 R2 上的某备份对象（不影响本地备份）。 */
+export function r2Delete(backupId: string): Promise<{ deleted: boolean; key: string }> {
+  return request(`/api/admin/r2/delete/${backupId}`, { method: "POST" });
+}
+
+/** 管理员：从 R2 下载并恢复某备份（覆盖全部数据，所有会话失效）。 */
+export function r2Restore(backupId: string): Promise<{ restored: boolean; source: string }> {
+  return request(`/api/admin/r2/restore/${backupId}`, { method: "POST" });
 }
 
 /** 管理员：下载备份 zip 并触发浏览器保存。 */
