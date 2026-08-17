@@ -877,7 +877,7 @@ export function TransactionRow({
                   <input
                     ref={fileRef}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,application/pdf"
                     hidden
                     onChange={(event) => {
                       const file = event.target.files?.[0];

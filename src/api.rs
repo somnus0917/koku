@@ -285,6 +285,16 @@ fn csv_field(value: &str) -> String {
     }
 }
 
+/// 对用户可控的自由文本做公式注入防护：以 `=` `+` `-` `@` 开头的字段前置 `'`，
+/// 避免在 Excel/Sheets 打开时被当作公式执行。仅用于文本字段，不用于数字列。
+fn neutralize_formula(value: &str) -> String {
+    if matches!(value.as_bytes().first(), Some(b'=' | b'+' | b'-' | b'@')) {
+        format!("'{value}")
+    } else {
+        value.to_owned()
+    }
+}
+
 async fn require_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let Some(token) = session_token(request.headers()) else {
         return KokuError::Unauthorized.into_response();
@@ -697,24 +707,34 @@ async fn api_export_transactions(
         "id,kind,account,target_account,category,amount,currency,settled_amount,occurred_at,note,voided_at\n",
     );
     for tx in &all {
-        let fields = [
-            tx.id.to_string(),
-            tx.kind.as_str().to_owned(),
-            account_names
+        let account = neutralize_formula(
+            &account_names
                 .get(&tx.account_id)
                 .cloned()
                 .unwrap_or_default(),
-            tx.to_account_id
+        );
+        let target_account = neutralize_formula(
+            &tx.to_account_id
                 .and_then(|id| account_names.get(&id).cloned())
                 .unwrap_or_default(),
-            tx.category_id
+        );
+        let category = neutralize_formula(
+            &tx.category_id
                 .and_then(|id| category_names.get(&id).cloned())
                 .unwrap_or_default(),
+        );
+        let note = neutralize_formula(&tx.note);
+        let fields = [
+            tx.id.to_string(),
+            tx.kind.as_str().to_owned(),
+            account,
+            target_account,
+            category,
             tx.amount.normalize().to_string(),
             tx.currency.clone(),
             tx.settled_amount.normalize().to_string(),
             tx.occurred_at.to_rfc3339(),
-            tx.note.clone(),
+            note,
             tx.voided_at
                 .map(|value| value.to_rfc3339())
                 .unwrap_or_default(),
@@ -1232,7 +1252,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
 
 #[cfg(test)]
 mod tests {
-    use super::csv_field;
+    use super::{csv_field, neutralize_formula};
 
     #[test]
     fn csv_field_escapes_only_when_needed() {
@@ -1240,5 +1260,16 @@ mod tests {
         assert_eq!(csv_field("a,b"), "\"a,b\"");
         assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
         assert_eq!(csv_field("line\nbreak"), "\"line\nbreak\"");
+    }
+
+    #[test]
+    fn neutralize_formula_prefixes_spreadsheet_formula_leads() {
+        assert_eq!(neutralize_formula("plain"), "plain");
+        assert_eq!(neutralize_formula("=SUM(A1)"), "'=SUM(A1)");
+        assert_eq!(neutralize_formula("+1+1"), "'+1+1");
+        assert_eq!(neutralize_formula("-1+1"), "'-1+1");
+        assert_eq!(neutralize_formula("@cmd"), "'@cmd");
+        // 非开头的 =+-@ 不受影响。
+        assert_eq!(neutralize_formula("abc=1"), "abc=1");
     }
 }

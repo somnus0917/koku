@@ -1296,6 +1296,47 @@ mod tests {
     }
 
     #[test]
+    fn receipts_reject_untrusted_content_types() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(10_u32), at, "餐费")?;
+        let bytes = vec![1_u8, 2, 3];
+
+        // 白名单内（含大小写与参数）放行并归一化。
+        service.attach_receipt(expense.id, "image/jpeg".to_owned(), bytes.clone())?;
+        assert_eq!(service.receipt(expense.id)?.content_type, "image/jpeg");
+        service.attach_receipt(
+            expense.id,
+            "Image/PNG; charset=binary".to_owned(),
+            bytes.clone(),
+        )?;
+        assert_eq!(service.receipt(expense.id)?.content_type, "image/png");
+
+        // 可携带脚本的类型与未知类型一律拒绝。
+        for bad in [
+            "text/html",
+            "image/svg+xml",
+            "application/octet-stream",
+            "text/plain",
+        ] {
+            assert!(
+                service
+                    .attach_receipt(expense.id, bad.to_owned(), bytes.clone())
+                    .is_err(),
+                "should reject {bad}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn tags_attach_to_transactions_and_round_trip() -> Result<()> {
         let mut service = test_service()?;
         let cash =

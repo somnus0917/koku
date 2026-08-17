@@ -11,6 +11,19 @@ use crate::service::BookkeepingService;
 /// 单张附件上限（约 12 MiB），防止请求撑爆内存。
 pub const MAX_RECEIPT_BYTES: usize = 12 * 1024 * 1024;
 
+/// 允许作为小票附件存储的 Content-Type 白名单。
+///
+/// 取图接口会把该值原样设成响应头，且前端以整页导航打开；如果放行
+/// `text/html` / `image/svg+xml` 这类可携带脚本的类型，可能被当作同源页面
+/// 渲染执行（存储型 XSS）。这里只允许无脚本能力的图片与 PDF。
+const ALLOWED_RECEIPT_CONTENT_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "application/pdf",
+];
+
 impl BookkeepingService {
     /// 给交易挂上（或覆盖）一张小票附件。交易必须存在。
     pub fn attach_receipt(
@@ -25,6 +38,7 @@ impl BookkeepingService {
                 data.len()
             )));
         }
+        let content_type = normalize_receipt_content_type(&content_type)?;
         self.transaction(transaction_id)?;
         self.conn.execute(
             "INSERT INTO receipts(transaction_id, content_type, data, created_at)
@@ -81,5 +95,22 @@ impl BookkeepingService {
                 id: transaction_id,
             })?;
         Ok(row)
+    }
+}
+
+/// 归一化并校验小票的 Content-Type：去参数、转小写后命中白名单才放行。
+fn normalize_receipt_content_type(value: &str) -> Result<String> {
+    let mime = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if ALLOWED_RECEIPT_CONTENT_TYPES.contains(&mime.as_str()) {
+        Ok(mime)
+    } else {
+        Err(KokuError::InvalidInput(format!(
+            "unsupported receipt content type: {value}"
+        )))
     }
 }
