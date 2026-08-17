@@ -1,19 +1,35 @@
-//! 弹窗组件：新建/编辑账户、交易、分类、定期、报销、借款。
+//! 弹窗组件：新建/编辑账户、交易、分类、定期、报销、借款、二步验证、对账。
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import {
   BadgeDollarSign,
   Check,
   ChevronDown,
   CircleDollarSign,
+  ClipboardCheck,
+  Copy,
+  KeyRound,
   LoaderCircle,
+  LockKeyhole,
   PiggyBank,
   RefreshCcw,
   RotateCcw,
+  ShieldCheck,
   Upload,
   X,
   type LucideIcon
 } from "lucide-react";
-import { rateHint, importTransactions } from "../api";
+import {
+  cancelReconciliation,
+  completeReconciliation,
+  createReconciliation,
+  getAuthSession,
+  importTransactions,
+  listReconciliations,
+  rateHint,
+  totpDisable,
+  totpEnable,
+  totpSetup
+} from "../api";
 import type { createTransaction, createTransfer } from "../api";
 import {
   availableCurrencies,
@@ -35,6 +51,8 @@ import type {
   Loan,
   LoanType,
   RateQuote,
+  Reconciliation,
+  ReconciliationStatus,
   RecurrenceFrequency,
   Tag,
   Transaction,
@@ -1278,18 +1296,19 @@ export function PasswordModal({
 }
 
 /** 批量导入交易：选择账单文件与目标账户，导入后展示结果摘要（成功/重复/失败 + 问题行）。
- *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onSubmit
- *  （父级按 mutate 模式刷新并提示），重复导入由后端指纹去重兜底。 */
+ *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onComplete
+ *  （父级按 mutate 模式刷新并提示，不再重复导入）。 */
 export function ImportModal({
   accounts,
   categories,
   onClose,
-  onSubmit
+  onComplete
 }: {
   accounts: Account[];
   categories: Category[];
   onClose: () => void;
-  onSubmit: (file: File, input: { format?: string; account_id: number; category_id?: number; currency?: string }) => Promise<void>;
+  /** 导入已完成：仅刷新数据并提示，不再重复调用导入 API。 */
+  onComplete: () => void;
 }) {
   const [accountId, setAccountId] = useState("");
   const [format, setFormat] = useState<"auto" | "csv" | "qif" | "ofx">("auto");
@@ -1319,14 +1338,8 @@ export function ImportModal({
     }
   };
 
-  const finish = async () => {
-    if (file) {
-      try {
-        await onSubmit(file, input());
-      } catch {
-        // 重复导入由后端去重兜底；此处失败也不阻塞关闭。
-      }
-    }
+  const finish = () => {
+    onComplete();
     onClose();
   };
 
@@ -1355,7 +1368,7 @@ export function ImportModal({
           </p>
           <div className="modal-actions">
             <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
-            <button type="button" className="primary-button" onClick={() => void finish()}>完成</button>
+            <button type="button" className="primary-button" onClick={finish}>完成</button>
           </div>
         </div>
       ) : (
@@ -1412,6 +1425,364 @@ export function ImportModal({
           </div>
         </form>
       )}
+    </ModalShell>
+  );
+}
+
+/** 当前本地日期 YYYY-MM-DD（对账日默认值）。 */
+function todayDateValue(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+/** 把 YYYY-MM-DD（或 RFC3339）解析为本地日期。 */
+function parseDay(value: string): Date {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
+}
+
+/** 日期展示（如 "2026年8月15日"）。 */
+function formatDay(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(parseDay(value));
+}
+
+/** 二步验证（TOTP）管理弹窗：查看状态、开始设置、关闭。 */
+export function TotpModal({ onClose }: { onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [enabled, setEnabled] = useState(false);
+  const [step, setStep] = useState<"intro" | "password" | "secret" | "disable">("intro");
+  const [secret, setSecret] = useState("");
+  const [otpauthUri, setOtpauthUri] = useState("");
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [copied, setCopied] = useState<"" | "secret" | "uri">("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getAuthSession()
+      .then((session) => {
+        if (!cancelled) {
+          setEnabled(session.totp_enabled);
+          setLoading(false);
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) {
+          setError(reason instanceof Error ? reason.message : "无法读取安全设置");
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const copy = async (text: string, which: "secret" | "uri") => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(which);
+      window.setTimeout(() => setCopied(""), 1600);
+    } catch {
+      setError("复制失败，请手动选择复制");
+    }
+  };
+
+  const startSetup = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      const setup = await totpSetup(password);
+      setSecret(setup.secret);
+      setOtpauthUri(setup.otpauth_uri);
+      setPassword("");
+      setStep("secret");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "设置失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enable = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await totpEnable(code.trim());
+      setCode("");
+      setEnabled(true);
+      setNotice("已启用二步验证。请确认验证器已保存密钥，此后登录需输入动态码。");
+      setStep("intro");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "启用失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disable = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      await totpDisable(code.trim());
+      setCode("");
+      setEnabled(false);
+      setNotice("二步验证已关闭。");
+      setStep("intro");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "关闭失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalShell eyebrow="TWO-FACTOR AUTH" title="二步验证" onClose={onClose}>
+      <div className="entry-form">
+        {loading ? (
+          <div className="totp-loading"><LoaderCircle className="spin" size={18} /> 正在读取安全设置…</div>
+        ) : step === "secret" ? (
+          <>
+            <p className="fx-hint">把下面的密钥添加到你的验证器（如 Google Authenticator、1Password），建议同时保存 otpauth 链接备用。</p>
+            <div className="totp-secret-block">
+              <span>账户密钥（Base32）</span>
+              <div className="totp-secret-row">
+                <code className="totp-secret">{secret}</code>
+                <button type="button" className="copy-button" onClick={() => void copy(secret, "secret")}>
+                  {copied === "secret" ? <Check size={13} /> : <Copy size={13} />}
+                  {copied === "secret" ? "已复制" : "复制"}
+                </button>
+              </div>
+            </div>
+            <div className="totp-secret-block">
+              <span>验证器链接（otpauth://）</span>
+              <div className="totp-secret-row">
+                <code className="totp-uri">{otpauthUri}</code>
+                <button type="button" className="copy-button" onClick={() => void copy(otpauthUri, "uri")}>
+                  {copied === "uri" ? <Check size={13} /> : <Copy size={13} />}
+                  {copied === "uri" ? "已复制" : "复制"}
+                </button>
+              </div>
+            </div>
+            <form onSubmit={enable}>
+              <div className="form-grid">
+                <label className="span-two"><span>验证器动态码</span>
+                  <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder="输入 6 位动态码" />
+                </label>
+              </div>
+              {error && <div className="form-error">{error}</div>}
+              <div className="modal-actions">
+                <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+                <button className="primary-button" disabled={busy || code.trim().length !== 6}>
+                  {busy && <LoaderCircle className="spin" size={17} />}确认开启
+                </button>
+              </div>
+            </form>
+          </>
+        ) : step === "password" ? (
+          <form onSubmit={startSetup}>
+            <div className="deposit-info"><p>开启前需要验证当前登录密码，防止他人擅自开启。</p></div>
+            <div className="form-grid">
+              <label className="span-two"><span>当前密码</span>
+                <input required type="password" autoFocus autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="输入当前密码" />
+              </label>
+            </div>
+            {error && <div className="form-error">{error}</div>}
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={() => { setError(null); setStep("intro"); }}>返回</button>
+              <button className="primary-button" disabled={busy || !password}>{busy && <LoaderCircle className="spin" size={17} />}下一步</button>
+            </div>
+          </form>
+        ) : enabled ? (
+          <div className="totp-enabled">
+            <p className="totp-status"><ShieldCheck size={17} /> 二步验证已启用</p>
+            {notice && <div className="totp-notice" role="status"><Check size={14} /> {notice}</div>}
+            {step === "disable" ? (
+              <form onSubmit={disable}>
+                <div className="deposit-info"><p>关闭后恢复仅凭密码登录。请输入验证器中的当前动态码确认。</p></div>
+                <div className="form-grid">
+                  <label className="span-two"><span>当前动态码</span>
+                    <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder="输入 6 位动态码" />
+                  </label>
+                </div>
+                {error && <div className="form-error">{error}</div>}
+                <div className="modal-actions">
+                  <button type="button" className="secondary-button" onClick={() => { setError(null); setCode(""); setStep("intro"); }}>取消</button>
+                  <button className="primary-button" disabled={busy || code.trim().length !== 6}>{busy && <LoaderCircle className="spin" size={17} />}关闭二步验证</button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <p className="fx-hint">每次登录都需要输入验证器中的 6 位动态码。如需关闭，请先验证当前动态码。</p>
+                {error && <div className="form-error">{error}</div>}
+                <div className="modal-actions">
+                  <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+                  <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("disable"); }}><KeyRound size={16} />关闭二步验证</button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            <p className="totp-intro-copy"><LockKeyhole size={17} /> 当前未开启二步验证</p>
+            <p className="fx-hint">开启后，每次登录除密码外还需输入验证器生成的 6 位动态码，可防止密码泄露后被他人登录。</p>
+            {notice && <div className="totp-notice" role="status"><Check size={14} /> {notice}</div>}
+            {error && <div className="form-error">{error}</div>}
+            <div className="modal-actions">
+              <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+              <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("password"); }}><ShieldCheck size={16} />开始设置</button>
+            </div>
+          </>
+        )}
+      </div>
+    </ModalShell>
+  );
+}
+
+function ReconciliationStatusBadge({ status }: { status: ReconciliationStatus }) {
+  const label = status === "open" ? "进行中" : status === "completed" ? "已完成" : "已取消";
+  return <span className={`reconcile-status ${status}`}>{label}</span>;
+}
+
+/** 账户对账弹窗：查看对账历史、新建对账、完成/取消进行中的对账。 */
+export function ReconciliationModal({
+  account,
+  onClose,
+  onChanged
+}: {
+  account: Account;
+  onClose: () => void;
+  /** 完成对账后回调：父级刷新余额并提示。 */
+  onChanged: () => void;
+}) {
+  const [items, setItems] = useState<Reconciliation[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [date, setDate] = useState(todayDateValue);
+  const [balance, setBalance] = useState("");
+  const [note, setNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = async () => {
+    try {
+      setItems(await listReconciliations(account.id));
+      setLoadError(null);
+    } catch (reason) {
+      setLoadError(reason instanceof Error ? reason.message : "加载对账记录失败");
+    }
+  };
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      await createReconciliation({
+        account_id: account.id,
+        statement_date: date,
+        statement_balance: balance,
+        note: note.trim() || undefined
+      });
+      setBalance("");
+      setNote("");
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "新建对账失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const complete = async (item: Reconciliation) => {
+    setBusyId(item.id); setError(null);
+    try {
+      await completeReconciliation(item.id);
+      await onChanged();
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "完成对账失败");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const cancel = async (item: Reconciliation) => {
+    setBusyId(item.id); setError(null);
+    try {
+      await cancelReconciliation(item.id);
+      await refresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "取消对账失败");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <ModalShell eyebrow="RECONCILE" title={`对账 · ${account.name}`} onClose={onClose}>
+      <form className="entry-form" onSubmit={submit}>
+        <div className="deposit-info">
+          <p>当前账面余额 {formatMoney(account.balance, account.currency)}。完成对账时若与对账单有差额，将自动生成调整流水修正余额。</p>
+        </div>
+        <div className="form-grid">
+          <label><span>对账日</span><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label><span>对账单余额（{account.currency}）</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="0.00" /></label>
+          <label className="span-two"><span>备注（可选）</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：与银行流水核对无误" /></label>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+          <button className="primary-button" disabled={submitting || !date || !balance}>
+            {submitting && <LoaderCircle className="spin" size={17} />}新建对账
+          </button>
+        </div>
+      </form>
+
+      <div className="reconcile-history">
+        <div className="reconcile-history-head"><strong>历史对账</strong><small>{items ? `${items.length} 笔` : ""}</small></div>
+        {loadError && <div className="form-error">{loadError}</div>}
+        {items === null ? (
+          loadError ? null : <div className="empty-hint"><LoaderCircle className="spin" size={16} /> 正在加载…</div>
+        ) : items.length === 0 ? (
+          <div className="empty-hint">还没有对账记录。</div>
+        ) : (
+          <div className="reconcile-list">
+            {items.map((item) => (
+              <div className={`reconcile-item ${item.status}`} key={item.id}>
+                <div className="reconcile-item-head">
+                  <strong>{formatDay(item.statement_date)}</strong>
+                  <ReconciliationStatusBadge status={item.status} />
+                </div>
+                <div className="reconcile-item-meta">
+                  <span>对账单 {formatMoney(item.statement_balance, account.currency)}</span>
+                  <span>账面 {formatMoney(item.book_balance, account.currency)}</span>
+                  <span>开始于 {formatDate(item.opened_at)}</span>
+                </div>
+                {item.note && <p className="fx-hint">{item.note}</p>}
+                {item.completed_at && <p className="fx-hint">完成于 {formatDate(item.completed_at)}</p>}
+                {item.adjustment_transaction_id != null && (
+                  <p className="reconcile-adjustment"><RotateCcw size={12} /> 已自动生成调整流水，余额已修正</p>
+                )}
+                {item.status === "open" && (
+                  <div className="reconcile-actions">
+                    <button type="button" className="text-button" disabled={busyId === item.id} onClick={() => void complete(item)}>
+                      {busyId === item.id ? <LoaderCircle className="spin" size={13} /> : <ClipboardCheck size={13} />}完成对账
+                    </button>
+                    <button type="button" className="text-button danger" disabled={busyId === item.id} onClick={() => void cancel(item)}>
+                      <X size={13} />取消
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </ModalShell>
   );
 }

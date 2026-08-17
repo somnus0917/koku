@@ -365,7 +365,10 @@ export function AccountsPage({
   onDeleteRecurring,
   onBuyStock,
   onSellStock,
-  onSetHoldingPrice
+  onSetHoldingPrice,
+  onReconcile,
+  onRefreshHoldings,
+  onRefreshHolding
 }: {
   data: AppData;
   onAddAccount: () => void;
@@ -379,6 +382,12 @@ export function AccountsPage({
   onBuyStock: (symbol?: string) => void;
   onSellStock: (symbol: string) => void;
   onSetHoldingPrice: (holdingId: number, price: string) => void;
+  /** 打开某账户的对账弹窗。 */
+  onReconcile: (account: Account) => void;
+  /** 刷新过期/缺失市价（懒拉取），透传给持仓区块。 */
+  onRefreshHoldings: () => void;
+  /** 强制刷新单只持仓市价（可选）。 */
+  onRefreshHolding?: (holdingId: number) => void;
 }) {
   const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
   const cash = group("cash");
@@ -408,8 +417,8 @@ export function AccountsPage({
         <SummaryCard label="总负债" value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
         <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
-      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} display={display} rates={rates} />
-      <AccountGroup title="储蓄" subtitle={`${savings.length} 个账户`} accounts={savings} onEdit={onEdit} display={display} rates={rates} />
+      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title="储蓄" subtitle={`${savings.length} 个账户`} accounts={savings} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <DepositSection
         deposits={data.deposits}
         accounts={data.accounts}
@@ -418,8 +427,8 @@ export function AccountsPage({
         onDeposit={onDeposit}
         onSettle={onSettle}
       />
-      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} display={display} rates={rates} />
-      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} display={display} rates={rates} />
+      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <LoansSection
         loans={data.loans}
         accounts={data.accounts}
@@ -443,6 +452,8 @@ export function AccountsPage({
         onBuy={onBuyStock}
         onSell={onSellStock}
         onSetPrice={onSetHoldingPrice}
+        onRefreshHoldings={onRefreshHoldings}
+        onRefreshHolding={onRefreshHolding}
       />
     </div>
   );
@@ -462,6 +473,7 @@ export function AccountGroup({
   subtitle,
   accounts,
   onEdit,
+  onReconcile,
   display,
   rates
 }: {
@@ -469,6 +481,8 @@ export function AccountGroup({
   subtitle: string;
   accounts: Account[];
   onEdit?: (account: Account) => void;
+  /** 传入后账户卡片出现「对账」入口。 */
+  onReconcile?: (account: Account) => void;
   /** 显示币种（右上角切换）；传入后余额/额度按汇率折算显示，并标注原币 */
   display: string;
   /** 折算汇率表：账户币种 → 1 unit = factor display */
@@ -502,8 +516,8 @@ export function AccountGroup({
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
               <div className="account-card-actions">
-                <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>
-              </div>
+                {onReconcile && <button className="text-button" onClick={() => onReconcile(account)}>对账</button>}
+                <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>              </div>
             </article>
           );
         })}
@@ -2084,7 +2098,9 @@ export function HoldingSection({
   rates,
   onBuy,
   onSell,
-  onSetPrice
+  onSetPrice,
+  onRefreshHoldings,
+  onRefreshHolding
 }: {
   holdings: Holding[];
   accounts: Account[];
@@ -2093,15 +2109,37 @@ export function HoldingSection({
   onBuy: (symbol?: string) => void;
   onSell: (symbol: string) => void;
   onSetPrice: (holdingId: number, price: string) => void;
+  /** 刷新过期/缺失市价。 */
+  onRefreshHoldings: () => void;
+  /** 强制刷新单只持仓市价（可选）。 */
+  onRefreshHolding?: (holdingId: number) => void;
 }) {
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  // 挂载后懒拉取：只要存在从未刷新或超过 24 小时未刷新的持仓，就在后台刷新一次市价。
+  const didAutoRefresh = useRef(false);
+  useEffect(() => {
+    if (didAutoRefresh.current) return;
+    const stale = holdings.some((holding) => {
+      if (!holding.updated_at) return true;
+      return Date.now() - Date.parse(holding.updated_at) > 24 * 3600 * 1000;
+    });
+    if (!stale) return;
+    didAutoRefresh.current = true;
+    Promise.resolve()
+      .then(() => onRefreshHoldings())
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdings]);
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
         <div><span>HOLDINGS</span><h2>股票持仓</h2></div>
-        <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> 买入</button>
+        <div className="holding-actions">
+          <button className="text-button" onClick={() => void onRefreshHoldings()} title="刷新过期/缺失市价" aria-label="刷新市价"><RefreshCcw size={14} /> 刷新市价</button>
+          <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> 买入</button>
+        </div>
       </div>
       <div className="account-grid">
         {holdings.map((holding) => {
@@ -2121,6 +2159,7 @@ export function HoldingSection({
                 <span>
                   {shares} 股 · 成本 {formatMoney(holding.average_cost, currency)}
                   {lastPrice !== null ? ` · 现价 ${formatMoney(holding.last_price!, currency)}` : " · 未设现价"}
+                  {holding.updated_at ? ` · 更新于 ${formatDate(holding.updated_at)}` : ""}
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
@@ -2134,6 +2173,9 @@ export function HoldingSection({
                 ) : (
                   <>
                     <button className="row-action" onClick={() => { setDraft(holding.last_price ?? ""); setEditingId(holding.id); }} title="更新市价" aria-label="更新市价"><RefreshCcw size={16} /></button>
+                    {onRefreshHolding && (
+                      <button className="text-button" onClick={() => void onRefreshHolding(holding.id)} title="强制刷新该持仓市价">刷新</button>
+                    )}
                     <button className="text-button" onClick={() => onBuy(holding.symbol)}>买</button>
                     <button className="text-button" onClick={() => onSell(holding.symbol)}>卖</button>
                   </>

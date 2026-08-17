@@ -2,11 +2,13 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type FormEvent
 } from "react";
 import {
+  Bell,
   CalendarDays,
   ChartNoAxesCombined,
   Check,
@@ -19,6 +21,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   LogOut,
+  Mail,
   Menu,
   Monitor,
   Moon,
@@ -50,17 +53,20 @@ import {
   deleteCategory,
   deleteRecurringRule,
   getAuthSession,
-  importTransactions,
+  loadReminders,
   loadSummaryData,
   loadTransactions,
   login,
   logout,
   markReimbursable,
+  refreshHoldings,
+  refreshHolding,
   reimburse,
   repayLoan,
   rolloverBudgets,
   runRecurring,
   sellStock,
+  sendReminderDigest,
   setBudget,
   setHoldingPrice,
   settleDeposit,
@@ -68,6 +74,7 @@ import {
   updateAccount,
   updateTransaction,
   uploadReceipt,
+  verifyTotp,
   voidTransaction,
   restoreTransaction,
   deleteTransactionPermanently
@@ -81,10 +88,12 @@ import {
   ImportModal,
   LoanModal,
   PasswordModal,
+  ReconciliationModal,
   RecurringModal,
   ReimburseModal,
   RepayModal,
   SettleDepositModal,
+  TotpModal,
   TradeModal,
   TransactionModal
 } from "./components/modals";
@@ -117,13 +126,14 @@ import type {
   Loan,
   LoanType,
   MonthlySummary,
+  ReminderItem,
   Transaction,
   TransactionKind,
   UserRole
 } from "./types";
 
 type View = "dashboard" | "accounts" | "transactions" | "insights" | "users" | "system";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | "import" | null;
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | "import" | "totp" | "reconcile" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
@@ -137,6 +147,12 @@ const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
 const TRANSACTIONS_PAGE_SIZE = 200;
 const MONTH_TRANSACTIONS_LIMIT = 1000;
+
+/** 提醒到期日展示：YYYY-MM-DD / RFC3339 → "8月20日"。 */
+function formatReminderDay(value: string): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(date);
+}
 
 export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -179,6 +195,9 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [step, setStep] = useState<"credentials" | "totp">("credentials");
+  const [totpToken, setTotpToken] = useState("");
+  const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { theme, setTheme } = useTheme();
@@ -186,9 +205,30 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
-    try { onAuthenticated(await login(username, password)); }
-    catch (reason) {
+    try {
+      const result = await login(username, password);
+      // 已启用二步验证：先拿 totp_token，切到动态码步骤再完成登录。
+      if ("totp_required" in result) {
+        setTotpToken(result.totp_token);
+        setCode("");
+        setStep("totp");
+        setSubmitting(false);
+        return;
+      }
+      onAuthenticated(result);
+    } catch (reason) {
       setError(reason instanceof ApiError && reason.status === 401 ? "用户名或密码不正确" : reason instanceof Error ? reason.message : "暂时无法登录");
+      setSubmitting(false);
+    }
+  };
+
+  const submitTotp = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true); setError(null);
+    try {
+      onAuthenticated(await verifyTotp(totpToken, code.trim()));
+    } catch (reason) {
+      setError(reason instanceof ApiError && reason.status === 401 ? "动态码不正确或已过期" : reason instanceof Error ? reason.message : "暂时无法登录");
       setSubmitting(false);
     }
   };
@@ -214,17 +254,30 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
         <div className="login-trust-row"><span><ShieldCheck size={16} />私有部署</span><span><LockKeyhole size={16} />加密会话</span></div>
       </section>
       <section className="login-panel">
-        <form className="login-card" onSubmit={submit}>
-          <div className="login-lock"><LockKeyhole size={20} /></div>
-          <span className="login-eyebrow">WELCOME BACK</span>
-          <h2>登录你的账本</h2>
-          <p>验证身份后才能读取服务器中的财务数据。</p>
-          <label><span>用户名</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="输入用户名" /></label>
-          <label><span>密码</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
-          {error && <div className="login-error" role="alert">{error}</div>}
-          <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? "正在验证" : "安全登录"}</button>
-          <small className="login-footnote">登录会话仅存储在此浏览器的安全 Cookie 中</small>
-        </form>
+        {step === "totp" ? (
+          <form className="login-card" onSubmit={submitTotp}>
+            <div className="login-lock"><ShieldCheck size={20} /></div>
+            <span className="login-eyebrow">TWO-FACTOR AUTH</span>
+            <h2>二步验证</h2>
+            <p>已开启二步验证，请输入验证器中的 6 位动态码。</p>
+            <label><span>动态码</span><input autoFocus required inputMode="numeric" maxLength={6} pattern="[0-9]*" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder="输入 6 位动态码" /></label>
+            {error && <div className="login-error" role="alert">{error}</div>}
+            <button className="login-submit" disabled={submitting || code.trim().length !== 6}>{submitting ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={17} />}{submitting ? "正在验证" : "验证并登录"}</button>
+            <button type="button" className="login-back" onClick={() => { setStep("credentials"); setError(null); setCode(""); }}>← 返回用户名 / 密码登录</button>
+          </form>
+        ) : (
+          <form className="login-card" onSubmit={submit}>
+            <div className="login-lock"><LockKeyhole size={20} /></div>
+            <span className="login-eyebrow">WELCOME BACK</span>
+            <h2>登录你的账本</h2>
+            <p>验证身份后才能读取服务器中的财务数据。</p>
+            <label><span>用户名</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="输入用户名" /></label>
+            <label><span>密码</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
+            {error && <div className="login-error" role="alert">{error}</div>}
+            <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? "正在验证" : "安全登录"}</button>
+            <small className="login-footnote">登录会话仅存储在此浏览器的安全 Cookie 中</small>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -245,10 +298,16 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
   const [settleTarget, setSettleTarget] = useState<Deposit | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
   const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
+  const [reconcileAccount, setReconcileAccount] = useState<Account | null>(null);
   const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
   const [tradeSymbol, setTradeSymbol] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [reminders, setReminders] = useState<ReminderItem[]>([]);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderSending, setReminderSending] = useState(false);
+  const [reminderError, setReminderError] = useState<string | null>(null);
+  const reminderRef = useRef<HTMLDivElement | null>(null);
   const { theme, setTheme } = useTheme();
   const [txOffset, setTxOffset] = useState(0);
   const [txHasMore, setTxHasMore] = useState(false);
@@ -316,6 +375,31 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // 提醒铃铛：数据每次刷新完成后重新拉取（未来 30 天到期项），失败静默。
+  useEffect(() => {
+    let cancelled = false;
+    loadReminders(30)
+      .then((items) => {
+        if (!cancelled) setReminders(items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [data]);
+
+  // 点击提醒面板外部时关闭。
+  useEffect(() => {
+    if (!reminderOpen) return;
+    const close = (event: MouseEvent) => {
+      if (reminderRef.current && !reminderRef.current.contains(event.target as Node)) {
+        setReminderOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [reminderOpen]);
+
   const currencies = useMemo(() => {
     const values = new Set(data ? availableCurrencies(data.accounts, data.transactions) : COMMON_CURRENCIES);
     values.add(currency);
@@ -327,6 +411,20 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
     setModal(null);
     setToast(successMessage);
     await refresh(true);
+  };
+
+  const sendDigest = async () => {
+    setReminderSending(true);
+    setReminderError(null);
+    try {
+      const result = await sendReminderDigest();
+      setToast(`邮件提醒已发送（${result.count} 条）`);
+      setReminderOpen(false);
+    } catch (reason) {
+      setReminderError(reason instanceof Error ? reason.message : "发送失败");
+    } finally {
+      setReminderSending(false);
+    }
   };
 
   const content = (() => {
@@ -373,6 +471,12 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             onSetHoldingPrice={(holdingId, price) =>
               void mutate(() => setHoldingPrice(holdingId, price), "已更新市价")
             }
+            onReconcile={(account) => {
+              setReconcileAccount(account);
+              setModal("reconcile");
+            }}
+            onRefreshHoldings={() => mutate(() => refreshHoldings(), "市价已更新")}
+            onRefreshHolding={(holdingId) => mutate(() => refreshHolding(holdingId), "市价已更新")}
           />
         );
       case "transactions":
@@ -495,6 +599,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             <MoreHorizontal size={18} />
           </button>
           <button className="password-button" onClick={() => setModal("password")} aria-label="修改密码" title="修改密码"><KeyRound size={17} /></button>
+          <button className="password-button" onClick={() => setModal("totp")} aria-label="二步验证" title="二步验证"><ShieldCheck size={17} /></button>
           <button className="logout-button" onClick={() => void onLogout()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
         </div>
       </aside>
@@ -541,6 +646,53 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             >
               <RefreshCcw size={18} />
             </button>
+            <div className="reminder-wrap" ref={reminderRef}>
+              <button
+                className={`icon-button reminder-bell ${reminders.length > 0 ? "has-alerts" : ""}`}
+                onClick={() => setReminderOpen((value) => !value)}
+                aria-label="到期提醒"
+                aria-haspopup="dialog"
+                aria-expanded={reminderOpen}
+                title="到期提醒"
+              >
+                <Bell size={18} />
+                {reminders.length > 0 && <span className="reminder-count">{reminders.length > 99 ? "99+" : reminders.length}</span>}
+              </button>
+              {reminderOpen && (
+                <div className="reminder-popover" role="dialog" aria-label="到期提醒">
+                  <header>
+                    <div><span>REMINDERS</span><strong>到期提醒</strong></div>
+                    <small>未来 30 天</small>
+                  </header>
+                  <div className="reminder-popover-list">
+                    {reminders.length === 0 ? (
+                      <p className="reminder-empty">暂无到期提醒</p>
+                    ) : (
+                      reminders.map((item) => (
+                        <div className="reminder-item" key={`${item.kind}-${item.id}`}>
+                          <div className="reminder-item-main">
+                            <strong>{item.title}</strong>
+                            <span>{formatMoney(item.amount, item.currency)} · {formatReminderDay(item.due_at)}</span>
+                          </div>
+                          <span className={`reminder-badge ${item.overdue ? "overdue" : ""}`}>
+                            {item.overdue ? `已逾期 ${Math.abs(item.days_left)} 天` : `${item.days_left} 天后`}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {role === "admin" && (
+                    <div className="reminder-popover-footer">
+                      {reminderError && <span className="reminder-error">{reminderError}</span>}
+                      <button type="button" className="text-button" onClick={() => void sendDigest()} disabled={reminderSending}>
+                        {reminderSending ? <LoaderCircle className="spin" size={14} /> : <Mail size={14} />}
+                        {reminderSending ? "正在发送…" : "发送邮件提醒"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <button
               className="icon-button"
               onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
@@ -717,17 +869,24 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           }}
         />
       )}
+      {modal === "totp" && (
+        <TotpModal
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === "reconcile" && data && reconcileAccount && (
+        <ReconciliationModal
+          account={reconcileAccount}
+          onClose={() => setModal(null)}
+          onChanged={() => void mutate(async () => undefined, "对账已完成，余额已刷新")}
+        />
+      )}
       {modal === "import" && data && (
         <ImportModal
           accounts={data.accounts}
           categories={data.categories}
           onClose={() => setModal(null)}
-          onSubmit={(file, input) =>
-            mutate(
-              () => importTransactions(file, input),
-              "导入完成"
-            )
-          }
+          onComplete={() => void mutate(async () => undefined, "导入完成")}
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

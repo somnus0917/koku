@@ -19,11 +19,14 @@ import type {
   MonthlyTrendPoint,
   RateQuote,
   Receipt,
+  Reconciliation,
   RecurrenceFrequency,
   RecurringRule,
+  ReminderItem,
   RollingSummary,
   Tag,
   TagSummary,
+  TotpChallenge,
   Transaction,
   TransactionKind,
   User,
@@ -72,10 +75,46 @@ export function getAuthSession(): Promise<AuthSession> {
   return request("/api/auth/session");
 }
 
-export function login(username: string, password: string): Promise<AuthSession> {
+/**
+ * 登录第一步：用户名/密码正确时返回会话（带会话 Cookie）；若该账号已启用
+ * 二步验证则返回 TotpChallenge（无会话 Cookie），需再用 verifyTotp 完成登录。
+ */
+export function login(username: string, password: string): Promise<AuthSession | TotpChallenge> {
   return request("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password })
+  });
+}
+
+/** 登录第二步：用第一步拿到的 totp_token + 验证器动态码换取会话。 */
+export function verifyTotp(totpToken: string, code: string): Promise<AuthSession> {
+  return request("/api/auth/totp", {
+    method: "POST",
+    body: JSON.stringify({ totp_token: totpToken, code })
+  });
+}
+
+/** 开始设置二步验证：校验当前密码后返回 Base32 密钥与 otpauth URI。 */
+export function totpSetup(password: string): Promise<{ secret: string; otpauth_uri: string }> {
+  return request("/api/auth/totp/setup", {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+}
+
+/** 用验证器动态码确认开启二步验证。 */
+export function totpEnable(code: string): Promise<{ enabled: boolean }> {
+  return request("/api/auth/totp/enable", {
+    method: "POST",
+    body: JSON.stringify({ code })
+  });
+}
+
+/** 用验证器动态码关闭二步验证。 */
+export function totpDisable(code: string): Promise<{ enabled: boolean }> {
+  return request("/api/auth/totp/disable", {
+    method: "POST",
+    body: JSON.stringify({ code })
   });
 }
 
@@ -209,6 +248,49 @@ export function setHoldingPrice(holdingId: number, price: string): Promise<Holdi
     method: "PUT",
     body: JSON.stringify({ price })
   });
+}
+
+/** 刷新过期/缺失市价的全部持仓（只刷过期项），返回刷新统计与最新持仓。 */
+export function refreshHoldings(): Promise<{
+  refreshed: number;
+  failed: { symbol: string; error: string }[];
+  holdings: Holding[];
+}> {
+  return request("/api/holdings/refresh", { method: "POST" });
+}
+
+/** 强制刷新单只持仓的市价。 */
+export function refreshHolding(id: number): Promise<Holding> {
+  return request(`/api/holdings/${id}/refresh`, { method: "POST" });
+}
+
+/** 某账户的对账列表（按开启时间倒序）。 */
+export function listReconciliations(accountId: number): Promise<Reconciliation[]> {
+  const query = new URLSearchParams({ account_id: String(accountId) });
+  return request(`/api/reconciliations?${query.toString()}`);
+}
+
+/** 新建对账（同一账户同时只能有一笔进行中）。 */
+export function createReconciliation(input: {
+  account_id: number;
+  statement_date: string;
+  statement_balance: string;
+  note?: string;
+}): Promise<Reconciliation> {
+  return request("/api/reconciliations", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+/** 完成对账：差额 ≠ 0 时后端自动生成调整流水。 */
+export function completeReconciliation(id: number): Promise<Reconciliation> {
+  return request(`/api/reconciliations/${id}/complete`, { method: "POST" });
+}
+
+/** 取消对账。 */
+export function cancelReconciliation(id: number): Promise<Reconciliation> {
+  return request(`/api/reconciliations/${id}/cancel`, { method: "POST" });
 }
 
 /** 给交易上传小票/发票附件（multipart；文件字段名为 `file`）。 */
@@ -598,6 +680,17 @@ export function importTransactions(
     }
     return payload.data;
   });
+}
+
+/** 到期提醒：未来 `days` 天内到期的存款/借款（默认 30 天）。 */
+export function loadReminders(days = 30): Promise<ReminderItem[]> {
+  const query = new URLSearchParams({ days: String(days) });
+  return request(`/api/reminders?${query.toString()}`);
+}
+
+/** 管理员：立即发送到期提醒邮件；SMTP 未配置时后端返回 422。 */
+export function sendReminderDigest(): Promise<{ sent: boolean; count: number }> {
+  return request("/api/admin/reminders/send", { method: "POST" });
 }
 
 /** 管理员：列出全部备份（按时间倒序）。 */

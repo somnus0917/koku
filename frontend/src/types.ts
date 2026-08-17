@@ -26,6 +26,15 @@ export interface AuthSession {
   id: number;
   username: string;
   role: UserRole;
+  /** 该账号是否已启用二步验证（TOTP）。 */
+  totp_enabled: boolean;
+}
+
+/** 登录第一步返回的二步验证挑战（无会话 Cookie，需用 totp_token + 动态码完成登录）。 */
+export interface TotpChallenge {
+  totp_required: true;
+  totp_token: string;
+  username: string;
 }
 
 /** 账本用户（管理员可见；password_hash 不会下发）。 */
@@ -34,6 +43,8 @@ export interface User {
   username: string;
   role: UserRole;
   enabled: boolean;
+  /** 该账号是否已启用二步验证（TOTP）。 */
+  totp_enabled: boolean;
   created_at: string;
 }
 
@@ -141,6 +152,8 @@ export interface Holding {
   cost_basis: string;
   last_price: string | null;
   average_cost: string;
+  /** 最近一次市价刷新时间（RFC3339）；从未刷新过为 null。 */
+  updated_at: string | null;
 }
 
 export interface MonthlySummary {
@@ -285,4 +298,34 @@ export interface ImportResult {
   skipped_duplicates: number;
   failed: number;
   issues: ImportIssue[];
+}
+
+export type ReconciliationStatus = "open" | "completed" | "cancelled";
+
+/** 一次账户对账：把对账单余额与账面余额核对，差额可生成调整流水。 */
+export interface Reconciliation {
+  id: number;
+  account_id: number;
+  /** 对账日（YYYY-MM-DD）。 */
+  statement_date: string;
+  statement_balance: string;
+  book_balance: string;
+  status: ReconciliationStatus;
+  opened_at: string;
+  completed_at: string | null;
+  /** 完成时差额 ≠ 0 会自动生成调整流水，记录其流水 id；无差额为 null。 */
+  adjustment_transaction_id: number | null;
+  note: string;
+}
+
+/** 到期提醒项（存款到期 / 借款到期）。 */
+export interface ReminderItem {
+  kind: "deposit" | "loan";
+  id: number;
+  title: string;
+  amount: string;
+  currency: string;
+  due_at: string;
+  overdue: boolean;
+  days_left: number;
 }
