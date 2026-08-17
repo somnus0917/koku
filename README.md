@@ -142,7 +142,8 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 
 - `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
 - `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
-- `KOKU_AUTH_USERNAME`：单用户登录名。
+- `KOKU_AUTH_USERNAME` / `KOKU_AUTH_PASSWORD_HASH`：多用户引导凭据。首次启动时以该用户名+密码创建 **管理员** 账号（应用内改过密码则优先用持久化的哈希）；此后登录全部走 `users` 表，这两个变量只影响全新初始化。
+- 多用户模型：每个用户拥有**完全独立的账本**（账户/分类/交易/标签/预算/借款/持仓/定期/小票等全部隔离），数据存放在 `data/ledgers/ledger-<id>.db`；共享库 `data/koku.db` 只保存用户与会话。**不开放注册**，新用户只能由管理员在「用户」页创建；管理员可重置密码、启用/停用（立即作废其会话）、删除用户（连带其账本文件）。
 - `KOKU_SESSION_TTL_DAYS`：登录会话有效天数，范围为 1–365。
 - `DEBIAN_MIRROR`：腾讯云建议使用 `http://mirrors.cloud.tencent.com`；Cargo 构建已固定使用 USTC 稀疏索引并启用缓存。
 
@@ -232,7 +233,11 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话 |
 | `GET` | `/api/auth/session` | 查询当前登录用户 |
 | `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
-| `POST` | `/api/auth/password` | 应用内改密码（校验旧密码，作废全部会话） |
+| `POST` | `/api/auth/password` | 应用内改密码（校验旧密码，作废该用户全部会话） |
+| `GET/POST` | `/api/users` | （管理员）用户列表 / 创建成员用户 |
+| `POST` | `/api/users/{id}/password` | （管理员）重置某用户密码（作废其会话） |
+| `POST` | `/api/users/{id}/enabled` | （管理员）启用/停用用户（停用立即作废其会话） |
+| `DELETE` | `/api/users/{id}` | （管理员）删除用户（连带其独立账本，不可恢复） |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
 | `PATCH` | `/api/accounts/{id}` | 编辑账户（名称/类型/币种；有交易历史时不可改币种） |
 | `POST` | `/api/accounts/{id}/adjust-balance` | 余额调整（带符号增量，生成可追溯的调整流水） |
@@ -241,7 +246,9 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤；记录时可带 `tag_names` |
 | `GET` | `/api/transactions/export` | 导出交易为 CSV（可选 `?year=&month=`），触发浏览器下载 |
 | `POST` | `/api/transfers` | 原子账户转账 |
-| `DELETE` | `/api/transactions/{id}` | 撤销交易并恢复余额 |
+| `POST` | `/api/transactions/{id}/void` | 撤销交易并恢复余额（软删除） |
+| `POST` | `/api/transactions/{id}/restore` | 撤销删除：恢复已撤销的流水（余额与报销状态一并恢复） |
+| `DELETE` | `/api/transactions/{id}` | 永久删除已撤销的流水（连带小票/标签/报销记录，不可恢复） |
 | `PATCH` | `/api/transactions/{id}` | 编辑收入/支出（备注/时间/分类/金额/账户/结算额/标签，余额原子联动；已撤销、转账/借款、已报销的流水有编辑限制） |
 | `POST/DELETE` | `/api/transactions/{id}/reimbursable` | 标记/取消"待报销"（已发生报销的支出不可取消） |
 | `POST/GET` | `/api/transactions/{id}/receipt` | 上传（multipart `file` 字段）或读取交易的小票/发票图片 |

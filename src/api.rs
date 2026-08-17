@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::extract::{
     ConnectInfo, DefaultBodyLimit, Extension, Multipart, Path as AxumPath, Query, Request, State,
@@ -20,9 +21,10 @@ use tower_http::trace::TraceLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
-    Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind, Deposit,
-    DepositSettlement, Holding, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
-    Receipt, RecurrenceFrequency, RecurringRule, Tag, TagSummary, Transaction, TransactionKind,
+    Account, AccountType, AuthSession, BalanceSummary, Budget, CashFlowSummary, Category,
+    CategoryKind, Deposit, DepositSettlement, Holding, Loan, LoanType, MonthlySummary,
+    MonthlyTrendPoint, RateQuote, Receipt, RecurrenceFrequency, RecurringRule, Tag, TagSummary,
+    Transaction, TransactionKind, User, UserRole,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -31,10 +33,11 @@ use crate::throttle::LoginThrottle;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub service: Arc<Mutex<BookkeepingService>>,
-    pub auth: Arc<AuthConfig>,
-    /// 当前生效的密码哈希（可随应用内改密码更新；启动时优先取持久化值）。
-    pub password_hash: Arc<RwLock<String>>,
+    /// 共享库（users / 会话 / 设置）。
+    pub auth: Arc<Mutex<BookkeepingService>>,
+    /// 独立账本文件目录。
+    pub ledger_dir: PathBuf,
+    pub auth_config: Arc<AuthConfig>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
     pub rates: Arc<RateClient>,
 }
@@ -52,7 +55,18 @@ impl<T> ApiResponse<T> {
 
 #[derive(Debug, Clone, Serialize)]
 struct AuthenticatedUser {
+    user_id: i64,
     username: String,
+    role: UserRole,
+}
+
+impl AuthenticatedUser {
+    fn require_admin(&self) -> Result<()> {
+        if self.role != UserRole::Admin {
+            return Err(KokuError::Forbidden);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,11 +293,20 @@ struct SetPriceRequest {
     price: Decimal,
 }
 
-fn lock_service(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
+fn lock_auth(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
     state
-        .service
+        .auth
         .lock()
-        .map_err(|_| KokuError::InvalidInput("bookkeeping service lock was poisoned".to_owned()))
+        .map_err(|_| KokuError::InvalidInput("auth service lock was poisoned".to_owned()))
+}
+
+/// 打开某用户的账本服务（按值返回，SQLite WAL 支持多连接并发）。
+/// 每个用户一个独立账本文件，打开时补齐默认分类。
+fn lock_ledger(state: &AppState, user_id: i64) -> Result<BookkeepingService> {
+    let path = state.ledger_dir.join(format!("ledger-{user_id}.db"));
+    let mut ledger = BookkeepingService::open(&path)?;
+    ledger.ensure_default_categories()?;
+    Ok(ledger)
 }
 
 /// 把单个单元格转成 CSV 字段：含逗号/引号/换行时用引号包裹并转义引号。
@@ -309,17 +332,19 @@ async fn require_auth(State(state): State<AppState>, mut request: Request, next:
     let Some(token) = session_token(request.headers()) else {
         return KokuError::Unauthorized.into_response();
     };
-    let username = match lock_service(&state).and_then(|service| {
+    let user = match lock_auth(&state).and_then(|service| {
         service
-            .authenticated_username(&token)?
+            .authenticated_user(&token)?
             .ok_or(KokuError::Unauthorized)
     }) {
-        Ok(username) => username,
+        Ok(user) => user,
         Err(error) => return error.into_response(),
     };
-    request
-        .extensions_mut()
-        .insert(AuthenticatedUser { username });
+    request.extensions_mut().insert(AuthenticatedUser {
+        user_id: user.id,
+        username: user.username,
+        role: user.role,
+    });
     next.run(request).await
 }
 
@@ -343,19 +368,20 @@ async fn api_login(
     }
 
     let password = request.password;
-    let password_hash = state
-        .password_hash
-        .read()
-        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))?
-        .clone();
+    let user = lock_auth(&state)?
+        .user_by_username(&request.username)?
+        .ok_or(KokuError::InvalidCredentials)?;
+    if !user.enabled {
+        return Err(KokuError::InvalidCredentials);
+    }
     let password_matches =
-        tokio::task::spawn_blocking(move || bcrypt::verify(password, &password_hash))
+        tokio::task::spawn_blocking(move || bcrypt::verify(password, &user.password_hash))
             .await
             .map_err(|error| {
                 KokuError::AuthConfiguration(format!("password verification task failed: {error}"))
             })?
             .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
-    if request.username != state.auth.username || !password_matches {
+    if !password_matches {
         tracing::warn!(target: "auth", "failed login attempt from {key}");
         return Err(KokuError::InvalidCredentials);
     }
@@ -365,18 +391,23 @@ async fn api_login(
     }
     tracing::info!(target: "auth", "login succeeded from {key}");
 
-    let token = lock_service(&state)?
-        .create_auth_session(&state.auth.username, state.auth.session_ttl_seconds)?;
-    let mut response = Json(ApiResponse::new(AuthenticatedUser {
-        username: state.auth.username.clone(),
+    let token = lock_auth(&state)?.create_auth_session(
+        user.id,
+        &user.username,
+        state.auth_config.session_ttl_seconds,
+    )?;
+    let mut response = Json(ApiResponse::new(AuthSession {
+        id: user.id,
+        username: user.username.clone(),
+        role: user.role,
     }))
     .into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
         session_cookie(
             &token,
-            state.auth.session_ttl_seconds,
-            state.auth.cookie_secure,
+            state.auth_config.session_ttl_seconds,
+            state.auth_config.cookie_secure,
         )?,
     );
     response
@@ -386,7 +417,12 @@ async fn api_login(
 }
 
 async fn api_auth_session(Extension(user): Extension<AuthenticatedUser>) -> Response {
-    let mut response = Json(ApiResponse::new(user)).into_response();
+    let mut response = Json(ApiResponse::new(AuthSession {
+        id: user.user_id,
+        username: user.username,
+        role: user.role,
+    }))
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -395,13 +431,13 @@ async fn api_auth_session(Extension(user): Extension<AuthenticatedUser>) -> Resp
 
 async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
     if let Some(token) = session_token(&headers) {
-        lock_service(&state)?.delete_auth_session(&token)?;
+        lock_auth(&state)?.delete_auth_session(&token)?;
     }
     let mut response =
         Json(ApiResponse::new(serde_json::json!({ "logged_out": true }))).into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        session_cookie("", 0, state.auth.cookie_secure)?,
+        session_cookie("", 0, state.auth_config.cookie_secure)?,
     );
     response
         .headers_mut()
@@ -411,6 +447,7 @@ async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result
 
 async fn api_change_password(
     State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let old_password = request.old_password;
@@ -420,11 +457,7 @@ async fn api_change_password(
             "new password must be at least 8 characters".to_owned(),
         ));
     }
-    let current_hash = state
-        .password_hash
-        .read()
-        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))?
-        .clone();
+    let current_hash = lock_auth(&state)?.user(user.user_id)?.password_hash;
     let old_matches =
         tokio::task::spawn_blocking(move || bcrypt::verify(old_password, &current_hash))
             .await
@@ -443,16 +476,159 @@ async fn api_change_password(
             })?
             .map_err(|error| KokuError::AuthConfiguration(error.to_string()))?;
 
-    lock_service(&state)?.set_setting("password_hash", &new_hash)?;
-    *state
-        .password_hash
-        .write()
-        .map_err(|_| KokuError::InvalidInput("password hash lock was poisoned".to_owned()))? =
-        new_hash;
-    lock_service(&state)?.delete_all_auth_sessions()?;
-    tracing::info!(target: "auth", "password changed; all sessions invalidated");
+    lock_auth(&state)?.set_user_password(user.user_id, &new_hash)?;
+    tracing::info!(target: "auth", "password changed for {}; sessions invalidated", user.username);
     Ok(Json(ApiResponse::new(
         serde_json::json!({ "changed": true }),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateUserRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetPasswordRequest {
+    password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetUserEnabledRequest {
+    enabled: bool,
+}
+
+/// 校验并生成密码哈希（bcrypt，代价默认）。
+async fn hash_password(password: String) -> Result<String> {
+    if password.chars().count() < 8 {
+        return Err(KokuError::InvalidInput(
+            "password must be at least 8 characters".to_owned(),
+        ));
+    }
+    tokio::task::spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST))
+        .await
+        .map_err(|error| {
+            KokuError::AuthConfiguration(format!("password hashing task failed: {error}"))
+        })?
+        .map_err(|error| KokuError::AuthConfiguration(error.to_string()))
+}
+
+async fn api_users(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<ApiResponse<Vec<User>>>> {
+    user.require_admin()?;
+    let users = lock_auth(&state)?.users()?;
+    Ok(Json(ApiResponse::new(users)))
+}
+
+async fn api_create_user(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(request): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<User>>)> {
+    user.require_admin()?;
+    if request.username.trim().is_empty() {
+        return Err(KokuError::InvalidInput(
+            "username cannot be empty".to_owned(),
+        ));
+    }
+    if lock_auth(&state)?
+        .user_by_username(&request.username)?
+        .is_some()
+    {
+        return Err(KokuError::InvalidInput(
+            "username already exists".to_owned(),
+        ));
+    }
+    let hash = hash_password(request.password).await?;
+    let created = lock_auth(&state)?.create_user(&request.username, &hash, UserRole::Member)?;
+    tracing::info!(target: "auth", "admin {} created user {}", user.username, created.username);
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(created))))
+}
+
+async fn api_reset_user_password(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    AxumPath(user_id): AxumPath<i64>,
+    Json(request): Json<ResetPasswordRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    user.require_admin()?;
+    let hash = hash_password(request.password).await?;
+    lock_auth(&state)?.set_user_password(user_id, &hash)?;
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "changed": true }),
+    )))
+}
+
+async fn api_set_user_enabled(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    AxumPath(user_id): AxumPath<i64>,
+    Json(request): Json<SetUserEnabledRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    user.require_admin()?;
+    if user_id == user.user_id && !request.enabled {
+        return Err(KokuError::InvalidInput(
+            "cannot disable your own account".to_owned(),
+        ));
+    }
+    let target = lock_auth(&state)?.user(user_id)?;
+    if target.role == UserRole::Admin && !request.enabled {
+        // 停用管理员时保留至少一个启用中的管理员。
+        let enabled_admins = lock_auth(&state)?
+            .users()?
+            .into_iter()
+            .filter(|item| item.role == UserRole::Admin && item.enabled)
+            .count();
+        if enabled_admins <= 1 {
+            return Err(KokuError::InvalidInput(
+                "cannot disable the last enabled admin".to_owned(),
+            ));
+        }
+    }
+    lock_auth(&state)?.set_user_enabled(user_id, request.enabled)?;
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "enabled": request.enabled }),
+    )))
+}
+
+async fn api_delete_user(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    AxumPath(user_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    user.require_admin()?;
+    if user_id == user.user_id {
+        return Err(KokuError::InvalidInput(
+            "cannot delete your own account".to_owned(),
+        ));
+    }
+    let target = lock_auth(&state)?.user(user_id)?;
+    if target.role == UserRole::Admin {
+        let admins = lock_auth(&state)?.users()?.len();
+        if admins <= 1 {
+            return Err(KokuError::InvalidInput(
+                "cannot delete the last admin".to_owned(),
+            ));
+        }
+    }
+    lock_auth(&state)?.delete_user(user_id)?;
+    // 连带删除该用户的独立账本文件（含 WAL/SHM）。
+    for suffix in ["", "-wal", "-shm"] {
+        let path = state
+            .ledger_dir
+            .join(format!("ledger-{user_id}.db{suffix}"));
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|error| {
+                KokuError::InvalidInput(format!("failed to remove ledger: {error}"))
+            })?;
+        }
+    }
+    tracing::info!(target: "auth", "admin {} deleted user {}", user.username, target.username);
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "deleted": true }),
     )))
 }
 
@@ -463,16 +639,20 @@ async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
     })))
 }
 
-async fn api_accounts(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Account>>>> {
-    let accounts = lock_service(&state)?.accounts()?;
+async fn api_accounts(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Account>>>> {
+    let accounts = lock_ledger(&state, user.user_id)?.accounts()?;
     Ok(Json(ApiResponse::new(accounts)))
 }
 
 async fn api_create_account(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let account = service.create_account(
         request.name,
         request.account_type,
@@ -487,11 +667,12 @@ async fn api_create_account(
 }
 
 async fn api_update_account(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(account_id): AxumPath<i64>,
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<Json<ApiResponse<Account>>> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let account = service.update_account(
         account_id,
         request.name,
@@ -506,56 +687,71 @@ async fn api_update_account(
 }
 
 async fn api_adjust_balance(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(account_id): AxumPath<i64>,
     Json(request): Json<AdjustBalanceRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction =
-        lock_service(&state)?.adjust_balance(account_id, request.amount, request.note)?;
+    let transaction = lock_ledger(&state, user.user_id)?.adjust_balance(
+        account_id,
+        request.amount,
+        request.note,
+    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
-async fn api_categories(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Category>>>> {
-    let categories = lock_service(&state)?.categories()?;
+async fn api_categories(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Category>>>> {
+    let categories = lock_ledger(&state, user.user_id)?.categories()?;
     Ok(Json(ApiResponse::new(categories)))
 }
 
 async fn api_create_category(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateCategoryRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Category>>)> {
-    let category = lock_service(&state)?.create_category(request.name, request.kind)?;
+    let category =
+        lock_ledger(&state, user.user_id)?.create_category(request.name, request.kind)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
 }
 
 async fn api_delete_category(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(category_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Category>>> {
-    let category = lock_service(&state)?.delete_category(category_id)?;
+    let category = lock_ledger(&state, user.user_id)?.delete_category(category_id)?;
     Ok(Json(ApiResponse::new(category)))
 }
 
-async fn api_tags(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Tag>>>> {
-    let tags = lock_service(&state)?.all_tags()?;
+async fn api_tags(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Tag>>>> {
+    let tags = lock_ledger(&state, user.user_id)?.all_tags()?;
     Ok(Json(ApiResponse::new(tags)))
 }
 
 async fn api_budgets(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<BudgetQuery>,
 ) -> Result<Json<ApiResponse<Vec<Budget>>>> {
-    let budgets = lock_service(&state)?.budgets(query.year, query.month)?;
+    let budgets = lock_ledger(&state, user.user_id)?.budgets(query.year, query.month)?;
     Ok(Json(ApiResponse::new(budgets)))
 }
 
 async fn api_set_budget(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(category_id): AxumPath<i64>,
     Query(query): Query<BudgetQuery>,
     Json(request): Json<SetBudgetRequest>,
 ) -> Result<Json<ApiResponse<Budget>>> {
-    let budget = lock_service(&state)?.set_budget(
+    let budget = lock_ledger(&state, user.user_id)?.set_budget(
         category_id,
         query.year,
         query.month,
@@ -565,35 +761,40 @@ async fn api_set_budget(
 }
 
 async fn api_clear_budget(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(category_id): AxumPath<i64>,
     Query(query): Query<BudgetQuery>,
 ) -> Result<Json<ApiResponse<Budget>>> {
-    let budget = lock_service(&state)?.clear_budget(category_id, query.year, query.month)?;
+    let budget =
+        lock_ledger(&state, user.user_id)?.clear_budget(category_id, query.year, query.month)?;
     Ok(Json(ApiResponse::new(budget)))
 }
 
 async fn api_rollover_budgets(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    let copied = lock_service(&state)?.rollover_budgets_once(Utc::now())?;
+    let copied = lock_ledger(&state, user.user_id)?.rollover_budgets_once(Utc::now())?;
     Ok(Json(ApiResponse::new(
         serde_json::json!({ "copied": copied }),
     )))
 }
 
 async fn api_recurring_rules(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<RecurringRule>>>> {
-    let rules = lock_service(&state)?.recurring_rules()?;
+    let rules = lock_ledger(&state, user.user_id)?.recurring_rules()?;
     Ok(Json(ApiResponse::new(rules)))
 }
 
 async fn api_create_recurring(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateRecurringRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<RecurringRule>>)> {
-    let rule = lock_service(&state)?.create_recurring_rule(
+    let rule = lock_ledger(&state, user.user_id)?.create_recurring_rule(
         request.kind,
         request.account_id,
         request.category_id,
@@ -606,30 +807,36 @@ async fn api_create_recurring(
 }
 
 async fn api_delete_recurring(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(rule_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<RecurringRule>>> {
-    let rule = lock_service(&state)?.delete_recurring_rule(rule_id)?;
+    let rule = lock_ledger(&state, user.user_id)?.delete_recurring_rule(rule_id)?;
     Ok(Json(ApiResponse::new(rule)))
 }
 
 async fn api_run_recurring(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
-    let generated = lock_service(&state)?.run_recurring()?;
+    let generated = lock_ledger(&state, user.user_id)?.run_recurring()?;
     Ok(Json(ApiResponse::new(generated)))
 }
 
-async fn api_holdings(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Holding>>>> {
-    let holdings = lock_service(&state)?.holdings()?;
+async fn api_holdings(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Holding>>>> {
+    let holdings = lock_ledger(&state, user.user_id)?.holdings()?;
     Ok(Json(ApiResponse::new(holdings)))
 }
 
 async fn api_buy_stock(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<TradeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_service(&state)?.buy_stock(
+    let transaction = lock_ledger(&state, user.user_id)?.buy_stock(
         request.account_id,
         request.symbol,
         request.shares,
@@ -641,10 +848,11 @@ async fn api_buy_stock(
 }
 
 async fn api_sell_stock(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<TradeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_service(&state)?.sell_stock(
+    let transaction = lock_ledger(&state, user.user_id)?.sell_stock(
         request.account_id,
         request.symbol,
         request.shares,
@@ -656,21 +864,24 @@ async fn api_sell_stock(
 }
 
 async fn api_set_holding_price(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(holding_id): AxumPath<i64>,
     Json(request): Json<SetPriceRequest>,
 ) -> Result<Json<ApiResponse<Holding>>> {
-    let holding = lock_service(&state)?.set_holding_price(holding_id, request.price)?;
+    let holding =
+        lock_ledger(&state, user.user_id)?.set_holding_price(holding_id, request.price)?;
     Ok(Json(ApiResponse::new(holding)))
 }
 
 async fn api_transactions(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<TransactionQuery>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
     let limit = query.limit.unwrap_or(500);
     let offset = query.offset.unwrap_or(0);
-    let service = lock_service(&state)?;
+    let service = lock_ledger(&state, user.user_id)?;
     let transactions = match (query.year, query.month) {
         (Some(year), Some(month)) => service.transactions_in_month(year, month, limit, offset)?,
         (None, None) => service.transactions(limit, offset)?,
@@ -684,10 +895,11 @@ async fn api_transactions(
 }
 
 async fn api_export_transactions(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Response> {
-    let service = lock_service(&state)?;
+    let service = lock_ledger(&state, user.user_id)?;
     // 分页拉全量（复用既有 1000 上限，逐页累积）。
     let mut all = Vec::new();
     let mut offset = 0_u32;
@@ -786,11 +998,12 @@ async fn api_export_transactions(
 }
 
 async fn api_create_transaction(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateTransactionRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
     let occurred_at = request.occurred_at.unwrap_or_else(Utc::now);
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let account = service.account(request.account_id)?;
     let currency = request.currency.unwrap_or_else(|| account.currency.clone());
     let settled_amount = match request.settled_amount {
@@ -856,10 +1069,11 @@ async fn api_create_transaction(
 }
 
 async fn api_create_transfer(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateTransferRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_service(&state)?.record_transfer(
+    let transaction = lock_ledger(&state, user.user_id)?.record_transfer(
         request.from_account_id,
         request.to_account_id,
         request.source_amount,
@@ -871,35 +1085,39 @@ async fn api_create_transfer(
 }
 
 async fn api_void_transaction(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_service(&state)?.void_transaction(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)?.void_transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
 async fn api_restore_transaction(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_service(&state)?.restore_transaction(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)?.restore_transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
 async fn api_delete_transaction(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<StatusCode> {
-    lock_service(&state)?.delete_transaction(transaction_id)?;
+    lock_ledger(&state, user.user_id)?.delete_transaction(transaction_id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn api_update_transaction(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
     Json(request): Json<UpdateTransactionRequest>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     service.update_transaction(
         transaction_id,
         request.note,
@@ -917,6 +1135,7 @@ async fn api_update_transaction(
 }
 
 async fn api_upload_receipt(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
     mut multipart: Multipart,
@@ -940,15 +1159,17 @@ async fn api_upload_receipt(
         KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
     })?;
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
-    let receipt = lock_service(&state)?.attach_receipt(transaction_id, content_type, data)?;
+    let receipt =
+        lock_ledger(&state, user.user_id)?.attach_receipt(transaction_id, content_type, data)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 
 async fn api_get_receipt(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Response> {
-    let (content_type, bytes) = lock_service(&state)?.receipt_bytes(transaction_id)?;
+    let (content_type, bytes) = lock_ledger(&state, user.user_id)?.receipt_bytes(transaction_id)?;
     let mut response = Response::new(axum::body::Body::from(bytes));
     let header_value = HeaderValue::from_str(&content_type)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
@@ -958,16 +1179,20 @@ async fn api_get_receipt(
     Ok(response)
 }
 
-async fn api_deposits(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Deposit>>>> {
-    let deposits = lock_service(&state)?.deposits()?;
+async fn api_deposits(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Deposit>>>> {
+    let deposits = lock_ledger(&state, user.user_id)?.deposits()?;
     Ok(Json(ApiResponse::new(deposits)))
 }
 
 async fn api_create_deposit(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateDepositRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Deposit>>)> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let source = service.account(request.from_account_id)?;
     let currency = request.currency.unwrap_or_else(|| source.currency.clone());
     let deposit = service.create_deposit(
@@ -982,35 +1207,40 @@ async fn api_create_deposit(
 }
 
 async fn api_settle_deposit(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(deposit_id): AxumPath<i64>,
     Json(request): Json<SettleDepositRequest>,
 ) -> Result<Json<ApiResponse<DepositSettlement>>> {
-    let settlement = lock_service(&state)?.settle_deposit(deposit_id, request.to_account_id)?;
+    let settlement =
+        lock_ledger(&state, user.user_id)?.settle_deposit(deposit_id, request.to_account_id)?;
     Ok(Json(ApiResponse::new(settlement)))
 }
 
 async fn api_mark_reimbursable(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_service(&state)?.mark_reimbursable(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)?.mark_reimbursable(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
 async fn api_unmark_reimbursable(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_service(&state)?.unmark_reimbursable(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)?.unmark_reimbursable(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
 async fn api_reimburse(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<ReimburseRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let expense = service.transaction(request.expense_id)?;
     let currency = request.currency.unwrap_or_else(|| expense.currency.clone());
     let income = service.reimburse(
@@ -1024,16 +1254,20 @@ async fn api_reimburse(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(income))))
 }
 
-async fn api_loans(State(state): State<AppState>) -> Result<Json<ApiResponse<Vec<Loan>>>> {
-    let loans = lock_service(&state)?.loans()?;
+async fn api_loans(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<Loan>>>> {
+    let loans = lock_ledger(&state, user.user_id)?.loans()?;
     Ok(Json(ApiResponse::new(loans)))
 }
 
 async fn api_create_loan(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Json(request): Json<CreateLoanRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let account = service.account(request.account_id)?;
     let currency = request.currency.unwrap_or_else(|| account.currency.clone());
     let loan = service.create_loan(
@@ -1049,11 +1283,12 @@ async fn api_create_loan(
 }
 
 async fn api_repay_loan(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(loan_id): AxumPath<i64>,
     Json(request): Json<RepayLoanRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
-    let mut service = lock_service(&state)?;
+    let mut service = lock_ledger(&state, user.user_id)?;
     let loan = service.loan(loan_id)?;
     let currency = request.currency.unwrap_or_else(|| loan.currency.clone());
     let updated = service.repay_loan(
@@ -1068,6 +1303,7 @@ async fn api_repay_loan(
 }
 
 async fn api_monthly_summary(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<MonthlyQuery>,
 ) -> Result<Json<ApiResponse<MonthlySummary>>> {
@@ -1075,13 +1311,14 @@ async fn api_monthly_summary(
     let year = query.year.unwrap_or_else(|| now.year());
     let month = query.month.unwrap_or_else(|| now.month());
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_service(&state)?.transaction_currencies(year, month)?;
-    ensure_summary_rates(&state, &display, currencies).await?;
-    let summary = lock_service(&state)?.monthly_summary(year, month, &display)?;
+    let currencies = lock_ledger(&state, user.user_id)?.transaction_currencies(year, month)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)?.monthly_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
 async fn api_cash_flow_summary(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<MonthlyQuery>,
 ) -> Result<Json<ApiResponse<CashFlowSummary>>> {
@@ -1089,13 +1326,14 @@ async fn api_cash_flow_summary(
     let year = query.year.unwrap_or_else(|| now.year());
     let month = query.month.unwrap_or_else(|| now.month());
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_service(&state)?.transaction_currencies(year, month)?;
-    ensure_summary_rates(&state, &display, currencies).await?;
-    let summary = lock_service(&state)?.cash_flow_summary(year, month, &display)?;
+    let currencies = lock_ledger(&state, user.user_id)?.transaction_currencies(year, month)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)?.cash_flow_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
 async fn api_tag_summary(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<TagSummaryQuery>,
 ) -> Result<Json<ApiResponse<TagSummary>>> {
@@ -1110,33 +1348,37 @@ async fn api_tag_summary(
             "at least one tag is required".to_owned(),
         ));
     }
-    let currencies = lock_service(&state)?.tag_currencies(&tags, query.year, query.month)?;
+    let currencies =
+        lock_ledger(&state, user.user_id)?.tag_currencies(&tags, query.year, query.month)?;
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    ensure_summary_rates(&state, &display, currencies).await?;
-    let summary = lock_service(&state)?.tag_summary(&tags, query.year, query.month, &display)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary =
+        lock_ledger(&state, user.user_id)?.tag_summary(&tags, query.year, query.month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
 async fn api_monthly_trend(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<TrendQuery>,
 ) -> Result<Json<ApiResponse<Vec<MonthlyTrendPoint>>>> {
     let months = query.months.unwrap_or(12);
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_service(&state)?.trend_currencies(months)?;
-    ensure_summary_rates(&state, &display, currencies).await?;
-    let trend = lock_service(&state)?.monthly_trend(months, &display)?;
+    let currencies = lock_ledger(&state, user.user_id)?.trend_currencies(months)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let trend = lock_ledger(&state, user.user_id)?.monthly_trend(months, &display)?;
     Ok(Json(ApiResponse::new(trend)))
 }
 
 async fn api_balance_summary(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<BalanceQuery>,
 ) -> Result<Json<ApiResponse<BalanceSummary>>> {
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_service(&state)?.balance_currencies()?;
-    ensure_summary_rates(&state, &display, currencies).await?;
-    let summary = lock_service(&state)?.balance_summary(&display)?;
+    let currencies = lock_ledger(&state, user.user_id)?.balance_currencies()?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)?.balance_summary(&display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -1144,12 +1386,13 @@ async fn api_balance_summary(
 /// 现场拉取并缓存；拉取失败时报错（前端会提示具体缺失的币种对，可重试）。
 async fn ensure_summary_rates(
     state: &AppState,
+    user_id: i64,
     display: &str,
     currencies: Vec<String>,
 ) -> Result<()> {
     let today = Utc::now().date_naive();
     let missing: Vec<(String, String)> = {
-        let service = lock_service(state)?;
+        let service = lock_ledger(state, user_id)?;
         let mut missing = Vec::new();
         for currency in currencies {
             if currency.eq_ignore_ascii_case(display) {
@@ -1167,7 +1410,7 @@ async fn ensure_summary_rates(
     for (from, to) in missing {
         match state.rates.fetch(&from, &to).await {
             Ok(quote) => {
-                lock_service(state)?.store_rate(&quote)?;
+                lock_ledger(state, user_id)?.store_rate(&quote)?;
             }
             Err(error) => {
                 return Err(KokuError::InvalidInput(format!(
@@ -1182,6 +1425,7 @@ async fn ensure_summary_rates(
 /// 汇率提示：同币种直接返回 1；跨币种优先用当天/近几天的本地缓存，
 /// 未命中则拉取 Frankfurter 并缓存；数据源不可达时回退到旧缓存（标记 stale）。
 async fn api_rate_hint(
+    Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<RateQuery>,
 ) -> Result<Json<ApiResponse<RateQuote>>> {
@@ -1200,7 +1444,7 @@ async fn api_rate_hint(
 
     let today = Utc::now().date_naive();
     let mut stale_fallback: Option<RateQuote> = None;
-    if let Some(cached) = lock_service(&state)?.latest_rate(&from, &to)? {
+    if let Some(cached) = lock_ledger(&state, user.user_id)?.latest_rate(&from, &to)? {
         if rate_is_fresh(&cached.date, today) {
             return Ok(Json(ApiResponse::new(cached)));
         }
@@ -1208,7 +1452,7 @@ async fn api_rate_hint(
     }
     match state.rates.fetch(&from, &to).await {
         Ok(quote) => {
-            lock_service(&state)?.store_rate(&quote)?;
+            lock_ledger(&state, user.user_id)?.store_rate(&quote)?;
             Ok(Json(ApiResponse::new(quote)))
         }
         Err(error) => {
@@ -1299,6 +1543,13 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/rates", get(api_rate_hint))
         .route("/api/auth/session", get(api_auth_session))
         .route("/api/auth/password", post(api_change_password))
+        .route("/api/users", get(api_users).post(api_create_user))
+        .route(
+            "/api/users/{user_id}/password",
+            post(api_reset_user_password),
+        )
+        .route("/api/users/{user_id}/enabled", post(api_set_user_enabled))
+        .route("/api/users/{user_id}", delete(api_delete_user))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let router = Router::new()
         .route("/api/health", get(api_health))

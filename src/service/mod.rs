@@ -13,7 +13,7 @@ use rust_decimal::Decimal;
 use crate::auth::{generate_session_token, session_token_hash};
 use crate::domain::{
     Account, AccountType, CashFlowItem, Category, CategoryKind, Loan, LoanType, Transaction,
-    TransactionKind,
+    TransactionKind, User, UserRole,
 };
 use crate::error::{KokuError, Result};
 
@@ -33,8 +33,10 @@ mod reimbursements;
 mod summaries;
 mod tags;
 mod transactions;
+mod users;
 
 pub(crate) use tags::validate_tag_name;
+pub use users::ensure_multi_user;
 
 impl BookkeepingService {
     pub fn in_memory() -> Result<Self> {
@@ -208,8 +210,18 @@ impl BookkeepingService {
             CREATE INDEX IF NOT EXISTS idx_transactions_account
                 ON transactions(account_id, to_account_id);
 
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                username      TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL CHECK (role IN ('admin', 'member')),
+                enabled       INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY,
+                user_id    INTEGER REFERENCES users(id),
                 username   TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at INTEGER NOT NULL
@@ -272,6 +284,13 @@ impl BookkeepingService {
                 [],
             )?;
         }
+        // —— 多用户迁移：auth_sessions 关联 users ——
+        if !table_has_column(&conn, "auth_sessions", "user_id")? {
+            conn.execute(
+                "ALTER TABLE auth_sessions ADD COLUMN user_id INTEGER REFERENCES users(id)",
+                [],
+            )?;
+        }
         // SQLite 无法修改 CHECK 约束：旧表按 asset/liability 建模，需要整表重建。
         // 检测依据：表定义中缺少新类型标记（'cash'/'loan'），无论是否有旧 CHECK。
         if !table_sql_contains(&conn, "accounts", "'cash'")? {
@@ -312,7 +331,12 @@ impl BookkeepingService {
         Ok(Self { conn })
     }
 
-    pub fn create_auth_session(&mut self, username: &str, ttl_seconds: i64) -> Result<String> {
+    pub fn create_auth_session(
+        &mut self,
+        user_id: i64,
+        username: &str,
+        ttl_seconds: i64,
+    ) -> Result<String> {
         let token = generate_session_token()?;
         let now = Utc::now();
         let expires_at = now.timestamp() + ttl_seconds;
@@ -324,22 +348,34 @@ impl BookkeepingService {
             [now.timestamp()],
         )?;
         transaction.execute(
-            "INSERT INTO auth_sessions(token_hash, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4)",
-            params![session_token_hash(&token), username, timestamp(now), expires_at],
+            "INSERT INTO auth_sessions(token_hash, user_id, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_token_hash(&token),
+                user_id,
+                username,
+                timestamp(now),
+                expires_at
+            ],
         )?;
         transaction.commit()?;
         Ok(token)
     }
 
-    pub fn authenticated_username(&self, token: &str) -> Result<Option<String>> {
-        self.conn
+    /// 根据会话令牌解析当前登录用户；会话过期或用户被停用时返回 None。
+    pub fn authenticated_user(&self, token: &str) -> Result<Option<User>> {
+        let row = self
+            .conn
             .query_row(
-                "SELECT username FROM auth_sessions WHERE token_hash = ?1 AND expires_at > ?2",
+                "SELECT u.id, u.username, u.password_hash, u.role, u.enabled, u.created_at
+                 FROM auth_sessions s
+                 JOIN users u ON u.id = s.user_id
+                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.enabled = 1",
                 params![session_token_hash(token), Utc::now().timestamp()],
-                |row| row.get::<_, String>(0),
+                user_row,
             )
             .optional()
-            .map_err(KokuError::from)
+            .map_err(KokuError::from)?;
+        row.map(user_from_row).transpose()
     }
 
     pub fn delete_auth_session(&mut self, token: &str) -> Result<()> {
@@ -347,12 +383,6 @@ impl BookkeepingService {
             "DELETE FROM auth_sessions WHERE token_hash = ?1",
             [session_token_hash(token)],
         )?;
-        Ok(())
-    }
-
-    /// 作废所有登录会话（改密码后强制重新登录）。
-    pub fn delete_all_auth_sessions(&mut self) -> Result<()> {
-        self.conn.execute("DELETE FROM auth_sessions", [])?;
         Ok(())
     }
 
@@ -546,6 +576,7 @@ impl BookkeepingService {
 
 type AccountRow = (i64, String, String, String, String, Option<String>);
 type CategoryRow = (i64, String, String);
+type UserRow = (i64, String, String, String, i64, String);
 type TransactionRow = (
     i64,
     String,
@@ -576,6 +607,28 @@ fn account_from_row(row: AccountRow) -> Result<Account> {
         currency: row.3,
         balance: decimal_from_db(&row.4)?,
         credit_limit: row.5.as_deref().map(decimal_from_db).transpose()?,
+    })
+}
+
+fn user_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+    ))
+}
+
+fn user_from_row(row: UserRow) -> Result<User> {
+    Ok(User {
+        id: row.0,
+        username: row.1,
+        password_hash: row.2,
+        role: UserRole::from_db(&row.3)?,
+        enabled: row.4 != 0,
+        created_at: parse_timestamp(&row.5)?,
     })
 }
 
@@ -951,11 +1004,14 @@ mod tests {
     #[test]
     fn server_sessions_are_hashed_expirable_and_revocable() -> Result<()> {
         let mut service = test_service()?;
-        let token = service.create_auth_session("somnus", 3600)?;
+        let user = service.create_user("somnus", "hash", UserRole::Admin)?;
+        let token = service.create_auth_session(user.id, &user.username, 3600)?;
         assert_eq!(token.len(), 64);
         assert_eq!(
-            service.authenticated_username(&token)?.as_deref(),
-            Some("somnus")
+            service
+                .authenticated_user(&token)?
+                .map(|user| user.username),
+            Some("somnus".to_owned())
         );
         let stored_token =
             service
@@ -969,11 +1025,11 @@ mod tests {
             "UPDATE auth_sessions SET expires_at = ?1",
             [Utc::now().timestamp() - 1],
         )?;
-        assert_eq!(service.authenticated_username(&token)?, None);
+        assert_eq!(service.authenticated_user(&token)?, None);
 
-        let second_token = service.create_auth_session("somnus", 3600)?;
+        let second_token = service.create_auth_session(user.id, &user.username, 3600)?;
         service.delete_auth_session(&second_token)?;
-        assert_eq!(service.authenticated_username(&second_token)?, None);
+        assert_eq!(service.authenticated_user(&second_token)?, None);
         Ok(())
     }
 
@@ -992,10 +1048,185 @@ mod tests {
             Some("new")
         );
 
-        let token = service.create_auth_session("somnus", 3600)?;
-        assert!(service.authenticated_username(&token)?.is_some());
-        service.delete_all_auth_sessions()?;
-        assert_eq!(service.authenticated_username(&token)?, None);
+        let user = service.create_user("somnus", "hash", UserRole::Admin)?;
+        let token = service.create_auth_session(user.id, &user.username, 3600)?;
+        assert!(service.authenticated_user(&token)?.is_some());
+        // 改密码会作废该用户全部会话。
+        service.set_user_password(user.id, "new-hash")?;
+        assert_eq!(service.authenticated_user(&token)?, None);
+        Ok(())
+    }
+
+    /// 每个用户的账本文件相互独立：账户、分类、流水互不可见。
+    #[test]
+    fn multi_user_ledger_files_isolate_data_between_users() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("koku-mu-iso-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let result = (|| -> Result<()> {
+            let shared = dir.join("koku.db");
+            let ledgers = dir.join("ledgers");
+            std::fs::create_dir_all(&ledgers)?;
+            let mut auth = BookkeepingService::open(&shared)?;
+            let alice = auth.create_user("alice", "h1", UserRole::Admin)?;
+            let bob = auth.create_user("bob", "h2", UserRole::Member)?;
+
+            let mut ledger_a =
+                BookkeepingService::open(ledgers.join(format!("ledger-{}.db", alice.id)))?;
+            ledger_a.ensure_default_categories()?;
+            let account_a = ledger_a.create_account(
+                "Alice 零钱",
+                AccountType::Cash,
+                "CNY",
+                Decimal::from(100_u32),
+            )?;
+            let food = ledger_a.create_category("出差餐饮", CategoryKind::Expense)?;
+            let at = NaiveDate::from_ymd_opt(2026, 8, 1)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_utc();
+            ledger_a.record_expense(account_a.id, food.id, Decimal::from(30_u32), at, "午餐")?;
+
+            let mut ledger_b =
+                BookkeepingService::open(ledgers.join(format!("ledger-{}.db", bob.id)))?;
+            ledger_b.ensure_default_categories()?;
+            ledger_b.create_account(
+                "Bob 零钱",
+                AccountType::Cash,
+                "CNY",
+                Decimal::from(200_u32),
+            )?;
+
+            // 各自只见自己的数据；Bob 账本里没有 Alice 的账户、分类和流水。
+            let accounts_a = ledger_a.accounts()?;
+            assert_eq!(accounts_a.len(), 1);
+            assert_eq!(accounts_a[0].name, "Alice 零钱");
+            let accounts_b = ledger_b.accounts()?;
+            assert_eq!(accounts_b.len(), 1);
+            assert_eq!(accounts_b[0].name, "Bob 零钱");
+            assert_eq!(ledger_a.transactions(100, 0)?.len(), 1);
+            assert_eq!(ledger_b.transactions(100, 0)?.len(), 0);
+            assert!(ledger_a
+                .categories()?
+                .iter()
+                .any(|item| item.name == "出差餐饮"));
+            assert!(!ledger_b
+                .categories()?
+                .iter()
+                .any(|item| item.name == "出差餐饮"));
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    /// 旧单用户共享库：users 引导 admin、会话回填、账本数据搬迁到 admin 独立文件。
+    #[test]
+    fn ensure_multi_user_migrates_legacy_single_user_data() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("koku-mu-mig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let result = (|| -> Result<()> {
+            let shared = dir.join("koku.db");
+            let ledgers = dir.join("ledgers");
+            std::fs::create_dir_all(&ledgers)?;
+
+            // 1) 模拟旧单用户库：账户 + 分类 + 流水 + 旧会话。
+            {
+                let mut legacy = BookkeepingService::open(&shared)?;
+                let account = legacy.create_account(
+                    "微信",
+                    AccountType::Cash,
+                    "CNY",
+                    Decimal::from(50_u32),
+                )?;
+                let food = legacy.create_category("出差", CategoryKind::Expense)?;
+                let at = NaiveDate::from_ymd_opt(2026, 8, 1)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap()
+                    .and_utc();
+                legacy.record_expense(account.id, food.id, Decimal::from(30_u32), at, "午餐")?;
+                // 旧会话（username 而非 user_id）
+                legacy.conn.execute(
+                    "INSERT INTO auth_sessions(token_hash, username, created_at, expires_at)
+                     VALUES ('aabb', 'somnus', '2026-08-01T00:00:00Z', 9999999999)",
+                    [],
+                )?;
+            }
+
+            // 2) 多用户迁移：引导 admin（密码回退到引导哈希）+ 搬迁数据。
+            let mut auth = BookkeepingService::open(&shared)?;
+            let admin_id = ensure_multi_user(&mut auth, &shared, &ledgers, "somnus", "boot-hash")?;
+            let admin = auth.user(admin_id)?;
+            assert_eq!(admin.username, "somnus");
+            assert_eq!(admin.role, UserRole::Admin);
+            // 旧会话已回填 user_id。
+            let session_user: Option<i64> = auth.conn.query_row(
+                "SELECT user_id FROM auth_sessions WHERE token_hash = 'aabb'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(session_user, Some(admin_id));
+
+            // 3) admin 独立账本包含旧数据。
+            let admin_ledger =
+                BookkeepingService::open(ledgers.join(format!("ledger-{admin_id}.db")))?;
+            let accounts = admin_ledger.accounts()?;
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0].name, "微信");
+            assert_eq!(accounts[0].balance, Decimal::from(20_u32));
+            let tx_count: i64 =
+                admin_ledger
+                    .conn
+                    .query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get(0))?;
+            assert_eq!(tx_count, 1);
+
+            // 4) 幂等：再次迁移不会重复引导或搬迁。
+            let mut auth2 = BookkeepingService::open(&shared)?;
+            let admin2 = ensure_multi_user(&mut auth2, &shared, &ledgers, "somnus", "boot-hash")?;
+            assert_eq!(admin2, admin_id);
+            assert_eq!(auth2.users()?.len(), 1);
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
+    }
+
+    #[test]
+    fn users_are_created_unique_and_sessions_follow_enabled_state() -> Result<()> {
+        let mut service = test_service()?;
+        let admin = service.create_user("admin", "admin-hash", UserRole::Admin)?;
+        let member = service.create_user("alice", "alice-hash", UserRole::Member)?;
+        assert_eq!(admin.role, UserRole::Admin);
+        assert_eq!(member.role, UserRole::Member);
+        assert!(admin.enabled);
+
+        // 用户名唯一
+        assert!(matches!(
+            service.create_user("alice", "x", UserRole::Member),
+            Err(KokuError::Database(_))
+        ));
+        // 用户名按原文匹配（区分大小写）
+        assert!(service.user_by_username("ALICE")?.is_none());
+
+        // 停用后会话立即失效
+        let token = service.create_auth_session(member.id, &member.username, 3600)?;
+        assert!(service.authenticated_user(&token)?.is_some());
+        service.set_user_enabled(member.id, false)?;
+        assert_eq!(service.authenticated_user(&token)?, None);
+        assert!(!service.user(member.id)?.enabled);
+        service.set_user_enabled(member.id, true)?;
+        assert!(service.user(member.id)?.enabled);
+
+        // 删除用户及其会话
+        let token2 = service.create_auth_session(member.id, &member.username, 3600)?;
+        service.delete_user(member.id)?;
+        assert!(matches!(
+            service.user(member.id),
+            Err(KokuError::NotFound { .. })
+        ));
+        assert_eq!(service.authenticated_user(&token2)?, None);
+        assert_eq!(service.users()?.len(), 1);
         Ok(())
     }
 

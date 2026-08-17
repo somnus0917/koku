@@ -31,7 +31,7 @@ use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
 use crate::rates::RateClient;
-use crate::service::BookkeepingService;
+use crate::service::{ensure_multi_user, BookkeepingService};
 use crate::throttle::LoginThrottle;
 
 async fn run_server() -> Result<()> {
@@ -39,11 +39,41 @@ async fn run_server() -> Result<()> {
     if let Some(parent) = Path::new(&database_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut service = BookkeepingService::open(&database_path)?;
+    // 每个用户一个独立账本文件，放在共享库同目录的 ledgers/ 下。
+    let ledger_dir = Path::new(&database_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("data"))
+        .join("ledgers");
+    std::fs::create_dir_all(&ledger_dir)?;
+
+    let auth_config = AuthConfig::from_env()?;
+    let mut auth_service = BookkeepingService::open(&database_path)?;
+    // 多用户迁移：引导 admin（现有单用户凭据）、回填会话、搬迁旧账本数据。
+    let admin_id = ensure_multi_user(
+        &mut auth_service,
+        Path::new(&database_path),
+        &ledger_dir,
+        &auth_config.username,
+        &auth_config.password_hash,
+    )?;
+
+    let state = AppState {
+        auth: Arc::new(Mutex::new(auth_service)),
+        ledger_dir: ledger_dir.clone(),
+        auth_config: Arc::new(auth_config),
+        login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+        rates: Arc::new(RateClient::new()),
+    };
+
+    // 演示账本：仅在全新安装（admin 账本为空）时填充。
     if env_bool("KOKU_SEED_DEMO", true)? {
-        seed_demo_data(&mut service)?;
+        let admin_ledger_path = ledger_dir.join(format!("ledger-{admin_id}.db"));
+        let mut admin_ledger = BookkeepingService::open(&admin_ledger_path)?;
+        admin_ledger.ensure_default_categories()?;
+        if admin_ledger.is_empty()? {
+            seed_demo_data(&mut admin_ledger)?;
+        }
     }
-    service.ensure_default_categories()?;
 
     let host = std::env::var("KOKU_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let host = IpAddr::from_str(&host)
@@ -56,18 +86,6 @@ async fn run_server() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     println!("Koku API is listening on http://{address}");
 
-    let auth = AuthConfig::from_env()?;
-    // 应用内改过的密码哈希优先；否则回退到环境/文件配置的初始哈希。
-    let initial_hash = service
-        .get_setting("password_hash")?
-        .unwrap_or_else(|| auth.password_hash.clone());
-    let state = AppState {
-        service: Arc::new(Mutex::new(service)),
-        auth: Arc::new(auth),
-        password_hash: Arc::new(std::sync::RwLock::new(initial_hash)),
-        login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
-        rates: Arc::new(RateClient::new()),
-    };
     axum::serve(
         listener,
         api_router(state, configured_origin()?).into_make_service_with_connect_info::<SocketAddr>(),

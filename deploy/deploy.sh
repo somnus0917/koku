@@ -100,8 +100,17 @@ backup_database() {
         ".backup /app/data/backups/koku-${timestamp}.db"
     echo "SQLite backup created: data/backups/koku-${timestamp}.db"
 
+    # 多用户：每个用户的独立账本文件一并打包备份。
+    if docker exec koku-api sh -c 'test -d /app/data/ledgers && ls /app/data/ledgers/*.db >/dev/null 2>&1'; then
+        docker exec koku-api tar -czf \
+            "/app/data/backups/koku-ledgers-${timestamp}.tar.gz" \
+            -C /app/data ledgers
+        echo "Ledger backup created: data/backups/koku-ledgers-${timestamp}.tar.gz"
+    fi
+
     # 保留最近 10 份备份，更早的自动清理，防止无限累积。
     ls -1t "$DATA_DIR/backups"/koku-*.db 2>/dev/null | tail -n +11 | xargs -r rm -f
+    ls -1t "$DATA_DIR/backups"/koku-ledgers-*.tar.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
 }
 
 rollback() {

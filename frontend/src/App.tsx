@@ -27,6 +27,7 @@ import {
   RefreshCcw,
   ShieldCheck,
   Sun,
+  Users,
   WalletCards,
   X,
   type LucideIcon
@@ -90,6 +91,7 @@ import {
   LoansSection,
   TransactionsPage
 } from "./components/ledger";
+import { UsersAdminPage } from "./components/users";
 import {
   COMMON_CURRENCIES,
   availableCurrencies,
@@ -110,17 +112,19 @@ import type {
   LoanType,
   MonthlySummary,
   Transaction,
-  TransactionKind
+  TransactionKind,
+  UserRole
 } from "./types";
 
-type View = "dashboard" | "accounts" | "transactions" | "insights";
+type View = "dashboard" | "accounts" | "transactions" | "insights" | "users";
 type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
   { id: "accounts", label: "账户", icon: WalletCards },
   { id: "transactions", label: "交易", icon: ReceiptText },
-  { id: "insights", label: "分析", icon: ChartNoAxesCombined }
+  { id: "insights", label: "分析", icon: ChartNoAxesCombined },
+  { id: "users", label: "用户", icon: Users }
 ];
 
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
@@ -154,6 +158,8 @@ export default function App() {
   return (
     <LedgerApp
       username={session.username}
+      role={session.role}
+      userId={session.id}
       onLogout={async () => {
         try { await logout(); }
         finally { setSession(null); }
@@ -216,7 +222,7 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
   );
 }
 
-function LedgerApp({ username, onLogout }: { username: string; onLogout: () => Promise<void> }) {
+function LedgerApp({ username, role, userId, onLogout }: { username: string; role: UserRole; userId: number; onLogout: () => Promise<void> }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [monthValue, setMonthValue] = useState(currentMonthValue);
   const [currency, setCurrency] = useState("CNY");
@@ -427,6 +433,8 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
             }
           />
         );
+      case "users":
+        return <UsersAdminPage currentUserId={userId} />;
       default:
         return (
           <Dashboard
@@ -456,7 +464,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
         </div>
 
         <nav className="primary-nav" aria-label="主导航">
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          {NAV_ITEMS.filter((item) => role === "admin" || item.id !== "users").map(({ id, label, icon: Icon }) => (
             <button
               className={activeView === id ? "active" : ""}
               key={id}
@@ -542,7 +550,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       </main>
 
       <nav className="mobile-bottom-nav" aria-label="移动端导航">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+        {NAV_ITEMS.filter((item) => role === "admin" || item.id !== "users").map(({ id, label, icon: Icon }) => (
           <button key={id} className={activeView === id ? "active" : ""} onClick={() => setActiveView(id)}>
             <Icon size={20} />
             <span>{label}</span>

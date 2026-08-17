@@ -6,6 +6,56 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{KokuError, Result};
 
+/// 用户角色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserRole {
+    /// 管理员：可创建/停用/删除用户、重置密码。
+    Admin,
+    /// 普通成员：只能使用自己的账本。
+    Member,
+}
+
+impl UserRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        }
+    }
+
+    pub fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "admin" => Ok(Self::Admin),
+            "member" => Ok(Self::Member),
+            other => Err(KokuError::InvalidInput(format!(
+                "unknown user role in database: {other}"
+            ))),
+        }
+    }
+}
+
+/// 一个账本用户（每个用户拥有完全独立的账本数据）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    /// bcrypt 密码哈希；序列化时隐藏。
+    #[serde(skip_serializing)]
+    pub password_hash: String,
+    pub role: UserRole,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+/// 登录会话返回给前端的用户信息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthSession {
+    pub id: i64,
+    pub username: String,
+    pub role: UserRole,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountType {

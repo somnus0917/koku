@@ -22,7 +22,9 @@ import type {
   Tag,
   TagSummary,
   Transaction,
-  TransactionKind
+  TransactionKind,
+  User,
+  UserRole
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -85,6 +87,40 @@ export function changePassword(
     method: "POST",
     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword })
   });
+}
+
+/** 管理员：用户列表。 */
+export function listUsers(): Promise<User[]> {
+  return request("/api/users");
+}
+
+/** 管理员：创建成员用户。 */
+export function createUser(username: string, password: string): Promise<User> {
+  return request("/api/users", {
+    method: "POST",
+    body: JSON.stringify({ username, password })
+  });
+}
+
+/** 管理员：重置某用户密码（其会话全部作废）。 */
+export function resetUserPassword(userId: number, password: string): Promise<{ changed: boolean }> {
+  return request(`/api/users/${userId}/password`, {
+    method: "POST",
+    body: JSON.stringify({ password })
+  });
+}
+
+/** 管理员：启用/停用某用户（停用立即作废其会话）。 */
+export function setUserEnabled(userId: number, enabled: boolean): Promise<{ enabled: boolean }> {
+  return request(`/api/users/${userId}/enabled`, {
+    method: "POST",
+    body: JSON.stringify({ enabled })
+  });
+}
+
+/** 管理员：删除用户（连带其独立账本数据），不可恢复。 */
+export function deleteUser(userId: number): Promise<{ deleted: boolean }> {
+  return request(`/api/users/${userId}`, { method: "DELETE" });
 }
 
 /** 汇总侧数据（除交易流水外的所有首屏数据）。 */

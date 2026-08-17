@@ -20,8 +20,21 @@ export interface Category {
   kind: CategoryKind;
 }
 
+export type UserRole = "admin" | "member";
+
 export interface AuthSession {
+  id: number;
   username: string;
+  role: UserRole;
+}
+
+/** 账本用户（管理员可见；password_hash 不会下发）。 */
+export interface User {
+  id: number;
+  username: string;
+  role: UserRole;
+  enabled: boolean;
+  created_at: string;
 }
 
 export interface Transaction {
