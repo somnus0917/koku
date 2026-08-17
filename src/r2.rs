@@ -97,6 +97,11 @@ impl R2Client {
         }
     }
 
+    /// R2 是 path-style：URL 与 SigV4 canonical URI 都要带桶名（`/{bucket}/{key}`）。
+    fn canonical_uri(&self, key: &str) -> String {
+        format!("/{}/{}", self.config.bucket, key)
+    }
+
     /// 上传对象（PUT，带 SigV4 签名与 Content-SHA256）。
     pub async fn put_object(&self, key: &str, bytes: &[u8], content_type: &str) -> Result<()> {
         let now = UtcNow::new();
@@ -110,7 +115,7 @@ impl R2Client {
         let authorization = self.authorization("PUT", key, "", &headers, &payload_hash, &now)?;
         let response = self
             .http
-            .put(format!("{}/{}", self.endpoint, key))
+            .put(format!("{}{}", self.endpoint, self.canonical_uri(key)))
             .header("x-amz-content-sha256", payload_hash)
             .header("x-amz-date", now.amz_date())
             .header("content-type", content_type)
@@ -134,7 +139,7 @@ impl R2Client {
         let authorization = self.authorization("HEAD", key, "", &headers, &payload_hash, &now)?;
         let response = self
             .http
-            .head(format!("{}/{}", self.endpoint, key))
+            .head(format!("{}{}", self.endpoint, self.canonical_uri(key)))
             .header("x-amz-content-sha256", payload_hash)
             .header("x-amz-date", now.amz_date())
             .header("authorization", authorization)
@@ -169,7 +174,7 @@ impl R2Client {
         let authorization = self.authorization("GET", key, "", &headers, &payload_hash, &now)?;
         let response = self
             .http
-            .get(format!("{}/{}", self.endpoint, key))
+            .get(format!("{}{}", self.endpoint, self.canonical_uri(key)))
             .header("x-amz-content-sha256", payload_hash)
             .header("x-amz-date", now.amz_date())
             .header("authorization", authorization)
@@ -208,7 +213,7 @@ impl R2Client {
         let authorization = self.authorization("DELETE", key, "", &headers, &payload_hash, &now)?;
         let response = self
             .http
-            .delete(format!("{}/{}", self.endpoint, key))
+            .delete(format!("{}{}", self.endpoint, self.canonical_uri(key)))
             .header("x-amz-content-sha256", payload_hash)
             .header("x-amz-date", now.amz_date())
             .header("authorization", authorization)
@@ -240,8 +245,9 @@ impl R2Client {
             .collect();
         let signed_headers: Vec<&str> = sorted.iter().map(|(name, _)| name.as_str()).collect();
         let signed_headers = signed_headers.join(";");
+        let canonical_uri = self.canonical_uri(key);
         let canonical_request = format!(
-            "{method}\n/{key}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+            "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
         );
         let string_to_sign = format!(
             "AWS4-HMAC-SHA256\n{}\n{}/auto/s3/aws4_request\n{}",
@@ -417,7 +423,10 @@ mod live_tests {
         let payload = b"koku-r2-sigv4-live-test-payload";
 
         client.put_object(&key, payload, "text/plain").await?;
-        let size = client.head_object(&key).await?.expect("object should exist");
+        let size = client
+            .head_object(&key)
+            .await?
+            .expect("object should exist");
         assert_eq!(size, payload.len() as u64);
         let fetched = client.get_object(&key).await?;
         assert_eq!(fetched, payload);
