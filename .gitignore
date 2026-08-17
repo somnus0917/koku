@@ -13,3 +13,5 @@
 /.bench/
 /.cargo-home/
 /.npm-cache/
+/.preview/
+/.uv-cache/
