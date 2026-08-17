@@ -431,6 +431,21 @@ pub struct CashFlowSummary {
     pub expense_destinations: Vec<CashFlowItem>,
 }
 
+/// 标签汇总：同时带有全部指定标签的收支流水，按分类聚合并折算到显示币种。
+/// `year`/`month` 为 `None` 时统计全部历史。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagSummary {
+    pub tags: Vec<String>,
+    pub year: Option<i32>,
+    pub month: Option<u32>,
+    pub currency: String,
+    pub total_income: Decimal,
+    pub total_expense: Decimal,
+    pub retained: Decimal,
+    pub income_sources: Vec<CashFlowItem>,
+    pub expense_destinations: Vec<CashFlowItem>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BalanceSummary {
     pub currency: String,

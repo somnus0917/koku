@@ -36,7 +36,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
-import { exportTransactions, loadTrend, rateHint, receiptUrl } from "../api";
+import { exportTransactions, loadTagSummary, loadTrend, rateHint, receiptUrl } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
@@ -52,6 +52,8 @@ import type {
   MonthlySummary,
   MonthlyTrendPoint,
   RecurringRule,
+  Tag,
+  TagSummary,
   Transaction,
   TransactionKind
 } from "../types";
@@ -505,6 +507,67 @@ export function AccountGroup({
   );
 }
 
+/**
+ * 标签多选下拉：可同时勾选多个标签（AND 语义），选中后标签筛选生效。
+ */
+function TagMultiSelect({
+  tags,
+  selected,
+  onChange
+}: {
+  tags: Tag[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const toggle = (name: string) => {
+    onChange(selected.includes(name) ? selected.filter((item) => item !== name) : [...selected, name]);
+  };
+  return (
+    <div className="tag-multiselect" ref={ref}>
+      <button
+        type="button"
+        className={`tag-filter-button ${selected.length > 0 ? "active" : ""}`}
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <Tags size={14} />
+        {selected.length === 0 ? "标签" : selected.join(" + ")}
+      </button>
+      {open && (
+        <div className="tag-multiselect-menu" role="listbox" aria-multiselectable="true">
+          {tags.map((tag) => {
+            const checked = selected.includes(tag.name);
+            return (
+              <label key={tag.id} className="tag-multiselect-option">
+                <input type="checkbox" checked={checked} onChange={() => toggle(tag.name)} />
+                {tag.name}
+              </label>
+            );
+          })}
+          {selected.length > 0 && (
+            <button type="button" className="tag-multiselect-clear" onClick={() => onChange([])}>
+              清除筛选
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TransactionsPage({
   data,
   onAdd,
@@ -540,7 +603,9 @@ export function TransactionsPage({
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
-  const [tagFilter, setTagFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [tagSummary, setTagSummary] = useState<TagSummary | null>(null);
+  const [tagSummaryError, setTagSummaryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const handleExport = async () => {
@@ -562,11 +627,36 @@ export function TransactionsPage({
     [data.transactions]
   );
   const rates = useConversionRates(txCurrencies, display);
+  const tagFilterKey = tagFilter.join(",");
+  // 选中标签时拉取对应汇总（月视图按当前月，全部月份视图按全部历史）。
+  useEffect(() => {
+    if (tagFilter.length === 0) {
+      setTagSummary(null);
+      setTagSummaryError(null);
+      return;
+    }
+    let cancelled = false;
+    setTagSummaryError(null);
+    loadTagSummary(tagFilter, display, exportYear, exportMonth)
+      .then((summary) => {
+        if (!cancelled) setTagSummary(summary);
+      })
+      .catch((reason) => {
+        if (!cancelled) {
+          setTagSummary(null);
+          setTagSummaryError(reason instanceof Error ? reason.message : "标签统计加载失败");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilterKey, display, exportYear, exportMonth]);
   const filtered = data.transactions.filter((item) => {
     const category = item.category_id ? categoriesById.get(item.category_id)?.name ?? "" : "转账";
     const account = accountsById.get(item.account_id)?.name ?? "";
     const matchesSearch = `${item.note} ${category} ${account}`.toLowerCase().includes(search.toLowerCase());
-    const matchesTag = tagFilter === "all" || item.tags.includes(tagFilter);
+    const matchesTag = tagFilter.length === 0 || tagFilter.every((name) => item.tags.includes(name));
     return matchesSearch && matchesTag && (kind === "all" || item.kind === kind);
   });
   return (
@@ -586,17 +676,11 @@ export function TransactionsPage({
           ))}
         </div>
         {data.tags.length > 0 && (
-          <select
-            className="tag-filter"
-            value={tagFilter}
-            onChange={(event) => setTagFilter(event.target.value)}
-            aria-label="按标签筛选"
-          >
-            <option value="all">全部标签</option>
-            {data.tags.map((tag) => (
-              <option key={tag.id} value={tag.name}>{tag.name}</option>
-            ))}
-          </select>
+          <TagMultiSelect
+            tags={data.tags}
+            selected={tagFilter}
+            onChange={setTagFilter}
+          />
         )}
         <button
           type="button"
@@ -609,6 +693,38 @@ export function TransactionsPage({
           {exporting ? "导出中…" : "导出 CSV"}
         </button>
       </div>
+      {tagFilter.length > 0 && (
+        <section className="tag-summary" aria-label="标签统计">
+          {tagSummaryError ? (
+            <span className="inline-error">标签统计加载失败:{tagSummaryError}</span>
+          ) : tagSummary ? (
+            <>
+              <div className="tag-summary-total">
+                <span className="tag-summary-label">
+                  标签「{tagSummary.tags.join(" + ")}」{tagSummary.year ? `（${tagSummary.year}年${tagSummary.month}月）` : "（全部历史）"}合计
+                </span>
+                <strong>支出 {formatMoney(tagSummary.total_expense, tagSummary.currency)}</strong>
+                <span>收入 {formatMoney(tagSummary.total_income, tagSummary.currency)}</span>
+                <span className={Number(tagSummary.retained) >= 0 ? "positive" : "negative"}>
+                  结余 {formatMoney(tagSummary.retained, tagSummary.currency)}
+                </span>
+              </div>
+              {tagSummary.expense_destinations.length > 0 && (
+                <div className="tag-summary-breakdown">
+                  {tagSummary.expense_destinations.map((item) => (
+                    <span key={item.category_id} className="tag-summary-item">
+                      {item.category_name} {formatMoney(item.amount, tagSummary.currency)}
+                      <em>{item.percentage}%</em>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="inline-error">正在加载标签统计…</span>
+          )}
+        </section>
+      )}
       {exportError && <div className="inline-error">导出失败:{exportError}</div>}
       <article className="panel transaction-table">
         <div className="table-header"><span>交易</span><span>账户</span><span>日期</span><span>金额</span><span /><span /></div>

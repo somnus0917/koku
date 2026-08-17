@@ -260,6 +260,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/loans/{id}/repay` | 还款（任意账户进出，归零自动结清） |
 | `GET` | `/api/summary/monthly` | 按年月与币种查询收支；所有币种的流水统一按汇率折算到该币种 |
 | `GET` | `/api/summary/cash-flow` | 查询收入来源、支出去向和结余现金流（多币种按汇率折算） |
+| `GET` | `/api/summary/by-tag?tags=旅行,报销&year=&month=` | 标签汇总：同时带有全部指定标签（AND 语义）的收支合计与分类明细；缺省 year/month 统计全部历史 |
 | `GET` | `/api/summary/trend` | 查询最近 `?months=`（默认 12，上限 120）个月的收支趋势，逐月返回收入/支出/结余 |
 | `GET` | `/api/summary/balance` | 按币种查询资产、负债与净值（所有币种账户与未结借款按汇率折算） |
 | `GET` | `/api/rates?from=&to=` | 汇率提示：1 from = rate to（Frankfurter/ECB 参考中间价，本地缓存，源不可达时回退旧缓存） |

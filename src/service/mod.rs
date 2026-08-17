@@ -34,6 +34,8 @@ mod summaries;
 mod tags;
 mod transactions;
 
+pub(crate) use tags::validate_tag_name;
+
 impl BookkeepingService {
     pub fn in_memory() -> Result<Self> {
         Self::from_connection(Connection::open_in_memory()?)
@@ -2927,6 +2929,120 @@ mod tests {
         service.restore_transaction(transfer.id)?;
         assert_eq!(service.account(from.id)?.balance, Decimal::from(120_u32));
         assert_eq!(service.account(to.id)?.balance, Decimal::from(130_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn tag_summary_aggregates_tagged_transactions_and_converts_currencies() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let hotel = service.create_category("住宿", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 10)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+
+        // 打上「旅行」标签的餐饮 + 住宿支出（含一笔美元，按 7 折算）
+        let tagged1 =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "午饭")?;
+        let tagged2 =
+            service.record_expense(cash.id, hotel.id, Decimal::from(300_u32), at, "酒店")?;
+        let tagged3 = service.record_expense_in_currency(
+            cash.id,
+            food.id,
+            Decimal::from(50_u32),
+            "USD",
+            Decimal::from(350_u32),
+            at,
+            "美元餐",
+        )?;
+        // 未打标签的支出，不应计入
+        service.record_expense(cash.id, food.id, Decimal::from(999_u32), at, "不带标签")?;
+        service.set_transaction_tags(tagged1.id, vec!["旅行".to_owned()])?;
+        service.set_transaction_tags(tagged2.id, vec!["旅行".to_owned()])?;
+        service.set_transaction_tags(tagged3.id, vec!["旅行".to_owned()])?;
+
+        // 汇率：1 USD = 7 CNY
+        service.store_rate(&RateQuote {
+            from: "USD".to_owned(),
+            to: "CNY".to_owned(),
+            rate: Decimal::from_str("7")?,
+            date: "2026-08-15".to_owned(),
+            source: "test".to_owned(),
+            stale: false,
+        })?;
+
+        let summary = service.tag_summary(&["旅行".to_owned()], Some(2026), Some(8), "CNY")?;
+        assert_eq!(summary.total_income, Decimal::ZERO);
+        // 100 + 300 + 350（美元按 7 折算） = 750
+        assert_eq!(summary.total_expense, Decimal::from(750_u32));
+        assert_eq!(summary.retained, Decimal::from(-750_i32));
+        let dests: BTreeMap<_, _> = summary
+            .expense_destinations
+            .iter()
+            .map(|item| (item.category_name.clone(), item.amount))
+            .collect();
+        assert_eq!(dests.get("餐饮"), Some(&Decimal::from(450_u32)));
+        assert_eq!(dests.get("住宿"), Some(&Decimal::from(300_u32)));
+        assert!(!dests.contains_key("购物"));
+        Ok(())
+    }
+
+    #[test]
+    fn tag_summary_requires_all_tags_and_supports_all_time() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let aug = NaiveDate::from_ymd_opt(2026, 8, 1)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+        let jul = NaiveDate::from_ymd_opt(2026, 7, 1)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_utc();
+
+        // 同时带「旅行」「报销」的流水（8 月）
+        let both =
+            service.record_expense(cash.id, food.id, Decimal::from(200_u32), aug, "出差餐")?;
+        // 只带「旅行」的流水（7 月）
+        let only_travel =
+            service.record_expense(cash.id, food.id, Decimal::from(50_u32), jul, "周末游")?;
+        service.set_transaction_tags(both.id, vec!["旅行".to_owned(), "报销".to_owned()])?;
+        service.set_transaction_tags(only_travel.id, vec!["旅行".to_owned()])?;
+
+        // AND 语义：8 月同时带两个标签的只有 200
+        let and = service.tag_summary(
+            &["旅行".to_owned(), "报销".to_owned()],
+            Some(2026),
+            Some(8),
+            "CNY",
+        )?;
+        assert_eq!(and.total_expense, Decimal::from(200_u32));
+
+        // 单标签 + 8 月：只有 8 月的 200
+        let august = service.tag_summary(&["旅行".to_owned()], Some(2026), Some(8), "CNY")?;
+        assert_eq!(august.total_expense, Decimal::from(200_u32));
+
+        // 全部历史：200 + 50 = 250
+        let all_time = service.tag_summary(&["旅行".to_owned()], None, None, "CNY")?;
+        assert_eq!(all_time.total_expense, Decimal::from(250_u32));
+        assert_eq!(all_time.year, None);
+
+        // 只给 year 不给 month -> 报错
+        assert!(matches!(
+            service.tag_summary(&["旅行".to_owned()], Some(2026), None, "CNY"),
+            Err(KokuError::InvalidInput(_))
+        ));
+        // 空标签 -> 报错
+        assert!(matches!(
+            service.tag_summary(&[], Some(2026), Some(8), "CNY"),
+            Err(KokuError::InvalidInput(_))
+        ));
         Ok(())
     }
 }

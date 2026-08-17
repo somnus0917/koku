@@ -22,7 +22,7 @@ use crate::auth::{session_cookie, session_token, AuthConfig};
 use crate::domain::{
     Account, AccountType, BalanceSummary, Budget, CashFlowSummary, Category, CategoryKind, Deposit,
     DepositSettlement, Holding, Loan, LoanType, MonthlySummary, MonthlyTrendPoint, RateQuote,
-    Receipt, RecurrenceFrequency, RecurringRule, Tag, Transaction, TransactionKind,
+    Receipt, RecurrenceFrequency, RecurringRule, Tag, TagSummary, Transaction, TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::rates::{rate_is_fresh, RateClient};
@@ -111,6 +111,16 @@ struct ChangePasswordRequest {
 
 #[derive(Debug, Deserialize)]
 struct MonthlyQuery {
+    year: Option<i32>,
+    month: Option<u32>,
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagSummaryQuery {
+    /// 逗号分隔的标签名（AND 语义：交易须同时带有全部标签）。
+    tags: String,
+    /// 缺省时统计全部历史；year/month 必须同时给出或同时缺省。
     year: Option<i32>,
     month: Option<u32>,
     currency: Option<String>,
@@ -1085,6 +1095,28 @@ async fn api_cash_flow_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+async fn api_tag_summary(
+    State(state): State<AppState>,
+    Query(query): Query<TagSummaryQuery>,
+) -> Result<Json<ApiResponse<TagSummary>>> {
+    let tags: Vec<String> = query
+        .tags
+        .split(',')
+        .map(|part| part.trim().to_owned())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if tags.is_empty() {
+        return Err(KokuError::InvalidInput(
+            "at least one tag is required".to_owned(),
+        ));
+    }
+    let currencies = lock_service(&state)?.tag_currencies(&tags, query.year, query.month)?;
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    ensure_summary_rates(&state, &display, currencies).await?;
+    let summary = lock_service(&state)?.tag_summary(&tags, query.year, query.month, &display)?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
 async fn api_monthly_trend(
     State(state): State<AppState>,
     Query(query): Query<TrendQuery>,
@@ -1260,6 +1292,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/loans", get(api_loans).post(api_create_loan))
         .route("/api/loans/{loan_id}/repay", post(api_repay_loan))
         .route("/api/summary/monthly", get(api_monthly_summary))
+        .route("/api/summary/by-tag", get(api_tag_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/trend", get(api_monthly_trend))
         .route("/api/summary/balance", get(api_balance_summary))

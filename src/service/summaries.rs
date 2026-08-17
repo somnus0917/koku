@@ -9,10 +9,19 @@ use rust_decimal::Decimal;
 
 use super::*;
 use crate::domain::{
-    CashFlowSummary, CategoryExpense, MonthlySummary, MonthlyTrendPoint, TransactionKind,
+    CashFlowSummary, CategoryExpense, MonthlySummary, MonthlyTrendPoint, TagSummary,
+    TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
+
+/// 分类聚合行的公共结果：(总收入, 总支出, 收入分类明细, 支出分类明细)。
+type FlowTotals = (
+    Decimal,
+    Decimal,
+    BTreeMap<(i64, String), Decimal>,
+    BTreeMap<(i64, String), Decimal>,
+);
 
 impl BookkeepingService {
     pub fn monthly_summary(&self, year: i32, month: u32, currency: &str) -> Result<MonthlySummary> {
@@ -74,6 +83,104 @@ impl BookkeepingService {
             ))
         })?;
 
+        let (total_income, total_expense, income_totals, expense_totals) =
+            self.accumulate_flow_rows(rows, &currency, today)?;
+        let income_sources = cash_flow_items(income_totals, total_income);
+        let expense_destinations = cash_flow_items(expense_totals, total_expense);
+        Ok(CashFlowSummary {
+            year,
+            month,
+            currency,
+            total_income,
+            total_expense,
+            retained: total_income - total_expense,
+            flow_total: total_income.max(total_expense),
+            income_sources,
+            expense_destinations,
+        })
+    }
+
+    /// 标签汇总：同时带有全部指定标签的收支流水，按分类聚合、折算到显示币种。
+    /// `year`/`month` 为 `None` 时统计全部历史；两个参数必须同时给出或同时缺省。
+    pub fn tag_summary(
+        &self,
+        tags: &[String],
+        year: Option<i32>,
+        month: Option<u32>,
+        currency: &str,
+    ) -> Result<TagSummary> {
+        let normalized = normalize_tags(tags)?;
+        let currency = normalize_currency(currency.to_owned())?;
+        let today = Utc::now().date_naive();
+        let range = optional_month_bounds(year, month)?;
+        let (filter_sql, params) = tag_filter_sql(&normalized, range.as_ref());
+        let sql = format!(
+            "SELECT t.kind, t.category_id, c.name, t.currency,
+                    SUM(CAST(t.amount AS REAL)) - SUM(CAST(COALESCE(t.reimbursed_amount, '0') AS REAL))
+             FROM transactions t
+             JOIN categories c ON c.id = t.category_id
+             WHERE {filter_sql}
+             GROUP BY t.kind, t.category_id, c.name, t.currency
+             ORDER BY t.kind, t.category_id, t.currency"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(
+            rusqlite::params_from_iter(params.iter().map(|value| value.as_ref())),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            },
+        )?;
+        let (total_income, total_expense, income_totals, expense_totals) =
+            self.accumulate_flow_rows(rows, &currency, today)?;
+        Ok(TagSummary {
+            tags: normalized,
+            year,
+            month,
+            currency,
+            total_income,
+            total_expense,
+            retained: total_income - total_expense,
+            income_sources: cash_flow_items(income_totals, total_income),
+            expense_destinations: cash_flow_items(expense_totals, total_expense),
+        })
+    }
+
+    /// 标签汇总涉及的币种（供调用方确保折算汇率可用），范围与 `tag_summary` 一致。
+    pub fn tag_currencies(
+        &self,
+        tags: &[String],
+        year: Option<i32>,
+        month: Option<u32>,
+    ) -> Result<Vec<String>> {
+        let normalized = normalize_tags(tags)?;
+        let range = optional_month_bounds(year, month)?;
+        let (filter_sql, params) = tag_filter_sql(&normalized, range.as_ref());
+        let sql = format!("SELECT DISTINCT t.currency FROM transactions t WHERE {filter_sql}");
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(
+            rusqlite::params_from_iter(params.iter().map(|value| value.as_ref())),
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut currencies = Vec::new();
+        for row in rows {
+            currencies.push(row?);
+        }
+        Ok(currencies)
+    }
+
+    /// 分类聚合行的公共折算/累加逻辑（cash_flow_summary 与 tag_summary 共用）。
+    fn accumulate_flow_rows(
+        &self,
+        rows: impl Iterator<Item = rusqlite::Result<(String, i64, String, String, f64)>>,
+        currency: &str,
+        today: NaiveDate,
+    ) -> Result<FlowTotals> {
         let mut total_income = Decimal::ZERO;
         let mut total_expense = Decimal::ZERO;
         let mut income_totals: BTreeMap<(i64, String), Decimal> = BTreeMap::new();
@@ -88,7 +195,7 @@ impl BookkeepingService {
                 })?
                 .round_dp(4);
             // 该币种的净额按汇率折算到显示币种。
-            let amount = self.convert_amount(net, &tx_currency, &currency, today)?;
+            let amount = self.convert_amount(net, &tx_currency, currency, today)?;
             match TransactionKind::from_db(&kind)? {
                 TransactionKind::Income => {
                     total_income += amount;
@@ -109,20 +216,7 @@ impl BookkeepingService {
                 | TransactionKind::Deposit => {}
             }
         }
-
-        let income_sources = cash_flow_items(income_totals, total_income);
-        let expense_destinations = cash_flow_items(expense_totals, total_expense);
-        Ok(CashFlowSummary {
-            year,
-            month,
-            currency,
-            total_income,
-            total_expense,
-            retained: total_income - total_expense,
-            flow_total: total_income.max(total_expense),
-            income_sources,
-            expense_destinations,
-        })
+        Ok((total_income, total_expense, income_totals, expense_totals))
     }
 
     /// 某月收支流水涉及的所有币种（供调用方确保折算汇率可用）。
@@ -252,4 +346,70 @@ fn trend_bounds(months: u32) -> Result<(i32, DateTime<Utc>, DateTime<Utc>)> {
     let (start, _) = month_bounds(start_year, start_month)?;
     let (_, end) = month_bounds(now.year(), now.month())?;
     Ok((start_index, start, end))
+}
+
+/// 校验、去重标签名；至少需要一个非空标签。
+fn normalize_tags(tags: &[String]) -> Result<Vec<String>> {
+    let mut seen = std::collections::HashSet::new();
+    let mut normalized = Vec::new();
+    for tag in tags {
+        let trimmed = validate_tag_name(tag)?;
+        if seen.insert(trimmed.clone()) {
+            normalized.push(trimmed);
+        }
+    }
+    if normalized.is_empty() {
+        return Err(KokuError::InvalidInput(
+            "at least one tag is required".to_owned(),
+        ));
+    }
+    Ok(normalized)
+}
+
+/// 可选的自然月时间范围：两者都给定时返回该月的 [start, end) 时间戳，
+/// 两者都缺省时返回 `None`（全部历史）；只给一个则报错。
+fn optional_month_bounds(
+    year: Option<i32>,
+    month: Option<u32>,
+) -> Result<Option<(String, String)>> {
+    match (year, month) {
+        (Some(year), Some(month)) => month_bounds(year, month)
+            .map(|(start, end)| (timestamp(start), timestamp(end)))
+            .map(Some),
+        (None, None) => Ok(None),
+        _ => Err(KokuError::InvalidInput(
+            "year and month must be provided together".to_owned(),
+        )),
+    }
+}
+
+/// 标签过滤的 WHERE 片段与参数：交易须同时带有全部指定标签（AND 语义）。
+/// `range` 给定时追加月份范围条件。
+fn tag_filter_sql(
+    tags: &[String],
+    range: Option<&(String, String)>,
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let placeholders = vec!["?"; tags.len()].join(",");
+    let mut sql = format!(
+        "t.voided_at IS NULL AND t.kind IN ('expense', 'income')
+         AND t.id IN (
+             SELECT tt.transaction_id
+             FROM transaction_tags tt
+             JOIN tags g ON g.id = tt.tag_id
+             WHERE g.name IN ({placeholders})
+             GROUP BY tt.transaction_id
+             HAVING COUNT(DISTINCT g.name) = ?
+         )"
+    );
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = tags
+        .iter()
+        .map(|tag| Box::new(tag.clone()) as Box<dyn rusqlite::ToSql>)
+        .collect();
+    params.push(Box::new(tags.len() as i64));
+    if let Some((start, end)) = range {
+        sql.push_str(" AND t.occurred_at >= ? AND t.occurred_at < ?");
+        params.push(Box::new(start.clone()));
+        params.push(Box::new(end.clone()));
+    }
+    (sql, params)
 }

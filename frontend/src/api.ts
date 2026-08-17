@@ -20,6 +20,7 @@ import type {
   RecurrenceFrequency,
   RecurringRule,
   Tag,
+  TagSummary,
   Transaction,
   TransactionKind
 } from "./types";
@@ -201,6 +202,24 @@ export function receiptUrl(transactionId: number): string {
 export function loadTrend(months: number, currency: string): Promise<MonthlyTrendPoint[]> {
   const query = new URLSearchParams({ months: String(months), currency });
   return request<MonthlyTrendPoint[]>(`/api/summary/trend?${query.toString()}`);
+}
+
+/**
+ * 标签汇总：同时带有全部指定标签的收支流水合计。
+ * 传 `year`/`month` 统计该自然月；不传则统计全部历史。
+ */
+export function loadTagSummary(
+  tags: string[],
+  currency: string,
+  year?: number,
+  month?: number
+): Promise<TagSummary> {
+  const query = new URLSearchParams({ tags: tags.join(","), currency });
+  if (year !== undefined && month !== undefined) {
+    query.set("year", String(year));
+    query.set("month", String(month));
+  }
+  return request<TagSummary>(`/api/summary/by-tag?${query.toString()}`);
 }
 
 export function createAccount(input: {

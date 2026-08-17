@@ -167,6 +167,19 @@ export interface CashFlowSummary {
   expense_destinations: CashFlowItem[];
 }
 
+/** 标签汇总：同时带有全部指定标签的收支流水；year/month 为 null 表示全部历史。 */
+export interface TagSummary {
+  tags: string[];
+  year: number | null;
+  month: number | null;
+  currency: string;
+  total_income: string;
+  total_expense: string;
+  retained: string;
+  income_sources: CashFlowItem[];
+  expense_destinations: CashFlowItem[];
+}
+
 export interface BalanceSummary {
   currency: string;
   total_assets: string;

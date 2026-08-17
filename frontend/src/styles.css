@@ -1752,6 +1752,142 @@ button:disabled {
   font-weight: 650;
 }
 
+.tag-multiselect {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.tag-filter-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  max-width: 260px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.tag-filter-button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tag-multiselect-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 160px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-small);
+}
+
+.tag-multiselect-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tag-multiselect-option:hover {
+  background: var(--surface-muted);
+}
+
+.tag-multiselect-clear {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--danger, #d64545);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tag-multiselect-clear:hover {
+  background: var(--surface-muted);
+}
+
+.tag-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 18px;
+  margin: 14px 2px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+
+.tag-summary-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.tag-summary-label {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.tag-summary-total strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.tag-summary-total span {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.tag-summary-total .positive {
+  color: var(--positive, #2e7d4f);
+}
+
+.tag-summary-total .negative {
+  color: var(--danger, #d64545);
+}
+
+.tag-summary-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.tag-summary-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.tag-summary-item em {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-style: normal;
+}
+
 .inline-number {
   width: 90px;
   padding: 6px 8px;

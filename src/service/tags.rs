@@ -75,7 +75,7 @@ impl BookkeepingService {
     }
 }
 
-fn validate_tag_name(name: &str) -> Result<String> {
+pub(crate) fn validate_tag_name(name: &str) -> Result<String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(KokuError::InvalidInput(
