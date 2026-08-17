@@ -50,6 +50,11 @@ impl BookkeepingService {
                 params![transaction_id, tag.id],
             )?;
         }
+        // 清理不再被任何交易引用的孤儿标签，避免它们在自动补全里堆积。
+        tx.execute(
+            "DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM transaction_tags)",
+            [],
+        )?;
         tx.commit()?;
         Ok(tags)
     }

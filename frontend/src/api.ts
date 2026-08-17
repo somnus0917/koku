@@ -266,6 +266,23 @@ export function clearBudget(categoryId: number, year: number, month: number): Pr
   return request(`/api/budgets/${categoryId}?${query.toString()}`, { method: "DELETE" });
 }
 
+export function copyBudgets(
+  fromYear: number,
+  fromMonth: number,
+  toYear: number,
+  toMonth: number
+): Promise<{ copied: number }> {
+  return request("/api/budgets/copy", {
+    method: "POST",
+    body: JSON.stringify({
+      from_year: fromYear,
+      from_month: fromMonth,
+      to_year: toYear,
+      to_month: toMonth
+    })
+  });
+}
+
 export function createRecurringRule(input: {
   kind: "expense" | "income";
   account_id: number;

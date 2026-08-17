@@ -101,6 +101,39 @@ impl BookkeepingService {
         rows.map(|row| budget_from_row(row?)).collect()
     }
 
+    /// 把 `from` 月的预算整体复制到 `to` 月（同分类覆盖），返回复制的条数。
+    pub fn copy_budgets(
+        &mut self,
+        from_year: i32,
+        from_month: u32,
+        to_year: i32,
+        to_month: u32,
+    ) -> Result<usize> {
+        month_bounds(from_year, from_month)?;
+        month_bounds(to_year, to_month)?;
+        let source = self.budgets(from_year, from_month)?;
+        let tx = self.conn.transaction()?;
+        let mut copied = 0_usize;
+        for budget in source {
+            tx.execute(
+                "INSERT INTO budgets(category_id, year, month, limit_amount, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(category_id, year, month)
+                 DO UPDATE SET limit_amount = excluded.limit_amount",
+                params![
+                    budget.category_id,
+                    to_year,
+                    to_month,
+                    decimal_to_db(budget.limit_amount),
+                    timestamp(Utc::now())
+                ],
+            )?;
+            copied += 1;
+        }
+        tx.commit()?;
+        Ok(copied)
+    }
+
     /// 某月各支出分类的预算上限映射（供月度汇总回填）。
     pub(crate) fn budget_limits(&self, year: i32, month: u32) -> Result<BTreeMap<i64, Decimal>> {
         let mut statement = self.conn.prepare(

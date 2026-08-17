@@ -1016,7 +1016,14 @@ button:disabled {
   margin-top: 18px;
 }
 
-.budget-panel .section-heading > small {
+.heading-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.budget-panel .section-heading > small,
+.heading-meta small {
   color: var(--text-faint);
   font-size: 11px;
 }

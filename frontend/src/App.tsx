@@ -37,6 +37,7 @@ import {
   buyStock,
   changePassword,
   clearBudget,
+  copyBudgets,
   createAccount,
   createCategory,
   createDeposit,
@@ -287,6 +288,19 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
     }
   }, [loadingMore, txHasMore, txOffset]);
 
+  const copyLastMonthBudgets = async () => {
+    if (!data) return;
+    const { year, month } = data.monthly;
+    const last = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+    try {
+      const result = await copyBudgets(last.year, last.month, year, month);
+      setToast(result.copied > 0 ? "已复制上月预算" : "上月没有可复制的预算");
+      await refresh(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "复制预算失败");
+    }
+  };
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -412,6 +426,7 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
                 "预算已清除"
               )
             }
+            onCopyLastMonth={copyLastMonthBudgets}
           />
         );
       default:

@@ -1232,6 +1232,32 @@ mod tests {
     }
 
     #[test]
+    fn budgets_can_be_copied_between_months() -> Result<()> {
+        let mut service = test_service()?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let travel = service.create_category("旅行", CategoryKind::Expense)?;
+        service.set_budget(food.id, 2026, 7, Decimal::from(500_u32))?;
+        service.set_budget(travel.id, 2026, 7, Decimal::from(800_u32))?;
+
+        // 整月复制：两条都复制过去。
+        let copied = service.copy_budgets(2026, 7, 2026, 8)?;
+        assert_eq!(copied, 2);
+        assert_eq!(service.budgets(2026, 8)?.len(), 2);
+
+        // 目标月已有同分类时，复制会覆盖。
+        service.set_budget(food.id, 2026, 8, Decimal::from(999_u32))?;
+        service.copy_budgets(2026, 7, 2026, 8)?;
+        assert_eq!(
+            service.budget(food.id, 2026, 8)?.limit_amount,
+            Decimal::from(500_u32)
+        );
+
+        // 非法月份报错。
+        assert!(service.copy_budgets(2026, 13, 2026, 8).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn recurring_rules_generate_due_transactions_and_advance() -> Result<()> {
         let mut service = test_service()?;
         let cash =
@@ -1372,6 +1398,30 @@ mod tests {
         assert!(service
             .set_transaction_tags(expense.id, vec!["  ".to_owned()])
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn orphan_tags_are_removed_after_last_use() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(10_u32), at, "餐费")?;
+
+        service.set_transaction_tags(expense.id, vec!["旅行".to_owned()])?;
+        assert!(service.all_tags()?.iter().any(|tag| tag.name == "旅行"));
+
+        // 换成别的标签后，「旅行」不再被任何交易引用，应被清理。
+        service.set_transaction_tags(expense.id, vec!["出差".to_owned()])?;
+        let tags = service.all_tags()?;
+        assert!(!tags.iter().any(|tag| tag.name == "旅行"));
+        assert!(tags.iter().any(|tag| tag.name == "出差"));
         Ok(())
     }
 
