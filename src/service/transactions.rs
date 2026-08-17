@@ -455,9 +455,7 @@ impl BookkeepingService {
                 )?;
             }
             // 借款/股票/定期流水不允许撤销，因此也永远到不了这里；防御性报错。
-            TransactionKind::Loan
-            | TransactionKind::Trade
-            | TransactionKind::Deposit => {
+            TransactionKind::Loan | TransactionKind::Trade | TransactionKind::Deposit => {
                 return Err(KokuError::InvalidInput(
                     "loan, trade, and deposit transactions cannot be restored".to_owned(),
                 ))
