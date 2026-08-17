@@ -20,6 +20,7 @@ mod rates;
 mod service;
 mod throttle;
 
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
@@ -59,6 +60,7 @@ async fn run_server() -> Result<()> {
 
     let state = AppState {
         auth: Arc::new(Mutex::new(auth_service)),
+        ledgers: Arc::new(Mutex::new(HashMap::new())),
         ledger_dir: ledger_dir.clone(),
         auth_config: Arc::new(auth_config),
         login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),

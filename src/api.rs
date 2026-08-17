@@ -35,6 +35,8 @@ use crate::throttle::LoginThrottle;
 pub struct AppState {
     /// 共享库（users / 会话 / 设置）。
     pub auth: Arc<Mutex<BookkeepingService>>,
+    /// 每用户账本连接缓存（按 user_id；打开后复用，同一用户串行访问）。
+    pub ledgers: Arc<Mutex<HashMap<i64, Arc<tokio::sync::Mutex<BookkeepingService>>>>>,
     /// 独立账本文件目录。
     pub ledger_dir: PathBuf,
     pub auth_config: Arc<AuthConfig>,
@@ -302,11 +304,63 @@ fn lock_auth(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
 
 /// 打开某用户的账本服务（按值返回，SQLite WAL 支持多连接并发）。
 /// 每个用户一个独立账本文件，打开时补齐默认分类。
-fn lock_ledger(state: &AppState, user_id: i64) -> Result<BookkeepingService> {
+/// 某用户账本服务的持锁句柄：持有「该用户的账本连接锁」（owned），
+/// 既复用连接，也天然串行化同一用户的读写（SQLite 单写者）。
+pub struct LedgerGuard {
+    _connection: tokio::sync::OwnedMutexGuard<BookkeepingService>,
+}
+
+impl std::ops::Deref for LedgerGuard {
+    type Target = BookkeepingService;
+    fn deref(&self) -> &BookkeepingService {
+        &self._connection
+    }
+}
+
+impl std::ops::DerefMut for LedgerGuard {
+    fn deref_mut(&mut self) -> &mut BookkeepingService {
+        &mut self._connection
+    }
+}
+
+/// 取得某用户的账本服务：命中缓存直接复用连接（同一用户串行访问）；
+/// 首次访问时在 `spawn_blocking` 里打开/创建独立账本文件（schema 初始化
+/// 与迁移不进异步 worker 线程），并补齐默认分类。
+async fn lock_ledger(state: &AppState, user_id: i64) -> Result<LedgerGuard> {
+    let cached = {
+        let map = state
+            .ledgers
+            .lock()
+            .map_err(|_| KokuError::InvalidInput("ledger cache lock was poisoned".to_owned()))?;
+        map.get(&user_id).cloned()
+    };
+    if let Some(ledger) = cached {
+        let guard = ledger.lock_owned().await;
+        return Ok(LedgerGuard { _connection: guard });
+    }
+
+    // 未缓存：建连（含 schema/迁移）放到阻塞线程，避免拖住异步 worker。
     let path = state.ledger_dir.join(format!("ledger-{user_id}.db"));
-    let mut ledger = BookkeepingService::open(&path)?;
-    ledger.ensure_default_categories()?;
-    Ok(ledger)
+    let opened = tokio::task::spawn_blocking(move || -> Result<BookkeepingService> {
+        let mut ledger = BookkeepingService::open(&path)?;
+        ledger.ensure_default_categories()?;
+        Ok(ledger)
+    })
+    .await
+    .map_err(|error| KokuError::InvalidInput(format!("ledger open task failed: {error}")))??;
+
+    // 把 map 锁的作用域收窄到克隆 Arc 为止，避免 std MutexGuard 跨 await 持有。
+    let ledger = {
+        let mut map = state
+            .ledgers
+            .lock()
+            .map_err(|_| KokuError::InvalidInput("ledger cache lock was poisoned".to_owned()))?;
+        map.entry(user_id)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(opened)))
+            .clone()
+    };
+    let guard = ledger.lock_owned().await;
+    Ok(LedgerGuard { _connection: guard })
 }
 
 /// 把单个单元格转成 CSV 字段：含逗号/引号/换行时用引号包裹并转义引号。
@@ -643,7 +697,7 @@ async fn api_accounts(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Account>>>> {
-    let accounts = lock_ledger(&state, user.user_id)?.accounts()?;
+    let accounts = lock_ledger(&state, user.user_id).await?.accounts()?;
     Ok(Json(ApiResponse::new(accounts)))
 }
 
@@ -652,7 +706,7 @@ async fn api_create_account(
     State(state): State<AppState>,
     Json(request): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let account = service.create_account(
         request.name,
         request.account_type,
@@ -672,7 +726,7 @@ async fn api_update_account(
     AxumPath(account_id): AxumPath<i64>,
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<Json<ApiResponse<Account>>> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let account = service.update_account(
         account_id,
         request.name,
@@ -692,7 +746,7 @@ async fn api_adjust_balance(
     AxumPath(account_id): AxumPath<i64>,
     Json(request): Json<AdjustBalanceRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_ledger(&state, user.user_id)?.adjust_balance(
+    let transaction = lock_ledger(&state, user.user_id).await?.adjust_balance(
         account_id,
         request.amount,
         request.note,
@@ -704,7 +758,7 @@ async fn api_categories(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Category>>>> {
-    let categories = lock_ledger(&state, user.user_id)?.categories()?;
+    let categories = lock_ledger(&state, user.user_id).await?.categories()?;
     Ok(Json(ApiResponse::new(categories)))
 }
 
@@ -713,8 +767,9 @@ async fn api_create_category(
     State(state): State<AppState>,
     Json(request): Json<CreateCategoryRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Category>>)> {
-    let category =
-        lock_ledger(&state, user.user_id)?.create_category(request.name, request.kind)?;
+    let category = lock_ledger(&state, user.user_id)
+        .await?
+        .create_category(request.name, request.kind)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
 }
 
@@ -723,7 +778,9 @@ async fn api_delete_category(
     State(state): State<AppState>,
     AxumPath(category_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Category>>> {
-    let category = lock_ledger(&state, user.user_id)?.delete_category(category_id)?;
+    let category = lock_ledger(&state, user.user_id)
+        .await?
+        .delete_category(category_id)?;
     Ok(Json(ApiResponse::new(category)))
 }
 
@@ -731,7 +788,7 @@ async fn api_tags(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Tag>>>> {
-    let tags = lock_ledger(&state, user.user_id)?.all_tags()?;
+    let tags = lock_ledger(&state, user.user_id).await?.all_tags()?;
     Ok(Json(ApiResponse::new(tags)))
 }
 
@@ -740,7 +797,9 @@ async fn api_budgets(
     State(state): State<AppState>,
     Query(query): Query<BudgetQuery>,
 ) -> Result<Json<ApiResponse<Vec<Budget>>>> {
-    let budgets = lock_ledger(&state, user.user_id)?.budgets(query.year, query.month)?;
+    let budgets = lock_ledger(&state, user.user_id)
+        .await?
+        .budgets(query.year, query.month)?;
     Ok(Json(ApiResponse::new(budgets)))
 }
 
@@ -751,7 +810,7 @@ async fn api_set_budget(
     Query(query): Query<BudgetQuery>,
     Json(request): Json<SetBudgetRequest>,
 ) -> Result<Json<ApiResponse<Budget>>> {
-    let budget = lock_ledger(&state, user.user_id)?.set_budget(
+    let budget = lock_ledger(&state, user.user_id).await?.set_budget(
         category_id,
         query.year,
         query.month,
@@ -766,8 +825,11 @@ async fn api_clear_budget(
     AxumPath(category_id): AxumPath<i64>,
     Query(query): Query<BudgetQuery>,
 ) -> Result<Json<ApiResponse<Budget>>> {
-    let budget =
-        lock_ledger(&state, user.user_id)?.clear_budget(category_id, query.year, query.month)?;
+    let budget = lock_ledger(&state, user.user_id).await?.clear_budget(
+        category_id,
+        query.year,
+        query.month,
+    )?;
     Ok(Json(ApiResponse::new(budget)))
 }
 
@@ -775,7 +837,9 @@ async fn api_rollover_budgets(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    let copied = lock_ledger(&state, user.user_id)?.rollover_budgets_once(Utc::now())?;
+    let copied = lock_ledger(&state, user.user_id)
+        .await?
+        .rollover_budgets_once(Utc::now())?;
     Ok(Json(ApiResponse::new(
         serde_json::json!({ "copied": copied }),
     )))
@@ -785,7 +849,7 @@ async fn api_recurring_rules(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<RecurringRule>>>> {
-    let rules = lock_ledger(&state, user.user_id)?.recurring_rules()?;
+    let rules = lock_ledger(&state, user.user_id).await?.recurring_rules()?;
     Ok(Json(ApiResponse::new(rules)))
 }
 
@@ -794,15 +858,17 @@ async fn api_create_recurring(
     State(state): State<AppState>,
     Json(request): Json<CreateRecurringRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<RecurringRule>>)> {
-    let rule = lock_ledger(&state, user.user_id)?.create_recurring_rule(
-        request.kind,
-        request.account_id,
-        request.category_id,
-        request.amount,
-        request.note,
-        request.frequency,
-        request.next_due_at,
-    )?;
+    let rule = lock_ledger(&state, user.user_id)
+        .await?
+        .create_recurring_rule(
+            request.kind,
+            request.account_id,
+            request.category_id,
+            request.amount,
+            request.note,
+            request.frequency,
+            request.next_due_at,
+        )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(rule))))
 }
 
@@ -811,7 +877,9 @@ async fn api_delete_recurring(
     State(state): State<AppState>,
     AxumPath(rule_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<RecurringRule>>> {
-    let rule = lock_ledger(&state, user.user_id)?.delete_recurring_rule(rule_id)?;
+    let rule = lock_ledger(&state, user.user_id)
+        .await?
+        .delete_recurring_rule(rule_id)?;
     Ok(Json(ApiResponse::new(rule)))
 }
 
@@ -819,7 +887,7 @@ async fn api_run_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
-    let generated = lock_ledger(&state, user.user_id)?.run_recurring()?;
+    let generated = lock_ledger(&state, user.user_id).await?.run_recurring()?;
     Ok(Json(ApiResponse::new(generated)))
 }
 
@@ -827,7 +895,7 @@ async fn api_holdings(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Holding>>>> {
-    let holdings = lock_ledger(&state, user.user_id)?.holdings()?;
+    let holdings = lock_ledger(&state, user.user_id).await?.holdings()?;
     Ok(Json(ApiResponse::new(holdings)))
 }
 
@@ -836,7 +904,7 @@ async fn api_buy_stock(
     State(state): State<AppState>,
     Json(request): Json<TradeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_ledger(&state, user.user_id)?.buy_stock(
+    let transaction = lock_ledger(&state, user.user_id).await?.buy_stock(
         request.account_id,
         request.symbol,
         request.shares,
@@ -852,7 +920,7 @@ async fn api_sell_stock(
     State(state): State<AppState>,
     Json(request): Json<TradeRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_ledger(&state, user.user_id)?.sell_stock(
+    let transaction = lock_ledger(&state, user.user_id).await?.sell_stock(
         request.account_id,
         request.symbol,
         request.shares,
@@ -869,8 +937,9 @@ async fn api_set_holding_price(
     AxumPath(holding_id): AxumPath<i64>,
     Json(request): Json<SetPriceRequest>,
 ) -> Result<Json<ApiResponse<Holding>>> {
-    let holding =
-        lock_ledger(&state, user.user_id)?.set_holding_price(holding_id, request.price)?;
+    let holding = lock_ledger(&state, user.user_id)
+        .await?
+        .set_holding_price(holding_id, request.price)?;
     Ok(Json(ApiResponse::new(holding)))
 }
 
@@ -881,7 +950,7 @@ async fn api_transactions(
 ) -> Result<Json<ApiResponse<Vec<Transaction>>>> {
     let limit = query.limit.unwrap_or(500);
     let offset = query.offset.unwrap_or(0);
-    let service = lock_ledger(&state, user.user_id)?;
+    let service = lock_ledger(&state, user.user_id).await?;
     let transactions = match (query.year, query.month) {
         (Some(year), Some(month)) => service.transactions_in_month(year, month, limit, offset)?,
         (None, None) => service.transactions(limit, offset)?,
@@ -899,7 +968,7 @@ async fn api_export_transactions(
     State(state): State<AppState>,
     Query(query): Query<ExportQuery>,
 ) -> Result<Response> {
-    let service = lock_ledger(&state, user.user_id)?;
+    let service = lock_ledger(&state, user.user_id).await?;
     // 分页拉全量（复用既有 1000 上限，逐页累积）。
     let mut all = Vec::new();
     let mut offset = 0_u32;
@@ -1003,7 +1072,7 @@ async fn api_create_transaction(
     Json(request): Json<CreateTransactionRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
     let occurred_at = request.occurred_at.unwrap_or_else(Utc::now);
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let account = service.account(request.account_id)?;
     let currency = request.currency.unwrap_or_else(|| account.currency.clone());
     let settled_amount = match request.settled_amount {
@@ -1073,7 +1142,7 @@ async fn api_create_transfer(
     State(state): State<AppState>,
     Json(request): Json<CreateTransferRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_ledger(&state, user.user_id)?.record_transfer(
+    let transaction = lock_ledger(&state, user.user_id).await?.record_transfer(
         request.from_account_id,
         request.to_account_id,
         request.source_amount,
@@ -1089,7 +1158,9 @@ async fn api_void_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)?.void_transaction(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)
+        .await?
+        .void_transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -1098,7 +1169,9 @@ async fn api_restore_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)?.restore_transaction(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)
+        .await?
+        .restore_transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -1107,7 +1180,9 @@ async fn api_delete_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<StatusCode> {
-    lock_ledger(&state, user.user_id)?.delete_transaction(transaction_id)?;
+    lock_ledger(&state, user.user_id)
+        .await?
+        .delete_transaction(transaction_id)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1117,7 +1192,7 @@ async fn api_update_transaction(
     AxumPath(transaction_id): AxumPath<i64>,
     Json(request): Json<UpdateTransactionRequest>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     service.update_transaction(
         transaction_id,
         request.note,
@@ -1159,8 +1234,11 @@ async fn api_upload_receipt(
         KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
     })?;
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
-    let receipt =
-        lock_ledger(&state, user.user_id)?.attach_receipt(transaction_id, content_type, data)?;
+    let receipt = lock_ledger(&state, user.user_id).await?.attach_receipt(
+        transaction_id,
+        content_type,
+        data,
+    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 
@@ -1169,7 +1247,9 @@ async fn api_get_receipt(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Response> {
-    let (content_type, bytes) = lock_ledger(&state, user.user_id)?.receipt_bytes(transaction_id)?;
+    let (content_type, bytes) = lock_ledger(&state, user.user_id)
+        .await?
+        .receipt_bytes(transaction_id)?;
     let mut response = Response::new(axum::body::Body::from(bytes));
     let header_value = HeaderValue::from_str(&content_type)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
@@ -1183,7 +1263,7 @@ async fn api_deposits(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Deposit>>>> {
-    let deposits = lock_ledger(&state, user.user_id)?.deposits()?;
+    let deposits = lock_ledger(&state, user.user_id).await?.deposits()?;
     Ok(Json(ApiResponse::new(deposits)))
 }
 
@@ -1192,7 +1272,7 @@ async fn api_create_deposit(
     State(state): State<AppState>,
     Json(request): Json<CreateDepositRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Deposit>>)> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let source = service.account(request.from_account_id)?;
     let currency = request.currency.unwrap_or_else(|| source.currency.clone());
     let deposit = service.create_deposit(
@@ -1212,8 +1292,9 @@ async fn api_settle_deposit(
     AxumPath(deposit_id): AxumPath<i64>,
     Json(request): Json<SettleDepositRequest>,
 ) -> Result<Json<ApiResponse<DepositSettlement>>> {
-    let settlement =
-        lock_ledger(&state, user.user_id)?.settle_deposit(deposit_id, request.to_account_id)?;
+    let settlement = lock_ledger(&state, user.user_id)
+        .await?
+        .settle_deposit(deposit_id, request.to_account_id)?;
     Ok(Json(ApiResponse::new(settlement)))
 }
 
@@ -1222,7 +1303,9 @@ async fn api_mark_reimbursable(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)?.mark_reimbursable(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)
+        .await?
+        .mark_reimbursable(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -1231,7 +1314,9 @@ async fn api_unmark_reimbursable(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)?.unmark_reimbursable(transaction_id)?;
+    let transaction = lock_ledger(&state, user.user_id)
+        .await?
+        .unmark_reimbursable(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -1240,7 +1325,7 @@ async fn api_reimburse(
     State(state): State<AppState>,
     Json(request): Json<ReimburseRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let expense = service.transaction(request.expense_id)?;
     let currency = request.currency.unwrap_or_else(|| expense.currency.clone());
     let income = service.reimburse(
@@ -1258,7 +1343,7 @@ async fn api_loans(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<Loan>>>> {
-    let loans = lock_ledger(&state, user.user_id)?.loans()?;
+    let loans = lock_ledger(&state, user.user_id).await?.loans()?;
     Ok(Json(ApiResponse::new(loans)))
 }
 
@@ -1267,7 +1352,7 @@ async fn api_create_loan(
     State(state): State<AppState>,
     Json(request): Json<CreateLoanRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let account = service.account(request.account_id)?;
     let currency = request.currency.unwrap_or_else(|| account.currency.clone());
     let loan = service.create_loan(
@@ -1288,7 +1373,7 @@ async fn api_repay_loan(
     AxumPath(loan_id): AxumPath<i64>,
     Json(request): Json<RepayLoanRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Loan>>)> {
-    let mut service = lock_ledger(&state, user.user_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
     let loan = service.loan(loan_id)?;
     let currency = request.currency.unwrap_or_else(|| loan.currency.clone());
     let updated = service.repay_loan(
@@ -1311,9 +1396,13 @@ async fn api_monthly_summary(
     let year = query.year.unwrap_or_else(|| now.year());
     let month = query.month.unwrap_or_else(|| now.month());
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_ledger(&state, user.user_id)?.transaction_currencies(year, month)?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .transaction_currencies(year, month)?;
     ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
-    let summary = lock_ledger(&state, user.user_id)?.monthly_summary(year, month, &display)?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .monthly_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -1326,9 +1415,13 @@ async fn api_cash_flow_summary(
     let year = query.year.unwrap_or_else(|| now.year());
     let month = query.month.unwrap_or_else(|| now.month());
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_ledger(&state, user.user_id)?.transaction_currencies(year, month)?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .transaction_currencies(year, month)?;
     ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
-    let summary = lock_ledger(&state, user.user_id)?.cash_flow_summary(year, month, &display)?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .cash_flow_summary(year, month, &display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -1349,11 +1442,17 @@ async fn api_tag_summary(
         ));
     }
     let currencies =
-        lock_ledger(&state, user.user_id)?.tag_currencies(&tags, query.year, query.month)?;
+        lock_ledger(&state, user.user_id)
+            .await?
+            .tag_currencies(&tags, query.year, query.month)?;
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
     ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
-    let summary =
-        lock_ledger(&state, user.user_id)?.tag_summary(&tags, query.year, query.month, &display)?;
+    let summary = lock_ledger(&state, user.user_id).await?.tag_summary(
+        &tags,
+        query.year,
+        query.month,
+        &display,
+    )?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -1364,9 +1463,13 @@ async fn api_monthly_trend(
 ) -> Result<Json<ApiResponse<Vec<MonthlyTrendPoint>>>> {
     let months = query.months.unwrap_or(12);
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_ledger(&state, user.user_id)?.trend_currencies(months)?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .trend_currencies(months)?;
     ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
-    let trend = lock_ledger(&state, user.user_id)?.monthly_trend(months, &display)?;
+    let trend = lock_ledger(&state, user.user_id)
+        .await?
+        .monthly_trend(months, &display)?;
     Ok(Json(ApiResponse::new(trend)))
 }
 
@@ -1376,9 +1479,13 @@ async fn api_balance_summary(
     Query(query): Query<BalanceQuery>,
 ) -> Result<Json<ApiResponse<BalanceSummary>>> {
     let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
-    let currencies = lock_ledger(&state, user.user_id)?.balance_currencies()?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .balance_currencies()?;
     ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
-    let summary = lock_ledger(&state, user.user_id)?.balance_summary(&display)?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .balance_summary(&display)?;
     Ok(Json(ApiResponse::new(summary)))
 }
 
@@ -1392,7 +1499,7 @@ async fn ensure_summary_rates(
 ) -> Result<()> {
     let today = Utc::now().date_naive();
     let missing: Vec<(String, String)> = {
-        let service = lock_ledger(state, user_id)?;
+        let service = lock_ledger(state, user_id).await?;
         let mut missing = Vec::new();
         for currency in currencies {
             if currency.eq_ignore_ascii_case(display) {
@@ -1410,7 +1517,7 @@ async fn ensure_summary_rates(
     for (from, to) in missing {
         match state.rates.fetch(&from, &to).await {
             Ok(quote) => {
-                lock_ledger(state, user_id)?.store_rate(&quote)?;
+                lock_ledger(state, user_id).await?.store_rate(&quote)?;
             }
             Err(error) => {
                 return Err(KokuError::InvalidInput(format!(
@@ -1444,7 +1551,10 @@ async fn api_rate_hint(
 
     let today = Utc::now().date_naive();
     let mut stale_fallback: Option<RateQuote> = None;
-    if let Some(cached) = lock_ledger(&state, user.user_id)?.latest_rate(&from, &to)? {
+    if let Some(cached) = lock_ledger(&state, user.user_id)
+        .await?
+        .latest_rate(&from, &to)?
+    {
         if rate_is_fresh(&cached.date, today) {
             return Ok(Json(ApiResponse::new(cached)));
         }
@@ -1452,7 +1562,9 @@ async fn api_rate_hint(
     }
     match state.rates.fetch(&from, &to).await {
         Ok(quote) => {
-            lock_ledger(&state, user.user_id)?.store_rate(&quote)?;
+            lock_ledger(&state, user.user_id)
+                .await?
+                .store_rate(&quote)?;
             Ok(Json(ApiResponse::new(quote)))
         }
         Err(error) => {
@@ -1599,5 +1711,34 @@ mod tests {
         assert_eq!(neutralize_formula("@cmd"), "'@cmd");
         // 非开头的 =+-@ 不受影响。
         assert_eq!(neutralize_formula("abc=1"), "abc=1");
+    }
+}
+
+#[cfg(test)]
+mod send_check {
+    use super::*;
+    use crate::auth::AuthConfig;
+
+    #[tokio::test]
+    async fn ledger_guard_and_lock_future_are_send() {
+        fn is_send<T: Send>() {}
+        is_send::<BookkeepingService>();
+        is_send::<LedgerGuard>();
+        is_send::<AppState>();
+        let state = AppState {
+            auth: Arc::new(Mutex::new(BookkeepingService::in_memory().unwrap())),
+            ledgers: Arc::new(Mutex::new(HashMap::new())),
+            ledger_dir: std::env::temp_dir(),
+            auth_config: Arc::new(AuthConfig {
+                username: String::from("t"),
+                password_hash: String::from("h"),
+                session_ttl_seconds: 3600,
+                cookie_secure: false,
+            }),
+            login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+            rates: Arc::new(RateClient::new()),
+        };
+        fn assert_send<F: std::future::Future + Send>(_: F) {}
+        assert_send(lock_ledger(&state, 1));
     }
 }
