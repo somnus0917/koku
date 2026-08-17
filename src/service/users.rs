@@ -38,7 +38,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, username, password_hash, role, enabled, created_at
+                "SELECT id, username, password_hash, role, enabled, created_at, totp_enabled
                  FROM users WHERE id = ?1",
                 [id],
                 user_row,
@@ -52,7 +52,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, username, password_hash, role, enabled, created_at
+                "SELECT id, username, password_hash, role, enabled, created_at, totp_enabled
                  FROM users WHERE username = ?1",
                 [username.trim()],
                 user_row,
@@ -63,7 +63,7 @@ impl BookkeepingService {
 
     pub fn users(&self) -> Result<Vec<User>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, username, password_hash, role, enabled, created_at
+            "SELECT id, username, password_hash, role, enabled, created_at, totp_enabled
              FROM users ORDER BY id",
         )?;
         let rows = statement.query_map([], user_row)?;
@@ -109,6 +109,57 @@ impl BookkeepingService {
         tx.execute("DELETE FROM users WHERE id = ?1", [user_id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// 保存待启用的 TOTP 密钥（启用前不生效）。
+    pub fn set_user_totp_pending(&mut self, user_id: i64, secret: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE users SET totp_pending_secret = ?1 WHERE id = ?2",
+            params![secret, user_id],
+        )?;
+        Ok(())
+    }
+
+    /// 读取待启用的 TOTP 密钥；用户不存在时报错，未生成过返回 `None`。
+    pub fn user_totp_pending(&self, user_id: i64) -> Result<Option<String>> {
+        self.user(user_id)?;
+        Ok(self.conn.query_row(
+            "SELECT totp_pending_secret FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )?)
+    }
+
+    /// 启用 TOTP：把待启用密钥转为正式密钥并置 enabled=1。
+    pub fn enable_user_totp(&mut self, user_id: i64, secret: &str) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "UPDATE users SET totp_secret = ?1, totp_enabled = 1, totp_pending_secret = NULL WHERE id = ?2",
+            params![secret, user_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 关闭 TOTP：清除密钥并置 enabled=0。
+    pub fn disable_user_totp(&mut self, user_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_pending_secret = NULL WHERE id = ?1",
+            [user_id],
+        )?;
+        Ok(())
+    }
+
+    /// 读取正式启用的 TOTP 密钥（仅服务端内部使用，不对外暴露）。
+    pub fn user_totp_secret(&self, user_id: i64) -> Result<Option<String>> {
+        self.user(user_id)?;
+        Ok(self.conn.query_row(
+            "SELECT totp_secret FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get::<_, Option<String>>(0),
+        )?)
     }
 }
 
@@ -188,4 +239,42 @@ fn migrate_legacy_ledger(source_path: &Path, ledger_path: &Path) -> Result<()> {
     }
     ledger.conn.execute("DETACH DATABASE src", [])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::BookkeepingService;
+
+    #[test]
+    fn totp_secret_lifecycle_pending_then_enable_then_disable() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let user = service.create_user("alice", "hash", UserRole::Admin)?;
+        assert!(!service.user(user.id)?.totp_enabled);
+        assert_eq!(service.user_totp_pending(user.id)?, None);
+
+        service.set_user_totp_pending(user.id, "MZXW6YTBOI")?;
+        assert_eq!(
+            service.user_totp_pending(user.id)?.as_deref(),
+            Some("MZXW6YTBOI")
+        );
+        // 未启用时正式密钥为空
+        assert_eq!(service.user_totp_secret(user.id)?, None);
+        assert!(!service.user(user.id)?.totp_enabled);
+
+        service.enable_user_totp(user.id, "MZXW6YTBOI")?;
+        let enabled = service.user(user.id)?;
+        assert!(enabled.totp_enabled);
+        assert_eq!(
+            service.user_totp_secret(user.id)?.as_deref(),
+            Some("MZXW6YTBOI")
+        );
+        // 启用后 pending 清空
+        assert_eq!(service.user_totp_pending(user.id)?, None);
+
+        service.disable_user_totp(user.id)?;
+        assert!(!service.user(user.id)?.totp_enabled);
+        assert_eq!(service.user_totp_secret(user.id)?, None);
+        Ok(())
+    }
 }

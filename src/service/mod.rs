@@ -29,14 +29,17 @@ mod import;
 mod loans;
 mod rates;
 mod receipts;
+mod reconciliations;
 mod recurring;
 mod reimbursements;
+mod reminders;
 mod summaries;
 mod tags;
 mod transactions;
 mod users;
 
 pub use import::ImportResult;
+pub use reminders::{reminder_digest_text, ReminderItem};
 pub(crate) use tags::validate_tag_name;
 pub use users::ensure_multi_user;
 
@@ -177,6 +180,19 @@ impl BookkeepingService {
                 PRIMARY KEY (base, quote, date)
             );
 
+            CREATE TABLE IF NOT EXISTS reconciliations (
+                id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id                INTEGER NOT NULL REFERENCES accounts(id),
+                statement_date            TEXT NOT NULL,
+                statement_balance         TEXT NOT NULL,
+                book_balance              TEXT NOT NULL,
+                status                    TEXT NOT NULL CHECK (status IN ('open', 'completed', 'cancelled')),
+                opened_at                 TEXT NOT NULL,
+                completed_at              TEXT,
+                adjustment_transaction_id INTEGER REFERENCES transactions(id),
+                note                      TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS transactions (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade', 'deposit')),
@@ -218,7 +234,10 @@ impl BookkeepingService {
                 password_hash TEXT NOT NULL,
                 role          TEXT NOT NULL CHECK (role IN ('admin', 'member')),
                 enabled       INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT NOT NULL
+                created_at    TEXT NOT NULL,
+                totp_secret       TEXT,
+                totp_enabled      INTEGER NOT NULL DEFAULT 0,
+                totp_pending_secret TEXT
             );
 
             CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -292,6 +311,19 @@ impl BookkeepingService {
                 "ALTER TABLE auth_sessions ADD COLUMN user_id INTEGER REFERENCES users(id)",
                 [],
             )?;
+        }
+        // —— TOTP 二步验证列 ——
+        if !table_has_column(&conn, "users", "totp_secret")? {
+            conn.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT", [])?;
+        }
+        if !table_has_column(&conn, "users", "totp_enabled")? {
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        if !table_has_column(&conn, "users", "totp_pending_secret")? {
+            conn.execute("ALTER TABLE users ADD COLUMN totp_pending_secret TEXT", [])?;
         }
         // SQLite 无法修改 CHECK 约束：旧表按 asset/liability 建模，需要整表重建。
         // 检测依据：表定义中缺少新类型标记（'cash'/'loan'），无论是否有旧 CHECK。
@@ -368,7 +400,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT u.id, u.username, u.password_hash, u.role, u.enabled, u.created_at
+                "SELECT u.id, u.username, u.password_hash, u.role, u.enabled, u.created_at, u.totp_enabled
                  FROM auth_sessions s
                  JOIN users u ON u.id = s.user_id
                  WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.enabled = 1",
@@ -578,7 +610,7 @@ impl BookkeepingService {
 
 type AccountRow = (i64, String, String, String, String, Option<String>);
 type CategoryRow = (i64, String, String);
-type UserRow = (i64, String, String, String, i64, String);
+type UserRow = (i64, String, String, String, i64, String, i64);
 type TransactionRow = (
     i64,
     String,
@@ -620,6 +652,7 @@ fn user_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRow> {
         row.get(3)?,
         row.get(4)?,
         row.get(5)?,
+        row.get(6)?,
     ))
 }
 
@@ -631,6 +664,7 @@ fn user_from_row(row: UserRow) -> Result<User> {
         role: UserRole::from_db(&row.3)?,
         enabled: row.4 != 0,
         created_at: parse_timestamp(&row.5)?,
+        totp_enabled: row.6 != 0,
     })
 }
 

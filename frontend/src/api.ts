@@ -3,6 +3,7 @@ import type {
   AccountType,
   AppData,
   AuthSession,
+  BackupMeta,
   BalanceSummary,
   Budget,
   CashFlowSummary,
@@ -11,6 +12,7 @@ import type {
   Deposit,
   DepositSettlement,
   Holding,
+  ImportResult,
   Loan,
   LoanType,
   MonthlySummary,
@@ -19,12 +21,14 @@ import type {
   Receipt,
   RecurrenceFrequency,
   RecurringRule,
+  RollingSummary,
   Tag,
   TagSummary,
   Transaction,
   TransactionKind,
   User,
-  UserRole
+  UserRole,
+  YearlySummary
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -540,4 +544,99 @@ export function repayLoan(
 export function rateHint(from: string, to: string): Promise<RateQuote> {
   const query = new URLSearchParams({ from, to });
   return request(`/api/rates?${query.toString()}`);
+}
+
+/** 年度汇总：某自然年的逐月收支 + 全年合计 + 分类明细。 */
+export function loadYearlySummary(year: number, currency: string): Promise<YearlySummary> {
+  const query = new URLSearchParams({ year: String(year), currency });
+  return request<YearlySummary>(`/api/summary/yearly?${query.toString()}`);
+}
+
+/** 滚动平均：最近 `months` 个月的收支趋势 + trailing window 均值。 */
+export function loadRollingSummary(
+  months: number,
+  window: number,
+  currency: string
+): Promise<RollingSummary> {
+  const query = new URLSearchParams({
+    months: String(months),
+    window: String(window),
+    currency
+  });
+  return request<RollingSummary>(`/api/summary/rolling?${query.toString()}`);
+}
+
+/** 批量导入交易（CSV/QIF/OFX）；multipart 字段见后端契约。 */
+export function importTransactions(
+  file: File,
+  input: { format?: string; account_id: number; category_id?: number; currency?: string }
+): Promise<ImportResult> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("account_id", String(input.account_id));
+  if (input.format) form.append("format", input.format);
+  if (input.category_id !== undefined) {
+    form.append("category_id", String(input.category_id));
+  }
+  if (input.currency) form.append("currency", input.currency);
+  return fetch(`${API_BASE}/api/transactions/import`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form
+  }).then(async (response) => {
+    const payload = (await response.json().catch(() => ({}))) as Partial<Envelope<ImportResult>> & {
+      error?: string;
+    };
+    if (!response.ok) {
+      if (response.status === 401) {
+        window.dispatchEvent(new Event("koku:unauthorized"));
+      }
+      throw new ApiError(payload.error ?? `导入失败（${response.status}）`, response.status);
+    }
+    if (payload.data === undefined) {
+      throw new Error("服务返回了无效数据");
+    }
+    return payload.data;
+  });
+}
+
+/** 管理员：列出全部备份（按时间倒序）。 */
+export function listBackups(): Promise<BackupMeta[]> {
+  return request<BackupMeta[]>("/api/admin/backups");
+}
+
+/** 管理员：立即创建一份备份。 */
+export function createBackup(): Promise<BackupMeta> {
+  return request<BackupMeta>("/api/admin/backup", { method: "POST" });
+}
+
+/** 管理员：从备份恢复（覆盖共享库与全部账本文件，所有会话失效）。 */
+export function restoreBackup(id: string): Promise<{ restored: boolean }> {
+  return request<{ restored: boolean }>(`/api/admin/backups/${id}/restore`, {
+    method: "POST"
+  });
+}
+
+/** 管理员：下载备份 zip 并触发浏览器保存。 */
+export async function downloadBackup(id: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/admin/backups/${id}/download`, {
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    if (response.status === 401) {
+      window.dispatchEvent(new Event("koku:unauthorized"));
+    }
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(payload.error ?? `下载失败（${response.status}）`, response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  link.download = disposition.match(/filename="?([^"]+)"?/)?.[1] ?? `koku-${id}.zip`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }

@@ -9,10 +9,11 @@ import {
   PiggyBank,
   RefreshCcw,
   RotateCcw,
+  Upload,
   X,
   type LucideIcon
 } from "lucide-react";
-import { rateHint } from "../api";
+import { rateHint, importTransactions } from "../api";
 import type { createTransaction, createTransfer } from "../api";
 import {
   availableCurrencies,
@@ -30,6 +31,7 @@ import type {
   Category,
   CategoryKind,
   Deposit,
+  ImportResult,
   Loan,
   LoanType,
   RateQuote,
@@ -1230,8 +1232,7 @@ export function PasswordModal({
 }: {
   onClose: () => void;
   onSubmit: (oldPassword: string, newPassword: string) => Promise<void>;
-}) {
-  const [oldPassword, setOldPassword] = useState("");
+}) {  const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -1272,6 +1273,145 @@ export function PasswordModal({
           <button className="primary-button" disabled={submitting || !oldPassword || !newPassword || !confirm}>{submitting && <LoaderCircle className="spin" size={17} />}保存并重新登录</button>
         </div>
       </form>
+    </ModalShell>
+  );
+}
+
+/** 批量导入交易：选择账单文件与目标账户，导入后展示结果摘要（成功/重复/失败 + 问题行）。
+ *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onSubmit
+ *  （父级按 mutate 模式刷新并提示），重复导入由后端指纹去重兜底。 */
+export function ImportModal({
+  accounts,
+  categories,
+  onClose,
+  onSubmit
+}: {
+  accounts: Account[];
+  categories: Category[];
+  onClose: () => void;
+  onSubmit: (file: File, input: { format?: string; account_id: number; category_id?: number; currency?: string }) => Promise<void>;
+}) {
+  const [accountId, setAccountId] = useState("");
+  const [format, setFormat] = useState<"auto" | "csv" | "qif" | "ofx">("auto");
+  const [categoryId, setCategoryId] = useState("");
+  const [currency, setCurrency] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ImportResult | null>(null);
+
+  const input = (): { format?: string; account_id: number; category_id?: number; currency?: string } => ({
+    format: format === "auto" ? undefined : format,
+    account_id: Number(accountId),
+    category_id: categoryId ? Number(categoryId) : undefined,
+    currency: currency.trim() || undefined
+  });
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!file) return;
+    setSubmitting(true); setError(null);
+    try {
+      setResult(await importTransactions(file, input()));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "导入失败");
+      setSubmitting(false);
+    }
+  };
+
+  const finish = async () => {
+    if (file) {
+      try {
+        await onSubmit(file, input());
+      } catch {
+        // 重复导入由后端去重兜底；此处失败也不阻塞关闭。
+      }
+    }
+    onClose();
+  };
+
+  return (
+    <ModalShell eyebrow="IMPORT" title="导入交易" onClose={onClose}>
+      {result ? (
+        <div className="import-result">
+          <div className="import-summary">
+            <span className="import-count ok"><strong>{result.imported}</strong>成功导入</span>
+            <span className="import-count skip"><strong>{result.skipped_duplicates}</strong>重复跳过</span>
+            <span className={`import-count ${result.failed > 0 ? "bad" : ""}`}><strong>{result.failed}</strong>失败</span>
+          </div>
+          {result.issues.length > 0 && (
+            <div className="import-issues" aria-label="导入问题明细">
+              <div className="import-issues-head">以下 {result.issues.length} 行被跳过或失败：</div>
+              {result.issues.map((issue, index) => (
+                <div className="import-issue" key={index}>
+                  <span>第 {issue.line} 行</span>
+                  <span>{issue.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="fx-hint">
+            已导入 {result.format.toUpperCase()} 到该账户。点击「完成」刷新账本并提示结果。
+          </p>
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+            <button type="button" className="primary-button" onClick={() => void finish()}>完成</button>
+          </div>
+        </div>
+      ) : (
+        <form className="entry-form" onSubmit={submit}>
+          <div className="deposit-info">
+            <p>从账单文件批量导入流水，支持 CSV / QIF / OFX；格式可留空自动识别。</p>
+          </div>
+          <div className="form-grid">
+            <label><span>目标账户</span>
+              <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="" disabled>选择账户</option>
+                {accounts.map((account) => (
+                  <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
+                ))}
+              </select>
+            </label>
+            <label><span>文件格式</span>
+              <select value={format} onChange={(e) => setFormat(e.target.value as "auto" | "csv" | "qif" | "ofx")}>
+                <option value="auto">自动识别</option>
+                <option value="csv">CSV</option>
+                <option value="qif">QIF</option>
+                <option value="ofx">OFX</option>
+              </select>
+            </label>
+            <label className="span-two"><span>默认分类（可选）</span>
+              <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">不指定（仅 Koku 导出 CSV 可带分类）</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.kind === "income" ? "收入 · " : "支出 · "}{category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label><span>默认币种（可选）</span>
+              <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="例如 CNY" />
+            </label>
+            <label className="span-two"><span>账单文件</span>
+              <input
+                required
+                type="file"
+                accept=".csv,.qif,.ofx"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+          </div>
+          {error && <div className="form-error">{error}</div>}
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+            <button className="primary-button" disabled={submitting || !file || !accountId}>
+              {submitting ? <LoaderCircle className="spin" size={17} /> : <Upload size={16} />}
+              {submitting ? "正在导入…" : "开始导入"}
+            </button>
+          </div>
+        </form>
+      )}
     </ModalShell>
   );
 }

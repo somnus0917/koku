@@ -46,6 +46,8 @@ pub struct User {
     pub role: UserRole,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
+    /// 是否已启用 TOTP 二步验证。
+    pub totp_enabled: bool,
 }
 
 /// 登录会话返回给前端的用户信息。
@@ -54,6 +56,8 @@ pub struct AuthSession {
     pub id: i64,
     pub username: String,
     pub role: UserRole,
+    /// 当前用户是否启用 TOTP（前端据此展示二步验证设置入口）。
+    pub totp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -414,6 +418,8 @@ pub struct Holding {
     pub cost_basis: Decimal,
     pub last_price: Option<Decimal>,
     pub average_cost: Decimal,
+    /// 市价最近更新时间（手动设置或行情拉取）；从未设置过为 None。
+    pub updated_at: Option<DateTime<Utc>>,
 }
 
 /// 交易的小票/发票附件元数据（不含图片字节）。
@@ -541,6 +547,51 @@ pub struct RollingSummary {
     /// 平均窗口（月）。
     pub window: u32,
     pub points: Vec<RollingPoint>,
+}
+
+/// 账户对账状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconciliationStatus {
+    /// 进行中：已创建，尚未完成/取消。
+    Open,
+    /// 已完成：必要时生成了对账调整流水。
+    Completed,
+    /// 已取消：不产生任何调整。
+    Cancelled,
+}
+
+impl ReconciliationStatus {
+    pub fn from_db(value: &str) -> Result<Self> {
+        match value {
+            "open" => Ok(Self::Open),
+            "completed" => Ok(Self::Completed),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(KokuError::InvalidInput(format!(
+                "unknown reconciliation status in database: {other}"
+            ))),
+        }
+    }
+}
+
+/// 账户对账：以对账单余额为目标，核对账面余额并在完成时自动生成调整流水。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reconciliation {
+    pub id: i64,
+    pub account_id: i64,
+    /// 对账单日期（YYYY-MM-DD）。
+    pub statement_date: String,
+    /// 对账单目标余额。
+    pub statement_balance: Decimal,
+    /// 开始对账时的账面余额快照（供参考；调整以完成时的实际余额为准）。
+    pub book_balance: Decimal,
+    pub status: ReconciliationStatus,
+    pub opened_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    /// 完成时自动生成的对账调整流水（差额为零时为 None）。
+    pub adjustment_transaction_id: Option<i64>,
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

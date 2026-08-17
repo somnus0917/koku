@@ -14,7 +14,7 @@ use crate::service::BookkeepingService;
 impl BookkeepingService {
     pub fn holdings(&self) -> Result<Vec<Holding>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, account_id, symbol, shares, cost_basis, last_price
+            "SELECT id, account_id, symbol, shares, cost_basis, last_price, updated_at
              FROM holdings ORDER BY symbol, account_id",
         )?;
         let rows = statement.query_map([], holding_row)?;
@@ -25,7 +25,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, account_id, symbol, shares, cost_basis, last_price FROM holdings WHERE id = ?1",
+                "SELECT id, account_id, symbol, shares, cost_basis, last_price, updated_at FROM holdings WHERE id = ?1",
                 [id],
                 holding_row,
             )
@@ -256,7 +256,15 @@ fn normalize_symbol(value: &str) -> Result<String> {
     Ok(symbol)
 }
 
-type HoldingRow = (i64, i64, String, String, String, Option<String>);
+type HoldingRow = (
+    i64,
+    i64,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 fn holding_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HoldingRow> {
     Ok((
@@ -266,6 +274,7 @@ fn holding_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HoldingRow> {
         row.get(3)?,
         row.get(4)?,
         row.get(5)?,
+        row.get(6)?,
     ))
 }
 
@@ -273,6 +282,7 @@ fn holding_from_row(row: HoldingRow) -> Result<Holding> {
     let shares = decimal_from_db(&row.3)?;
     let cost_basis = decimal_from_db(&row.4)?;
     let last_price = row.5.as_deref().map(decimal_from_db).transpose()?;
+    let updated_at = row.6.as_deref().map(parse_timestamp).transpose()?;
     let average_cost = if shares.is_zero() {
         Decimal::ZERO
     } else {
@@ -286,5 +296,6 @@ fn holding_from_row(row: HoldingRow) -> Result<Holding> {
         cost_basis,
         last_price,
         average_cost,
+        updated_at,
     })
 }

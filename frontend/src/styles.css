@@ -1726,7 +1726,8 @@ button:disabled {
   box-shadow: 0 2px 7px rgba(20, 24, 20, 0.07);
 }
 
-.export-button {
+.export-button,
+.import-button {
   flex: 0 0 auto;
   height: 42px;
   padding: 0 13px;
@@ -1735,7 +1736,8 @@ button:disabled {
   background: var(--surface);
 }
 
-.export-button:disabled {
+.export-button:disabled,
+.import-button:disabled {
   opacity: 0.6;
   cursor: default;
 }
@@ -2945,4 +2947,259 @@ button:disabled {
   color: var(--text-faint);
   font-size: 12px;
   text-align: center;
+}
+
+/* —— 年度汇总 / 滚动平均面板 —— */
+.year-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.year-selector .icon-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.year-selector strong {
+  min-width: 66px;
+  color: var(--text);
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 17px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.rolling-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.rolling-controls label {
+  display: grid;
+  gap: 4px;
+}
+
+.rolling-controls label > span {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.rolling-controls input {
+  width: 72px;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.rolling-controls input:focus {
+  border-color: var(--accent);
+}
+
+.trend-series.avg {
+  stroke-dasharray: 5 5;
+  stroke-width: 2;
+}
+
+.rolling-legend span.avg i {
+  border: 2px dashed currentColor;
+  background: transparent;
+}
+
+.rolling-hint {
+  margin: 8px 0 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-align: center;
+}
+
+.panel-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.yearly-chart {
+  margin-top: 18px;
+}
+
+.yearly-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.yearly-bar.income { fill: var(--income); }
+.yearly-bar.expense { fill: var(--expense); }
+
+.yearly-categories {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 26px;
+  margin-top: 22px;
+}
+
+.yearly-category-group h3 {
+  margin: 0 0 12px;
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.cashflow-list {
+  display: grid;
+  gap: 12px;
+}
+
+.cashflow-item {
+  display: grid;
+  grid-template-columns: 25px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.cashflow-item > span {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cashflow-item em {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.cashflow-item strong {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 860px) {
+  .yearly-categories {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+
+/* —— 批量导入结果 —— */
+.import-result {
+  padding: 22px 26px 26px;
+}
+
+.import-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.import-count {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.import-count strong {
+  color: var(--text);
+  font-family: Georgia, "Noto Serif SC", serif;
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.import-count.ok { border-top: 3px solid var(--income); }
+.import-count.skip { border-top: 3px solid var(--transfer); }
+.import-count.bad { border-top: 3px solid var(--expense); }
+.import-count.bad strong { color: var(--expense); }
+
+.import-issues {
+  display: grid;
+  gap: 6px;
+  max-height: 210px;
+  margin-top: 15px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--expense) 26%, var(--border));
+  border-radius: 11px;
+  background: var(--expense-soft);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.import-issues-head {
+  color: var(--expense);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.import-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--expense);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.import-issue > span:first-child {
+  flex: 0 0 auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-issue > span:last-child {
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* —— 系统管理（备份/恢复） —— */
+.backup-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 15px 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--expense) 28%, transparent);
+  border-radius: 11px;
+  background: var(--expense-soft);
+  color: var(--expense);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.backup-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.row-action.danger {
+  color: var(--expense);
+}
+
+.row-action.danger:hover:not(:disabled) {
+  background: var(--expense-soft);
+  color: var(--expense);
 }

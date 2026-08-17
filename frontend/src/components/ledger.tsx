@@ -10,6 +10,8 @@ import {
   ChartNoAxesCombined,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleCheck,
   CircleDollarSign,
   CreditCard,
@@ -31,18 +33,20 @@ import {
   Tags,
   Trash2,
   TrendingUp,
+  Upload,
   WalletCards,
   X,
   type LucideIcon
 } from "lucide-react";
 import { buildDonutGradient, categoryVisual, formatDate, formatMoney, healthScore } from "../lib";
-import { exportTransactions, loadTagSummary, loadTrend, rateHint, receiptUrl } from "../api";
+import { exportTransactions, loadRollingSummary, loadTagSummary, loadTrend, loadYearlySummary, rateHint, receiptUrl } from "../api";
 import { CategoryAvatar } from "./avatar";
 import type {
   Account,
   AccountType,
   AppData,
   Budget,
+  CashFlowItem,
   CashFlowSummary,
   Category,
   CategoryKind,
@@ -52,10 +56,12 @@ import type {
   MonthlySummary,
   MonthlyTrendPoint,
   RecurringRule,
+  RollingSummary,
   Tag,
   TagSummary,
   Transaction,
-  TransactionKind
+  TransactionKind,
+  YearlySummary
 } from "../types";
 
 export function accountIcon(account: Account): LucideIcon {
@@ -571,6 +577,7 @@ function TagMultiSelect({
 export function TransactionsPage({
   data,
   onAdd,
+  onImport,
   onVoid,
   onRestore,
   onDeletePermanently,
@@ -587,6 +594,8 @@ export function TransactionsPage({
 }: {
   data: AppData;
   onAdd: () => void;
+  /** 打开批量导入弹窗。 */
+  onImport: () => void;
   onVoid: (transaction: Transaction) => void;
   onRestore: (transaction: Transaction) => void;
   onDeletePermanently: (transaction: Transaction) => void;
@@ -691,6 +700,14 @@ export function TransactionsPage({
         >
           {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
           {exporting ? "导出中…" : "导出 CSV"}
+        </button>
+        <button
+          type="button"
+          className="text-button import-button"
+          onClick={onImport}
+          title="从账单文件批量导入流水"
+        >
+          <Upload size={16} /> 导入
         </button>
       </div>
       {tagFilter.length > 0 && (
@@ -1085,6 +1102,8 @@ export function InsightsPage({
         <SummaryCard label="本月结余" value={summary.net} currency={summary.currency} tone="blue" />
       </section>
       <MonthlyTrendPanel currency={summary.currency} />
+      <YearlySummaryPanel currency={summary.currency} />
+      <RollingSummaryPanel currency={summary.currency} />
       <CashFlowSankey summary={cashFlow} />
       <BudgetPanel
         summary={summary}
@@ -1212,6 +1231,251 @@ export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPo
         <span className="legend-expense"><i />支出</span>
         <span className="legend-net"><i />结余</span>
       </div>
+    </div>
+  );
+}
+
+/** 年度汇总面板：自加载指定年份的逐月收支、全年合计与分类明细。 */
+export function YearlySummaryPanel({ currency }: { currency: string }) {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [summary, setSummary] = useState<YearlySummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setSummary(null);
+    setError(null);
+    loadYearlySummary(year, currency)
+      .then((data) => {
+        if (!cancelled) {
+          setSummary(data);
+          setError(null);
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载年度汇总");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [year, currency, attempt]);
+  return (
+    <section className="panel trend-panel">
+      <div className="section-heading compact-heading">
+        <div><span>YEARLY</span><h2>年度汇总</h2></div>
+        <div className="year-selector">
+          <button type="button" className="icon-button" onClick={() => setYear((value) => value - 1)} aria-label="上一年" title="上一年"><ChevronLeft size={16} /></button>
+          <strong>{year} 年</strong>
+          <button type="button" className="icon-button" onClick={() => setYear((value) => value + 1)} aria-label="下一年" title="下一年"><ChevronRight size={16} /></button>
+        </div>
+      </div>
+      {error && (
+        <div className="trend-note panel-error">
+          <span>年度汇总加载失败：{error}</span>
+          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> 重试</button>
+        </div>
+      )}
+      {!error && !summary && <div className="trend-note">正在加载…</div>}
+      {summary && (
+        <>
+          <div className="balance-summary-row insight-kpis">
+            <SummaryCard label="全年收入" value={summary.total_income} currency={summary.currency} tone="green" />
+            <SummaryCard label="全年支出" value={summary.total_expense} currency={summary.currency} tone="orange" />
+            <SummaryCard label="全年结余" value={summary.net} currency={summary.currency} tone="blue" />
+          </div>
+          <YearlyBarChart summary={summary} />
+          <div className="yearly-categories">
+            <YearlyCategoryList title="收入来源" items={summary.income_sources} currency={summary.currency} />
+            <YearlyCategoryList title="支出去向" items={summary.expense_destinations} currency={summary.currency} />
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** 年度逐月收入/支出柱状图（12 个月，双色分组）。 */
+function YearlyBarChart({ summary }: { summary: YearlySummary }) {
+  const width = 720;
+  const height = 200;
+  const padL = 40;
+  const padR = 12;
+  const padT = 14;
+  const padB = 28;
+  const months = summary.months;
+  const values = months.map((point) => [Number(point.total_income), Number(point.total_expense)] as const);
+  const max = Math.max(1, ...values.flat());
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const slot = innerW / Math.max(1, months.length);
+  const barWidth = Math.min(16, slot * 0.26);
+  const y = (value: number) => padT + innerH - (value / max) * innerH;
+  const barH = (value: number) => (value / max) * innerH;
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((fraction) => padT + fraction * innerH);
+  return (
+    <div className="yearly-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${summary.year} 年逐月收支`}>
+        <title>{summary.year} 年逐月收支（{summary.currency}）</title>
+        {gridLines.map((gy) => (
+          <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
+        ))}
+        {months.map((point, index) => {
+          const cx = padL + slot * index + slot / 2;
+          const [income, expense] = values[index];
+          return (
+            <g key={point.year * 100 + point.month}>
+              <rect x={cx - barWidth - 1.5} y={y(income)} width={barWidth} height={barH(income)} rx="2" className="yearly-bar income" />
+              <rect x={cx + 1.5} y={y(expense)} width={barWidth} height={barH(expense)} rx="2" className="yearly-bar expense" />
+              <text x={cx} y={height - 10} textAnchor="middle" className="chart-axis-label">
+                {point.month === 1 ? `${point.year}年` : `${point.month}月`}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      <div className="trend-legend">
+        <span className="legend-income"><i />收入</span>
+        <span className="legend-expense"><i />支出</span>
+      </div>
+    </div>
+  );
+}
+
+/** 分类明细列表（收入来源 / 支出去向）。 */
+function YearlyCategoryList({ title, items, currency }: { title: string; items: CashFlowItem[]; currency: string }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="yearly-category-group">
+      <h3>{title}</h3>
+      <div className="cashflow-list">
+        {items.map((item) => (
+          <div className="cashflow-item" key={item.category_id}>
+            <CategoryAvatar name={item.category_name} size="small" />
+            <span>{item.category_name}<em>{item.percentage}%</em></span>
+            <strong>{formatMoney(item.amount, currency)}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 滚动平均面板：自加载最近 N 个月的收支曲线 + trailing window 均值虚线。 */
+export function RollingSummaryPanel({ currency }: { currency: string }) {
+  const [monthsInput, setMonthsInput] = useState("12");
+  const [windowInput, setWindowInput] = useState("3");
+  const [summary, setSummary] = useState<RollingSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const monthsSize = Number(monthsInput);
+  const windowSize = Number(windowInput);
+  const monthsValid = Number.isInteger(monthsSize) && monthsSize >= 1 && monthsSize <= 120;
+  const windowValid = Number.isInteger(windowSize) && windowSize >= 1 && windowSize <= 120;
+  const valid = monthsValid && windowValid;
+  // 平均窗口不能超过趋势月数（后端上限约束），超限时按 months 截断。
+  const effectiveWindow = valid ? Math.min(windowSize, monthsSize) : 0;
+  useEffect(() => {
+    if (!valid) return;
+    let cancelled = false;
+    setError(null);
+    loadRollingSummary(monthsSize, effectiveWindow, currency)
+      .then((data) => {
+        if (!cancelled) {
+          setSummary(data);
+          setError(null);
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载滚动平均");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [monthsSize, effectiveWindow, currency, valid, attempt]);
+  const windowClamped = windowValid && windowSize > monthsSize;
+  return (
+    <section className="panel trend-panel">
+      <div className="section-heading compact-heading">
+        <div><span>ROLLING AVG</span><h2>滚动平均</h2></div>
+        <div className="rolling-controls">
+          <label><span>月数</span><input type="number" min={1} max={120} value={monthsInput} onChange={(e) => setMonthsInput(e.target.value)} aria-label="趋势月数" /></label>
+          <label><span>窗口</span><input type="number" min={1} max={120} value={windowInput} onChange={(e) => setWindowInput(e.target.value)} aria-label="平均窗口（月）" /></label>
+        </div>
+      </div>
+      {!valid && <div className="trend-note">请输入 1–120 之间的整数月数。</div>}
+      {windowClamped && <div className="trend-note">平均窗口不能超过趋势月数，已按 {monthsSize} 个月计算。</div>}
+      {error && (
+        <div className="trend-note panel-error">
+          <span>滚动平均加载失败：{error}</span>
+          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> 重试</button>
+        </div>
+      )}
+      {valid && !error && !summary && <div className="trend-note">正在加载…</div>}
+      {valid && summary && (
+        <>
+          <RollingChart summary={summary} />
+          <div className="trend-legend rolling-legend">
+            <span className="legend-income"><i />收入</span>
+            <span className="legend-expense"><i />支出</span>
+            <span className="legend-income avg"><i />收入均值</span>
+            <span className="legend-expense avg"><i />支出均值</span>
+          </div>
+          <p className="rolling-hint">实线为当月收支，虚线为截至该月的 {summary.window} 个月滚动均值（{summary.currency}）。</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** 滚动平均曲线：收入/支出实线 + 各自 trailing avg 虚线。 */
+function RollingChart({ summary }: { summary: RollingSummary }) {
+  const points = summary.points;
+  if (points.length === 0) {
+    return <EmptyState title="暂无数据" detail="记录交易后，这里会显示收支的滚动平均走势。" />;
+  }
+  const width = 720;
+  const height = 250;
+  const padL = 54;
+  const padR = 16;
+  const padT = 18;
+  const padB = 34;
+  const incomes = points.map((point) => Number(point.income));
+  const expenses = points.map((point) => Number(point.expense));
+  const incomeAvgs = points.map((point) => Number(point.income_avg));
+  const expenseAvgs = points.map((point) => Number(point.expense_avg));
+  const max = Math.max(1, ...incomes, ...expenses, ...incomeAvgs, ...expenseAvgs);
+  const innerW = width - padL - padR;
+  const innerH = height - padT - padB;
+  const x = (index: number) =>
+    padL + (points.length === 1 ? innerW / 2 : (index / (points.length - 1)) * innerW);
+  const y = (value: number) => padT + ((max - value) / max) * innerH;
+  const path = (values: number[]) =>
+    values.map((value, index) => `${index ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map((fraction) => padT + fraction * innerH);
+  const labelEvery = Math.max(1, Math.ceil(points.length / 12));
+  return (
+    <div className="monthly-trend-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="收支滚动平均趋势">
+        <title>最近 {summary.months} 个月收支与 {summary.window} 个月滚动均值（{summary.currency}）</title>
+        {gridLines.map((gy) => (
+          <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
+        ))}
+        <path d={path(expenses)} className="trend-series expense" />
+        <path d={path(incomes)} className="trend-series income" />
+        <path d={path(expenseAvgs)} className="trend-series expense avg" />
+        <path d={path(incomeAvgs)} className="trend-series income avg" />
+        {points.map((point, index) => (
+          <text
+            key={`label-${point.year}-${point.month}`}
+            x={x(index)}
+            y={height - 10}
+            textAnchor="middle"
+            className="chart-axis-label"
+          >
+            {index % labelEvery === 0 ? (point.month === 1 ? `${point.year}年` : `${point.month}月`) : ""}
+          </text>
+        ))}
+      </svg>
     </div>
   );
 }

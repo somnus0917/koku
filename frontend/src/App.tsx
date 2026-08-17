@@ -20,11 +20,13 @@ import {
   LockKeyhole,
   LogOut,
   Menu,
+  Monitor,
   Moon,
   MoreHorizontal,
   Plus,
   ReceiptText,
   RefreshCcw,
+  Settings,
   ShieldCheck,
   Sun,
   Users,
@@ -48,6 +50,7 @@ import {
   deleteCategory,
   deleteRecurringRule,
   getAuthSession,
+  importTransactions,
   loadSummaryData,
   loadTransactions,
   login,
@@ -75,6 +78,7 @@ import {
   DepositModal,
   EditAccountModal,
   EditTransactionModal,
+  ImportModal,
   LoanModal,
   PasswordModal,
   RecurringModal,
@@ -92,6 +96,8 @@ import {
   TransactionsPage
 } from "./components/ledger";
 import { UsersAdminPage } from "./components/users";
+import { SystemAdminPage } from "./components/system";
+import { useTheme } from "./theme";
 import {
   COMMON_CURRENCIES,
   availableCurrencies,
@@ -116,15 +122,16 @@ import type {
   UserRole
 } from "./types";
 
-type View = "dashboard" | "accounts" | "transactions" | "insights" | "users";
-type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | null;
+type View = "dashboard" | "accounts" | "transactions" | "insights" | "users" | "system";
+type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | "import" | null;
 
 const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
   { id: "dashboard", label: "总览", icon: LayoutDashboard },
   { id: "accounts", label: "账户", icon: WalletCards },
   { id: "transactions", label: "交易", icon: ReceiptText },
   { id: "insights", label: "分析", icon: ChartNoAxesCombined },
-  { id: "users", label: "用户", icon: Users }
+  { id: "users", label: "用户", icon: Users },
+  { id: "system", label: "系统", icon: Settings }
 ];
 
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
@@ -174,12 +181,7 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("koku-theme", dark ? "dark" : "light");
-  }, [dark]);
+  const { theme, setTheme } = useTheme();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -193,8 +195,14 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
 
   return (
     <main className="login-page">
-      <button className="login-theme-button" type="button" onClick={() => setDark((value) => !value)} aria-label="切换主题">
-        {dark ? <Sun size={18} /> : <Moon size={18} />}
+      <button
+        className="login-theme-button"
+        type="button"
+        onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
+        aria-label="切换主题"
+        title={theme === "light" ? "浅色 · 点击切换" : theme === "dark" ? "深色 · 点击切换" : "跟随系统 · 点击切换"}
+      >
+        {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
       </button>
       <section className="login-story" aria-label="Koku 私人账本">
         <div className="login-brand"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><strong>Koku</strong><small>PRIVATE LEDGER</small></div></div>
@@ -241,7 +249,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
   const [tradeSymbol, setTradeSymbol] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [dark, setDark] = useState(() => localStorage.getItem("koku-theme") === "dark");
+  const { theme, setTheme } = useTheme();
   const [txOffset, setTxOffset] = useState(0);
   const [txHasMore, setTxHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -301,11 +309,6 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = dark ? "dark" : "light";
-    localStorage.setItem("koku-theme", dark ? "dark" : "light");
-  }, [dark]);
 
   useEffect(() => {
     if (!toast) return;
@@ -377,6 +380,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           <TransactionsPage
             data={data}
             onAdd={() => setModal("transaction")}
+            onImport={() => setModal("import")}
             onVoid={(transaction) =>
               void mutate(() => voidTransaction(transaction.id), "交易已撤销，余额已恢复")
             }
@@ -435,6 +439,8 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         );
       case "users":
         return <UsersAdminPage currentUserId={userId} />;
+      case "system":
+        return <SystemAdminPage />;
       default:
         return (
           <Dashboard
@@ -464,7 +470,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         </div>
 
         <nav className="primary-nav" aria-label="主导航">
-          {NAV_ITEMS.filter((item) => role === "admin" || item.id !== "users").map(({ id, label, icon: Icon }) => (
+          {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, label, icon: Icon }) => (
             <button
               className={activeView === id ? "active" : ""}
               key={id}
@@ -535,8 +541,13 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             >
               <RefreshCcw size={18} />
             </button>
-            <button className="icon-button" onClick={() => setDark((value) => !value)} aria-label="切换主题">
-              {dark ? <Sun size={18} /> : <Moon size={18} />}
+            <button
+              className="icon-button"
+              onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
+              aria-label="切换主题"
+              title={theme === "light" ? "浅色 · 点击切换" : theme === "dark" ? "深色 · 点击切换" : "跟随系统 · 点击切换"}
+            >
+              {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
             </button>
             <button className="primary-button compact" onClick={() => setModal("transaction")}>
               <Plus size={18} />
@@ -550,7 +561,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
       </main>
 
       <nav className="mobile-bottom-nav" aria-label="移动端导航">
-        {NAV_ITEMS.filter((item) => role === "admin" || item.id !== "users").map(({ id, label, icon: Icon }) => (
+        {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, label, icon: Icon }) => (
           <button key={id} className={activeView === id ? "active" : ""} onClick={() => setActiveView(id)}>
             <Icon size={20} />
             <span>{label}</span>
@@ -704,6 +715,19 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             setModal(null);
             await onLogout();
           }}
+        />
+      )}
+      {modal === "import" && data && (
+        <ImportModal
+          accounts={data.accounts}
+          categories={data.categories}
+          onClose={() => setModal(null)}
+          onSubmit={(file, input) =>
+            mutate(
+              () => importTransactions(file, input),
+              "导入完成"
+            )
+          }
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

@@ -226,3 +226,63 @@ export interface AppData {
   holdings: Holding[];
   deposits: Deposit[];
 }
+
+/** 年度汇总：某自然年逐月收支 + 全年合计 + 按分类的收入/支出明细。 */
+export interface YearlySummary {
+  year: number;
+  currency: string;
+  total_income: string;
+  total_expense: string;
+  net: string;
+  /** 1 月在前、12 个自然月的逐月收支；无流水的月份补零。 */
+  months: MonthlyTrendPoint[];
+  income_sources: CashFlowItem[];
+  expense_destinations: CashFlowItem[];
+}
+
+/** 滚动平均序列中的一个月点：当月收支 + 截至该月的 trailing window 平均值。 */
+export interface RollingPoint {
+  year: number;
+  month: number;
+  income: string;
+  expense: string;
+  net: string;
+  income_avg: string;
+  expense_avg: string;
+  net_avg: string;
+}
+
+/** 滚动平均：最近 `months` 个月的收支趋势，逐月给出 trailing window 均值。 */
+export interface RollingSummary {
+  currency: string;
+  months: number;
+  /** 平均窗口（月）。 */
+  window: number;
+  points: RollingPoint[];
+}
+
+/** 备份元信息：zip 包内相对路径（如 `koku.db`、`ledgers/ledger-1.db`）。 */
+export interface BackupMeta {
+  id: string;
+  filename: string;
+  /** RFC3339 创建时间（UTC）。 */
+  created_at: string;
+  size_bytes: number;
+  files: string[];
+}
+
+/** 导入时某行被跳过/失败的原因。 */
+export interface ImportIssue {
+  line: number;
+  message: string;
+}
+
+/** 一次批量导入的统计结果。 */
+export interface ImportResult {
+  format: string;
+  account_id: number;
+  imported: number;
+  skipped_duplicates: number;
+  failed: number;
+  issues: ImportIssue[];
+}

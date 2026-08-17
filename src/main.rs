@@ -18,10 +18,13 @@ mod demo;
 mod domain;
 mod error;
 mod importer;
+mod mailer;
+mod quotes;
 mod ratelimit;
 mod rates;
 mod service;
 mod throttle;
+mod totp;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -35,6 +38,7 @@ use crate::auth::AuthConfig;
 use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
+use crate::quotes::QuoteClient;
 use crate::ratelimit::ApiRateLimiter;
 use crate::rates::RateClient;
 use crate::service::{ensure_multi_user, BookkeepingService};
@@ -71,7 +75,9 @@ async fn run_server() -> Result<()> {
         auth_config: Arc::new(auth_config),
         login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
         rate_limiter: Arc::new(Mutex::new(ApiRateLimiter::from_env()?)),
+        pending_totp: Arc::new(Mutex::new(HashMap::new())),
         rates: Arc::new(RateClient::new()),
+        quotes: Arc::new(QuoteClient::new()),
     };
 
     // 演示账本：仅在全新安装（admin 账本为空）时填充。
@@ -115,6 +121,56 @@ async fn run_server() -> Result<()> {
                     }
                     Err(error) => {
                         tracing::error!(target: "koku", error = %error, "scheduled backup failed")
+                    }
+                }
+            }
+        });
+    }
+
+    // 到期提醒邮件：配置了 SMTP 时按 KOKU_SMTP_INTERVAL_HOURS（默认 24 小时）
+    // 把管理员账本中 30 天内的到期提醒发到 KOKU_SMTP_TO。
+    if let Some(mailer_config) = mailer::MailerConfig::from_env()? {
+        let smtp_interval_hours = std::env::var("KOKU_SMTP_INTERVAL_HOURS")
+            .unwrap_or_else(|_| "24".to_owned())
+            .parse::<u64>()
+            .map_err(|error| {
+                KokuError::InvalidInput(format!(
+                    "KOKU_SMTP_INTERVAL_HOURS must be an integer: {error}"
+                ))
+            })?;
+        let smtp_admin_id = admin_id;
+        let smtp_ledger_dir = ledger_dir.clone();
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(smtp_interval_hours * 3600));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let result: Result<()> = async {
+                    let ledger = BookkeepingService::open(
+                        smtp_ledger_dir.join(format!("ledger-{smtp_admin_id}.db")),
+                    )?;
+                    let items = ledger.due_reminders(30)?;
+                    if items.is_empty() {
+                        return Ok(());
+                    }
+                    let subject = format!("Koku 到期提醒（{} 项）", items.len());
+                    let body = service::reminder_digest_text(&items);
+                    let config = mailer_config.clone();
+                    tokio::task::spawn_blocking(move || {
+                        mailer::send_mail(&config, &subject, &body)
+                    })
+                    .await
+                    .map_err(|error| {
+                        KokuError::AuthConfiguration(format!("smtp task failed: {error}"))
+                    })??;
+                    Ok(())
+                }
+                .await;
+                match result {
+                    Ok(()) => tracing::info!(target: "koku", "scheduled reminder digest sent"),
+                    Err(error) => {
+                        tracing::error!(target: "koku", error = %error, "scheduled reminder digest failed")
                     }
                 }
             }
