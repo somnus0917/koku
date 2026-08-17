@@ -504,6 +504,45 @@ pub struct BalanceSummary {
     pub net_worth: Decimal,
 }
 
+/// 年度汇总：某自然年逐月收支 + 全年合计 + 按分类的收入/支出明细。
+/// 所有币种统一折算到显示币种；无流水的月份补零。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct YearlySummary {
+    pub year: i32,
+    pub currency: String,
+    pub total_income: Decimal,
+    pub total_expense: Decimal,
+    pub net: Decimal,
+    /// 1 月在前、12 个自然月的逐月收支。
+    pub months: Vec<MonthlyTrendPoint>,
+    pub income_sources: Vec<CashFlowItem>,
+    pub expense_destinations: Vec<CashFlowItem>,
+}
+
+/// 滚动平均序列中的一个月点：当月收支 + 截至该月的 trailing window 平均值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RollingPoint {
+    pub year: i32,
+    pub month: u32,
+    pub income: Decimal,
+    pub expense: Decimal,
+    pub net: Decimal,
+    /// 截至该月（含）最近 `window` 个月的收入平均值。
+    pub income_avg: Decimal,
+    pub expense_avg: Decimal,
+    pub net_avg: Decimal,
+}
+
+/// 滚动平均：最近 `months` 个月的收支趋势，逐月给出 trailing window 均值。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RollingSummary {
+    pub currency: String,
+    pub months: u32,
+    /// 平均窗口（月）。
+    pub window: u32,
+    pub points: Vec<RollingPoint>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateQuote {
     pub from: String,

@@ -18,6 +18,8 @@ pub enum KokuError {
     Io(#[from] std::io::Error),
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
+    #[error("csv parsing error: {0}")]
+    Csv(#[from] csv::Error),
     #[error("invalid decimal stored in database: {0}")]
     InvalidDecimal(#[from] rust_decimal::Error),
     #[error("{entity} with id {id} was not found")]
@@ -64,6 +66,7 @@ impl IntoResponse for KokuError {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
             Self::Database(_)
+            | Self::Csv(_)
             | Self::InvalidDecimal(_)
             | Self::Io(_)
             | Self::AuthConfiguration(_) => StatusCode::INTERNAL_SERVER_ERROR,

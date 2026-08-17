@@ -20,15 +20,18 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::{session_cookie, session_token, AuthConfig};
+use crate::backup::{self, BackupMeta};
 use crate::domain::{
     Account, AccountType, AuthSession, BalanceSummary, Budget, CashFlowSummary, Category,
     CategoryKind, Deposit, DepositSettlement, Holding, Loan, LoanType, MonthlySummary,
-    MonthlyTrendPoint, RateQuote, Receipt, RecurrenceFrequency, RecurringRule, Tag, TagSummary,
-    Transaction, TransactionKind, User, UserRole,
+    MonthlyTrendPoint, RateQuote, Receipt, RecurrenceFrequency, RecurringRule, RollingSummary, Tag,
+    TagSummary, Transaction, TransactionKind, User, UserRole, YearlySummary,
 };
 use crate::error::{KokuError, Result};
+use crate::importer::{self, ImportFormat};
+use crate::ratelimit::{rate_limit, ApiRateLimiter};
 use crate::rates::{rate_is_fresh, RateClient};
-use crate::service::{normalize_currency, BookkeepingService};
+use crate::service::{normalize_currency, BookkeepingService, ImportResult};
 use crate::throttle::LoginThrottle;
 
 #[derive(Clone)]
@@ -39,8 +42,12 @@ pub struct AppState {
     pub ledgers: Arc<Mutex<HashMap<i64, Arc<tokio::sync::Mutex<BookkeepingService>>>>>,
     /// 独立账本文件目录。
     pub ledger_dir: PathBuf,
+    /// 共享库文件路径（备份/恢复用）。
+    pub db_path: PathBuf,
     pub auth_config: Arc<AuthConfig>,
     pub login_throttle: Arc<Mutex<LoginThrottle>>,
+    /// 认证后业务接口的通用限流器。
+    pub rate_limiter: Arc<Mutex<ApiRateLimiter>>,
     pub rates: Arc<RateClient>,
 }
 
@@ -157,6 +164,15 @@ struct TransactionQuery {
 struct TrendQuery {
     /// 返回最近多少个月，默认 12，上限 120（由 service 校验）。
     months: Option<u32>,
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrendQueryWithWindow {
+    /// 返回最近多少个月，默认 12，上限 120（由 service 校验）。
+    months: Option<u32>,
+    /// 滚动平均窗口（月），默认 3，上限 120（由 service 校验）。
+    window: Option<u32>,
     currency: Option<String>,
 }
 
@@ -693,6 +709,83 @@ async fn api_health() -> Json<ApiResponse<serde_json::Value>> {
     })))
 }
 
+/// 列出全部备份（管理员）。
+async fn api_list_backups(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<Json<ApiResponse<Vec<BackupMeta>>>> {
+    user.require_admin()?;
+    let backups = backup::list_backups(&state.db_path)?;
+    Ok(Json(ApiResponse::new(backups)))
+}
+
+/// 手动创建一份备份（管理员）。
+async fn api_create_backup(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<ApiResponse<BackupMeta>>)> {
+    user.require_admin()?;
+    // 默认保留最近 14 份；与定时任务共用同一清理策略。
+    let keep = std::env::var("KOKU_BACKUP_KEEP")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(14);
+    let meta = backup::create_backup(&state.db_path, &state.ledger_dir, keep)?;
+    tracing::info!(target: "auth", "admin {} created backup {}", user.username, meta.id);
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(meta))))
+}
+
+/// 下载备份 zip（管理员）。
+async fn api_download_backup(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(backup_id): AxumPath<String>,
+) -> Result<Response> {
+    user.require_admin()?;
+    let dir = backup::backup_dir(&state.db_path);
+    let path = dir.join(format!("koku-{backup_id}.zip"));
+    let bytes = std::fs::read(&path)
+        .map_err(|error| KokuError::InvalidInput(format!("backup not found: {error}")))?;
+    let filename = format!("koku-{backup_id}.zip");
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/zip"),
+    );
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+        .map_err(|error| KokuError::InvalidInput(format!("invalid filename: {error}")))?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_DISPOSITION, disposition);
+    Ok(response)
+}
+
+/// 恢复备份（管理员）：覆盖共享库与全部账本文件，随后重开共享库连接并
+/// 清空账本连接缓存。恢复会使当前所有会话失效（共享库被替换）。
+async fn api_restore_backup(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(backup_id): AxumPath<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    user.require_admin()?;
+    backup::restore_backup(&state.db_path, &state.ledger_dir, &backup_id)?;
+    // 关闭全部账本连接缓存：下一次访问会基于恢复后的文件重新打开。
+    state
+        .ledgers
+        .lock()
+        .map_err(|_| KokuError::InvalidInput("ledger cache lock was poisoned".to_owned()))?
+        .clear();
+    // 重开共享库：替换运行中的连接（旧连接随之关闭），所有会话从新库读取后失效。
+    {
+        let mut guard = lock_auth(&state)?;
+        *guard = BookkeepingService::open(&state.db_path)?;
+    }
+    tracing::info!(target: "auth", "admin {} restored backup {}", user.username, backup_id);
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "restored": true }),
+    )))
+}
+
 async fn api_accounts(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -1209,6 +1302,83 @@ async fn api_update_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+/// 批量导入流水（CSV/QIF/OFX）：multipart 字段
+/// `file`（必填）、`format`（csv|qif|ofx|auto，缺省 auto）、`account_id`（必填）、
+/// `category_id`（可选默认分类）、`currency`（可选默认币种）。
+async fn api_import_transactions(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<ApiResponse<ImportResult>>)> {
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut file_name: Option<String> = None;
+    let mut format: Option<String> = None;
+    let mut account_id: Option<i64> = None;
+    let mut category_id: Option<i64> = None;
+    let mut currency: Option<String> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| KokuError::InvalidInput(format!("invalid multipart upload: {error}")))?
+    {
+        match field.name() {
+            Some("file") => {
+                file_name = field.file_name().map(str::to_owned);
+                let bytes = field.bytes().await.map_err(|error| {
+                    KokuError::InvalidInput(format!("could not read upload: {error}"))
+                })?;
+                file_bytes = Some(bytes.to_vec());
+            }
+            Some("format") => format = Some(field.text().await.unwrap_or_default()),
+            Some("account_id") => {
+                account_id = field.text().await.ok().and_then(|value| value.parse().ok())
+            }
+            Some("category_id") => {
+                category_id = field.text().await.ok().and_then(|value| value.parse().ok())
+            }
+            Some("currency") => currency = Some(field.text().await.unwrap_or_default()),
+            _ => {}
+        }
+    }
+    let file_bytes = file_bytes.ok_or_else(|| {
+        KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
+    })?;
+    let account_id = account_id.ok_or_else(|| {
+        KokuError::InvalidInput("multipart field \"account_id\" is required".to_owned())
+    })?;
+    let text = String::from_utf8_lossy(&file_bytes).into_owned();
+
+    // 解析放到阻塞线程，避免大文件解析拖住异步 worker。
+    let parsed = tokio::task::spawn_blocking(move || -> Result<(
+        ImportFormat,
+        Vec<importer::ImportRow>,
+        Vec<importer::ParseIssue>,
+    )> {
+        let format = match format.as_deref() {
+            Some(value) if value.eq_ignore_ascii_case("auto") => {
+                file_name
+                    .as_deref()
+                    .and_then(ImportFormat::from_filename)
+                    .unwrap_or_else(|| importer::sniff_format(&text))
+            }
+            Some(value) => ImportFormat::from_str(value)?,
+            None => importer::sniff_format(&text),
+        };
+        importer::parse(&text, format).map(|(rows, issues)| (format, rows, issues))
+    })
+    .await
+    .map_err(|error| KokuError::InvalidInput(format!("import parse task failed: {error}")))??;
+
+    let mut result = lock_ledger(&state, user.user_id)
+        .await?
+        .import_transactions(parsed.0, account_id, category_id, currency, parsed.1)?;
+    // 解析阶段跳过/失败的行（缺日期、缺金额、非收支类型等）并入结果。
+    let parse_failures = parsed.2.len();
+    result.failed += parse_failures;
+    result.issues.extend(parsed.2);
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(result))))
+}
+
 async fn api_upload_receipt(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -1489,6 +1659,45 @@ async fn api_balance_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+/// 年度汇总：`?year=`（缺省当前年）与 `?currency=`（缺省 CNY）。
+async fn api_yearly_summary(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Query(query): Query<MonthlyQuery>,
+) -> Result<Json<ApiResponse<YearlySummary>>> {
+    let now = Utc::now();
+    let year = query.year.unwrap_or_else(|| now.year());
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .yearly_currencies(year)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .yearly_summary(year, &display)?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
+/// 滚动平均：`?months=`（趋势月数，默认 12，上限 120）、
+/// `?window=`（平均窗口，默认 3，上限 120）、`?currency=`（默认 CNY）。
+async fn api_rolling_summary(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Query(query): Query<TrendQueryWithWindow>,
+) -> Result<Json<ApiResponse<RollingSummary>>> {
+    let months = query.months.unwrap_or(12);
+    let window = query.window.unwrap_or(3);
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .trend_currencies(months)?;
+    ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .rolling_summary(months, window, &display)?;
+    Ok(Json(ApiResponse::new(summary)))
+}
+
 /// 确保「账本中出现的各币种 → 显示币种」的折算汇率都可用：缓存缺失或超龄的
 /// 现场拉取并缓存；拉取失败时报错（前端会提示具体缺失的币种对，可重试）。
 async fn ensure_summary_rates(
@@ -1616,6 +1825,10 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             get(api_transactions).post(api_create_transaction),
         )
         .route("/api/transactions/export", get(api_export_transactions))
+        .route(
+            "/api/transactions/import",
+            post(api_import_transactions).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
         .route("/api/transfers", post(api_create_transfer))
         .route(
             "/api/transactions/{transaction_id}/void",
@@ -1651,6 +1864,8 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/summary/by-tag", get(api_tag_summary))
         .route("/api/summary/cash-flow", get(api_cash_flow_summary))
         .route("/api/summary/trend", get(api_monthly_trend))
+        .route("/api/summary/yearly", get(api_yearly_summary))
+        .route("/api/summary/rolling", get(api_rolling_summary))
         .route("/api/summary/balance", get(api_balance_summary))
         .route("/api/rates", get(api_rate_hint))
         .route("/api/auth/session", get(api_auth_session))
@@ -1662,13 +1877,23 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         )
         .route("/api/users/{user_id}/enabled", post(api_set_user_enabled))
         .route("/api/users/{user_id}", delete(api_delete_user))
+        .route("/api/admin/backups", get(api_list_backups))
+        .route("/api/admin/backup", post(api_create_backup))
+        .route(
+            "/api/admin/backups/{backup_id}/download",
+            get(api_download_backup),
+        )
+        .route(
+            "/api/admin/backups/{backup_id}/restore",
+            post(api_restore_backup),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let router = Router::new()
         .route("/api/health", get(api_health))
         .route("/api/auth/login", post(api_login))
         .route("/api/auth/logout", post(api_logout))
         .merge(protected)
-        .with_state(state);
+        .with_state(state.clone());
 
     let router = match allowed_origin {
         Some(origin) => router.layer(
@@ -1686,6 +1911,8 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         ),
         None => router,
     };
+    // 通用限流：除健康检查外，所有 /api 请求按客户端计数（防 Cookie 泄露后被刷）。
+    let router = router.layer(middleware::from_fn_with_state(state, rate_limit));
     // 请求级 tracing（方法/路径/状态码/耗时），配合 tracing_subscriber 输出。
     router.layer(TraceLayer::new_for_http())
 }
@@ -1729,6 +1956,7 @@ mod send_check {
             auth: Arc::new(Mutex::new(BookkeepingService::in_memory().unwrap())),
             ledgers: Arc::new(Mutex::new(HashMap::new())),
             ledger_dir: std::env::temp_dir(),
+            db_path: std::env::temp_dir().join("koku-test.db"),
             auth_config: Arc::new(AuthConfig {
                 username: String::from("t"),
                 password_hash: String::from("h"),
@@ -1736,6 +1964,7 @@ mod send_check {
                 cookie_secure: false,
             }),
             login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+            rate_limiter: Arc::new(Mutex::new(ApiRateLimiter::default())),
             rates: Arc::new(RateClient::new()),
         };
         fn assert_send<F: std::future::Future + Send>(_: F) {}

@@ -9,6 +9,7 @@ description = "A minimal, private, SQLite-backed personal finance MVP"
 axum = { version = "0.8", features = ["multipart"] }
 bcrypt = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
+csv = "1"
 getrandom = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -17,10 +18,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # bundled SQLite 是 C 代码，dev 模式默认 opt-level=0 会让 SQL 慢数倍；
 # 这里对依赖开 O2，让本地 `cargo run` 预览也有接近生产的性能。

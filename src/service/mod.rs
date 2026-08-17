@@ -25,6 +25,7 @@ mod accounts;
 mod budgets;
 mod deposits;
 mod holdings;
+mod import;
 mod loans;
 mod rates;
 mod receipts;
@@ -35,6 +36,7 @@ mod tags;
 mod transactions;
 mod users;
 
+pub use import::ImportResult;
 pub(crate) use tags::validate_tag_name;
 pub use users::ensure_multi_user;
 
@@ -921,6 +923,23 @@ pub(crate) fn normalize_currency(value: String) -> Result<String> {
         ));
     }
     Ok(currency)
+}
+
+/// 某自然年的时间范围：[当年 1 月 1 日 0 点, 次年 1 月 1 日 0 点)。
+fn year_bounds(year: i32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+    let start_date = NaiveDate::from_ymd_opt(year, 1, 1)
+        .ok_or_else(|| KokuError::InvalidInput(format!("invalid year: {year}")))?;
+    let end_date = NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        .ok_or_else(|| KokuError::InvalidInput(format!("invalid year: {year}")))?;
+    let start = start_date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| KokuError::InvalidInput("invalid year start".to_owned()))?
+        .and_utc();
+    let end = end_date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| KokuError::InvalidInput("invalid year end".to_owned()))?
+        .and_utc();
+    Ok((start, end))
 }
 
 fn month_bounds(year: i32, month: u32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {

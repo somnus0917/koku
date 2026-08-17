@@ -12,10 +12,13 @@
 
 mod api;
 mod auth;
+mod backup;
 mod config;
 mod demo;
 mod domain;
 mod error;
+mod importer;
+mod ratelimit;
 mod rates;
 mod service;
 mod throttle;
@@ -25,12 +28,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::api::{api_router, AppState};
 use crate::auth::AuthConfig;
 use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
+use crate::ratelimit::ApiRateLimiter;
 use crate::rates::RateClient;
 use crate::service::{ensure_multi_user, BookkeepingService};
 use crate::throttle::LoginThrottle;
@@ -62,8 +67,10 @@ async fn run_server() -> Result<()> {
         auth: Arc::new(Mutex::new(auth_service)),
         ledgers: Arc::new(Mutex::new(HashMap::new())),
         ledger_dir: ledger_dir.clone(),
+        db_path: Path::new(&database_path).to_path_buf(),
         auth_config: Arc::new(auth_config),
         login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+        rate_limiter: Arc::new(Mutex::new(ApiRateLimiter::from_env()?)),
         rates: Arc::new(RateClient::new()),
     };
 
@@ -75,6 +82,43 @@ async fn run_server() -> Result<()> {
         if admin_ledger.is_empty()? {
             seed_demo_data(&mut admin_ledger)?;
         }
+    }
+
+    // 定时备份：KOKU_BACKUP_INTERVAL_HOURS > 0 时启用（0 表示关闭，仅手动触发）。
+    let backup_interval_hours = std::env::var("KOKU_BACKUP_INTERVAL_HOURS")
+        .unwrap_or_else(|_| "0".to_owned())
+        .parse::<u64>()
+        .map_err(|error| {
+            KokuError::InvalidInput(format!(
+                "KOKU_BACKUP_INTERVAL_HOURS must be an integer: {error}"
+            ))
+        })?;
+    let backup_keep = std::env::var("KOKU_BACKUP_KEEP")
+        .unwrap_or_else(|_| "14".to_owned())
+        .parse::<usize>()
+        .map_err(|error| {
+            KokuError::InvalidInput(format!("KOKU_BACKUP_KEEP must be an integer: {error}"))
+        })?;
+    if backup_interval_hours > 0 {
+        let backup_db_path = state.db_path.clone();
+        let backup_ledger_dir = state.ledger_dir.clone();
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(backup_interval_hours * 3600));
+            // 首个 tick 立即触发，这里主动跳过，让部署脚本/手动触发负责启动时机。
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                match backup::create_backup(&backup_db_path, &backup_ledger_dir, backup_keep) {
+                    Ok(meta) => {
+                        tracing::info!(target: "koku", backup = %meta.id, "scheduled backup completed")
+                    }
+                    Err(error) => {
+                        tracing::error!(target: "koku", error = %error, "scheduled backup failed")
+                    }
+                }
+            }
+        });
     }
 
     let host = std::env::var("KOKU_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
