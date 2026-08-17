@@ -32,6 +32,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import type { Account, MonthlySummary, Transaction } from "./types";
+import { uiLocale } from "./i18n";
 
 export const CATEGORY_COLORS = ["#274e3f", "#dd8d5b", "#7e95c9", "#d2ad58", "#8f6faf", "#669b92"];
 
@@ -80,7 +81,7 @@ export function categoryVisual(name: string): { icon: LucideIcon; color: string 
 export function formatMoney(value: string, currency: string, compact = false): string {
   const number = Number(value);
   if (!Number.isFinite(number)) return `${value} ${currency}`;
-  return new Intl.NumberFormat("zh-CN", {
+  return new Intl.NumberFormat(uiLocale(), {
     style: "currency",
     currency,
     currencyDisplay: "narrowSymbol",
@@ -144,7 +145,7 @@ export function toLocalDateTimeValue(value: string): string {
 
 /** 简短日期时间（如 "8月15日 14:30"）。 */
 export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(uiLocale(), {
     month: "short",
     day: "numeric",
     hour: "2-digit",

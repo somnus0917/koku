@@ -33,6 +33,7 @@ import type {
   UserRole,
   YearlySummary
 } from "./types";
+import i18n from "./i18n";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -63,10 +64,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401 && path !== "/api/auth/login") {
       window.dispatchEvent(new Event("koku:unauthorized"));
     }
-    throw new ApiError(payload.error ?? `请求失败（${response.status}）`, response.status);
+    throw new ApiError(payload.error ?? i18n.t("api.requestFailed", { status: response.status }), response.status);
   }
   if (payload.data === undefined) {
-    throw new Error("服务返回了无效数据");
+    throw new Error(i18n.t("api.invalidData"));
   }
   return payload.data;
 }
@@ -306,10 +307,10 @@ export function uploadReceipt(transactionId: number, file: File): Promise<Receip
       error?: string;
     };
     if (!response.ok) {
-      throw new ApiError(payload.error ?? `上传失败（${response.status}）`, response.status);
+      throw new ApiError(payload.error ?? i18n.t("api.uploadFailed", { status: response.status }), response.status);
     }
     if (payload.data === undefined) {
-      throw new Error("服务返回了无效数据");
+      throw new Error(i18n.t("api.invalidData"));
     }
     return payload.data;
   });
@@ -451,7 +452,7 @@ export async function exportTransactions(year?: number, month?: number): Promise
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(payload.error ?? `导出失败（${response.status}）`, response.status);
+    throw new ApiError(payload.error ?? i18n.t("api.exportFailed", { status: response.status }), response.status);
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
@@ -516,7 +517,7 @@ export async function deleteTransactionPermanently(id: number): Promise<void> {
     if (response.status === 401) {
       window.dispatchEvent(new Event("koku:unauthorized"));
     }
-    let message = `请求失败（${response.status}）`;
+    let message = i18n.t("api.requestFailed", { status: response.status });
     try {
       const body = await response.json();
       if (body?.error) message = body.error;
@@ -673,10 +674,10 @@ export function importTransactions(
       if (response.status === 401) {
         window.dispatchEvent(new Event("koku:unauthorized"));
       }
-      throw new ApiError(payload.error ?? `导入失败（${response.status}）`, response.status);
+      throw new ApiError(payload.error ?? i18n.t("api.importFailed", { status: response.status }), response.status);
     }
     if (payload.data === undefined) {
-      throw new Error("服务返回了无效数据");
+      throw new Error(i18n.t("api.invalidData"));
     }
     return payload.data;
   });
@@ -720,7 +721,7 @@ export async function downloadBackup(id: string): Promise<void> {
       window.dispatchEvent(new Event("koku:unauthorized"));
     }
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new ApiError(payload.error ?? `下载失败（${response.status}）`, response.status);
+    throw new ApiError(payload.error ?? i18n.t("api.downloadFailed", { status: response.status }), response.status);
   }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);

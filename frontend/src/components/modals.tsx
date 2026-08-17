@@ -1,5 +1,7 @@
 //! 弹窗组件：新建/编辑账户、交易、分类、定期、报销、借款、二步验证、对账。
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
+import { uiLocale } from "../i18n";
 import {
   BadgeDollarSign,
   Check,
@@ -111,16 +113,21 @@ function RateHintLine({
   hint: RateQuote | null;
   onRefresh?: () => void;
 }) {
+  const { t } = useTranslation();
   if (status === "loading") {
-    return <p className="fx-hint">正在获取汇率…</p>;
+    return <p className="fx-hint">{t("modals.rate.loading")}</p>;
   }
   if (status === "ok" && hint) {
     return (
       <p className="fx-hint">
-        参考汇率 1 {from} ≈ {formatRate(hint.rate)} {to}（{hint.date}
-        {hint.stale ? "，缓存" : ""}，{hint.source}），可修改
+        {t("modals.rate.hint", {
+          from,
+          rate: formatRate(hint.rate),
+          to,
+          meta: t("modals.rate.meta", { date: hint.date, source: hint.source, stale: hint.stale ? t("modals.rate.stale") : "" })
+        })}
         {onRefresh && (
-          <button type="button" className="fx-hint-refresh" onClick={onRefresh} title="重新获取汇率" aria-label="重新获取汇率">
+          <button type="button" className="fx-hint-refresh" onClick={onRefresh} title={t("modals.rate.refreshAria")} aria-label={t("modals.rate.refreshAria")}>
             <RefreshCcw size={11} />
           </button>
         )}
@@ -130,10 +137,10 @@ function RateHintLine({
   if (status === "error") {
     return (
       <p className="fx-hint error">
-        未能获取汇率，请手动填写
+        {t("modals.rate.error")}
         {onRefresh && (
           <button type="button" className="fx-hint-refresh" onClick={onRefresh}>
-            重新获取
+            {t("modals.rate.retry")}
           </button>
         )}
       </p>
@@ -153,6 +160,7 @@ export function TagEditor({
   suggestions: string[];
 }) {
   const [draft, setDraft] = useState("");
+  const { t } = useTranslation();
   const add = () => {
     const name = draft.trim();
     if (name && !value.includes(name)) onChange([...value, name]);
@@ -163,7 +171,7 @@ export function TagEditor({
       {value.map((name) => (
         <span className="tag-chip" key={name}>
           {name}
-          <button type="button" onClick={() => onChange(value.filter((item) => item !== name))} aria-label={`移除${name}`}><X size={11} /></button>
+          <button type="button" onClick={() => onChange(value.filter((item) => item !== name))} aria-label={t("modals.tagEditor.removeAria", { name })}><X size={11} /></button>
         </span>
       ))}
       <input
@@ -177,7 +185,7 @@ export function TagEditor({
           }
         }}
         onBlur={add}
-        placeholder="添加标签"
+        placeholder={t("modals.tagEditor.placeholder")}
       />
       <datalist id="koku-tag-suggestions">
         {suggestions.map((name) => <option key={name} value={name} />)}
@@ -201,32 +209,33 @@ export function DepositModal({
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
       await onSubmit({ amount, rate, term_days: Number(termDays), note: note || undefined });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="FIXED DEPOSIT" title="转入定期" onClose={onClose}>
+    <ModalShell eyebrow="FIXED DEPOSIT" title={t("modals.deposit.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p>从 <strong>{source.name}</strong>（{source.currency} 可用 {formatMoney(source.balance, source.currency)}）转存一笔定期。</p>
+          <p>{t("modals.deposit.infoPrefix")}<strong>{source.name}</strong>{t("modals.deposit.infoSuffix", { currency: source.currency, balance: formatMoney(source.balance, source.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label><span>转存金额</span><input required autoFocus step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
-          <label><span>年利率 (%)</span><input required step="0.01" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="例如 2.10" /></label>
-          <label><span>期限（天）</span><input required type="number" min={1} value={termDays} onChange={(e) => setTermDays(e.target.value)} /></label>
-          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+          <label><span>{t("modals.deposit.amount")}</span><input required autoFocus step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("modals.deposit.rate")}</span><input required step="0.01" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} placeholder={t("modals.deposit.ratePlaceholder")} /></label>
+          <label><span>{t("modals.deposit.termDays")}</span><input required type="number" min={1} value={termDays} onChange={(e) => setTermDays(e.target.value)} /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}存入定期</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.deposit.submit")}</button>
         </div>
       </form>
     </ModalShell>
@@ -247,27 +256,28 @@ export function SettleDepositModal({
   const [targetId, setTargetId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
       await onSubmit(Number(targetId));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="MATURE DEPOSIT" title="结清定期" onClose={onClose}>
+    <ModalShell eyebrow="MATURE DEPOSIT" title={t("modals.settleDeposit.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p><strong>定期 · {deposit.term_days} 天</strong> · 年利率 {deposit.rate}%{deposit.maturity_at ? ` · ${formatDate(deposit.maturity_at)} 到期` : ""}</p>
-          <p>当前本金 {formatMoney(deposit.amount, deposit.currency)}，结清时按实际持有天数计息，本息一并转回。</p>
+          <p><strong>{t("deposit.term", { days: deposit.term_days })}</strong>{t("deposit.rate", { rate: deposit.rate })}{deposit.maturity_at ? t("deposit.maturesOn", { date: formatDate(deposit.maturity_at) }) : ""}</p>
+          <p>{t("modals.settleDeposit.info", { amount: formatMoney(deposit.amount, deposit.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label className="span-two"><span>转回账户</span>
+          <label className="span-two"><span>{t("modals.settleDeposit.targetAccount")}</span>
             <select required value={targetId} onChange={(e) => setTargetId(e.target.value)}>
-              <option value="" disabled>选择目标账户</option>
+              <option value="" disabled>{t("modals.settleDeposit.selectTarget")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
@@ -276,8 +286,8 @@ export function SettleDepositModal({
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}结清并转回</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.settleDeposit.submit")}</button>
         </div>
       </form>
     </ModalShell>
@@ -309,6 +319,7 @@ export function ReimburseModal({
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const selectedAccount = accounts.find((account) => account.id === Number(accountId));
   const crossCurrency = selectedAccount != null && selectedAccount.currency !== expense.currency;
   const { hint, status, refresh } = useRateHint(
@@ -339,18 +350,18 @@ export function ReimburseModal({
       }
       await onSubmit(input);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="REIMBURSEMENT" title="报销支出" onClose={onClose}>
+    <ModalShell eyebrow="REIMBURSEMENT" title={t("modals.reimburse.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p>{expense.note || "一笔支出"} · {formatMoney(expense.amount, expense.currency)}，剩余可报销 {formatMoney(remaining, expense.currency)}。</p>
+          <p>{t("modals.reimburse.info", { note: expense.note || t("modals.reimburse.defaultNote"), amount: formatMoney(expense.amount, expense.currency), remaining: formatMoney(remaining, expense.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label><span>报销到账账户</span>
+          <label><span>{t("modals.reimburse.account")}</span>
             <select
               required
               value={accountId}
@@ -363,16 +374,16 @@ export function ReimburseModal({
                 }
               }}
             >
-              <option value="" disabled>选择账户</option>
+              <option value="" disabled>{t("common.selectAccount")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label><span>报销金额（{expense.currency}）</span><input required step="0.01" inputMode="decimal" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label><span>{t("modals.reimburse.amount", { currency: expense.currency })}</span><input required step="0.01" inputMode="decimal" max={remaining} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           {crossCurrency && (
             <>
-              <label className="span-two"><span>入账金额（{selectedAccount.currency}）</span>
+              <label className="span-two"><span>{t("modals.reimburse.settled", { currency: selectedAccount.currency })}</span>
                 <input
                   required
                   step="0.01"
@@ -382,7 +393,7 @@ export function ReimburseModal({
                     setSettledTouched(true);
                     setSettledAmount(e.target.value);
                   }}
-                  placeholder={`按汇率折算成 ${selectedAccount.currency}`}
+                  placeholder={t("modals.reimburse.settledPlaceholder", { currency: selectedAccount.currency })}
                 />
               </label>
               <div className="span-two">
@@ -390,12 +401,12 @@ export function ReimburseModal({
               </div>
             </>
           )}
-          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认报销</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.reimburse.submit")}</button>
         </div>
       </form>
     </ModalShell>
@@ -422,6 +433,7 @@ export function LoanModal({
   const [dueAt, setDueAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
@@ -435,42 +447,42 @@ export function LoanModal({
         due_at: dueAt ? new Date(`${dueAt}T00:00:00`).toISOString() : undefined
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="LOAN" title="记一笔借款" onClose={onClose}>
+    <ModalShell eyebrow="LOAN" title={t("accounts.loans.add")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
-          <label><span>方向</span>
+          <label><span>{t("modals.loan.direction")}</span>
             <select value={loanType} onChange={(e) => setLoanType(e.target.value as LoanType)}>
-              <option value="lend">借出（我借给别人）</option>
-              <option value="borrow">借入（我向别人借）</option>
+              <option value="lend">{t("modals.loan.lendOption")}</option>
+              <option value="borrow">{t("modals.loan.borrowOption")}</option>
             </select>
           </label>
-          <label><span>往来人</span>
-            <input required autoFocus list="koku-counterparties" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder="例如：张三" />
+          <label><span>{t("modals.loan.counterparty")}</span>
+            <input required autoFocus list="koku-counterparties" value={counterparty} onChange={(e) => setCounterparty(e.target.value)} placeholder={t("modals.loan.counterpartyPlaceholder")} />
             <datalist id="koku-counterparties">
               {counterparties.map((name) => <option key={name} value={name} />)}
             </datalist>
           </label>
-          <label><span>金额</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
-          <label><span>资金账户</span>
+          <label><span>{t("common.amount")}</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("common.fundingAccount")}</span>
             <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="" disabled>选择账户</option>
+              <option value="" disabled>{t("common.selectAccount")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
-          <label><span>到期日（可选）</span><input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} /></label>
+          <label><span>{t("modals.loan.dueDate")}</span><input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认{loanType === "lend" ? "借出" : "借入"}</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t(loanType === "lend" ? "modals.loan.confirmLend" : "modals.loan.confirmBorrow")}</button>
         </div>
       </form>
     </ModalShell>
@@ -501,6 +513,7 @@ export function RepayModal({
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const selectedAccount = accounts.find((account) => account.id === Number(accountId));
   const crossCurrency = selectedAccount != null && selectedAccount.currency !== loan.currency;
   const { hint, status, refresh } = useRateHint(
@@ -531,29 +544,29 @@ export function RepayModal({
       }
       await onSubmit(input);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="REPAYMENT" title={`${loan.loan_type === "lend" ? "收回" : "偿还"}借款`} onClose={onClose}>
+    <ModalShell eyebrow="REPAYMENT" title={t(loan.loan_type === "lend" ? "modals.repay.titleLend" : "modals.repay.titleBorrow")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p>{loan.loan_type === "lend" ? "借出" : "借入"}给 {loan.counterparty}，未结 {formatMoney(loan.outstanding, loan.currency)}。</p>
+          <p>{t(loan.loan_type === "lend" ? "modals.repay.infoLend" : "modals.repay.infoBorrow", { name: loan.counterparty, amount: formatMoney(loan.outstanding, loan.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label><span>资金账户</span>
+          <label><span>{t("common.fundingAccount")}</span>
             <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-              <option value="" disabled>选择账户</option>
+              <option value="" disabled>{t("common.selectAccount")}</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label><span>还款金额（{loan.currency}）</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label><span>{t("modals.repay.amount", { currency: loan.currency })}</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           {crossCurrency && (
             <>
-              <label className="span-two"><span>计入账户余额 · {selectedAccount.currency}</span>
+              <label className="span-two"><span>{t("modals.repay.settled", { currency: selectedAccount.currency })}</span>
                 <input
                   required
                   min="0.01"
@@ -564,7 +577,7 @@ export function RepayModal({
                     setSettledTouched(true);
                     setSettledAmount(e.target.value);
                   }}
-                  placeholder={`按汇率折算成 ${selectedAccount.currency}`}
+                  placeholder={t("modals.repay.settledPlaceholder", { currency: selectedAccount.currency })}
                 />
               </label>
               <div className="span-two">
@@ -572,12 +585,12 @@ export function RepayModal({
               </div>
             </>
           )}
-          <label className="span-two"><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}确认还款</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.repay.submit")}</button>
         </div>
       </form>
     </ModalShell>
@@ -628,6 +641,7 @@ export function TransactionModal({
   const [tagNames, setTagNames] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const matchingCategories = categories.filter((item) => item.kind === kind);
   const selectedCategory = categories.find((item) => item.id === categoryId);
   const currencyOptions = availableCurrencies(accounts);
@@ -690,49 +704,49 @@ export function TransactionModal({
         writeQuickEntry({ kind, account_id: accountId, category_id: categoryId, amount, note });
       }
     } catch (reason) {
-      setFormError(reason instanceof Error ? reason.message : "保存失败");
+      setFormError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed"));
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <ModalShell eyebrow="NEW ENTRY" title="记一笔" onClose={onClose}>
+    <ModalShell eyebrow="NEW ENTRY" title={t("common.quickAdd")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="kind-tabs">
           {(["expense", "income", "transfer"] as const).map((item) => (
             <button type="button" key={item} className={kind === item ? "active" : ""} onClick={() => changeKind(item)}>
-              {item === "expense" ? "支出" : item === "income" ? "收入" : "转账"}
+              {t(`transactions.kind.${item}`)}
             </button>
           ))}
         </div>
-        <label className="amount-field"><span>{kind === "income" ? "收入金额" : kind === "transfer" ? "转出金额" : "支出金额"} · {kind === "transfer" ? source?.currency : sourceCurrency}</span><div><em>{(kind === "transfer" ? source?.currency : sourceCurrency) === "CNY" ? "¥" : (kind === "transfer" ? source?.currency : sourceCurrency) === "USD" ? "$" : kind === "transfer" ? source?.currency : sourceCurrency}</em><input autoFocus required min="0.01" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
+        <label className="amount-field"><span>{t(kind === "income" ? "modals.transaction.incomeAmount" : kind === "transfer" ? "modals.transaction.transferAmount" : "modals.transaction.expenseAmount")} · {kind === "transfer" ? source?.currency : sourceCurrency}</span><div><em>{(kind === "transfer" ? source?.currency : sourceCurrency) === "CNY" ? "¥" : (kind === "transfer" ? source?.currency : sourceCurrency) === "USD" ? "$" : kind === "transfer" ? source?.currency : sourceCurrency}</em><input autoFocus required min="0.01" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
         <div className="form-grid">
-          <label><span>{kind === "transfer" ? "转出账户" : "账户"}</span><select value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
+          <label><span>{kind === "transfer" ? t("modals.transaction.fromAccount") : t("common.account")}</span><select value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           {kind === "transfer" ? (
-            <label><span>转入账户</span><select value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>{accounts.filter((item) => item.id !== accountId).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
+            <label><span>{t("modals.transaction.toAccount")}</span><select value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>{accounts.filter((item) => item.id !== accountId).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           ) : (
             <>
-              <label><span>交易币种</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-              <label><span>分类</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? "其他支出"} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
+              <label><span>{t("modals.transaction.currency")}</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+              <label><span>{t("common.category")}</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? t("modals.transaction.defaultCategory")} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
             </>
           )}
           {foreignTransaction && (
             <>
-              <label><span>计入账户余额 · {source?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => { setSettledTouched(true); setSettledAmount(e.target.value); }} placeholder="换算后的结算金额" /></label>
+              <label><span>{t("modals.transaction.settled", { currency: source?.currency })}</span><input required min="0.01" step="0.01" inputMode="decimal" value={settledAmount} onChange={(e) => { setSettledTouched(true); setSettledAmount(e.target.value); }} placeholder={t("modals.transaction.settledPlaceholder")} /></label>
               <RateHintLine from={sourceCurrency} to={source?.currency ?? ""} status={status} hint={hint} onRefresh={refresh} />
             </>
           )}
-          {crossCurrency && <label><span>转入金额 · {target?.currency}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
-          <label><span>时间</span><input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} /></label>
-          <label className={kind === "transfer" && crossCurrency ? "" : "span-two"}><span>备注</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="这笔钱花在了哪里？" /></label>
+          {crossCurrency && <label><span>{t("modals.transaction.targetAmount", { currency: target?.currency })}</span><input required min="0.01" step="0.01" inputMode="decimal" value={targetAmount} onChange={(e) => setTargetAmount(e.target.value)} placeholder="0.00" /></label>}
+          <label><span>{t("common.time")}</span><input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} /></label>
+          <label className={kind === "transfer" && crossCurrency ? "" : "span-two"}><span>{t("common.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("modals.transaction.notePlaceholder")} /></label>
           {kind !== "transfer" && (
-            <label className="span-two"><span>标签</span><TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} /></label>
+            <label className="span-two"><span>{t("common.tags")}</span><TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} /></label>
           )}
         </div>
-        {sameTransferEndpoint && <div className="form-error">转出与转入账户不能相同。</div>}
+        {sameTransferEndpoint && <div className="form-error">{t("modals.transaction.sameEndpointError")}</div>}
         {formError && <div className="form-error">{formError}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (foreignTransaction && !settledAmount) || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? "保存中" : "确认记录"}</button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={submitting || !amount || (kind !== "transfer" && !categoryId) || sameTransferEndpoint || (foreignTransaction && !settledAmount) || (crossCurrency && !targetAmount)}>{submitting && <LoaderCircle className="spin" size={17} />}{submitting ? t("common.saving") : t("modals.transaction.submit")}</button></div>
       </form>
     </ModalShell>
   );
@@ -778,6 +792,7 @@ export function EditTransactionModal({
   const [tagNames, setTagNames] = useState<string[]>(transaction.tags);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -812,22 +827,22 @@ export function EditTransactionModal({
       }
       await onSubmit(input);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存失败");
+      setError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed"));
       setSubmitting(false);
     }
   };
 
   return (
-    <ModalShell eyebrow="EDIT ENTRY" title="编辑交易" onClose={onClose}>
+    <ModalShell eyebrow="EDIT ENTRY" title={t("transactions.edit")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
           <p>
-            {transaction.kind === "expense" ? "支出" : "收入"} · {formatMoney(transaction.amount, transaction.currency)}
-            {foreign ? `，结算 ${formatMoney(transaction.settled_amount, accountCurrency)}` : ""}
+            {t("modals.editTransaction.info", { kind: t(transaction.kind === "expense" ? "transactions.kind.expense" : "transactions.kind.income"), amount: formatMoney(transaction.amount, transaction.currency) })}
+            {foreign ? t("modals.editTransaction.settledSuffix", { amount: formatMoney(transaction.settled_amount, accountCurrency) }) : ""}
           </p>
         </div>
         <div className="form-grid">
-          <label><span>账户</span>
+          <label><span>{t("common.account")}</span>
             <select
               value={accountId}
               disabled={reimbursementLocked || sameCurrencyAccounts.length <= 1}
@@ -838,9 +853,9 @@ export function EditTransactionModal({
               ))}
             </select>
           </label>
-          <label><span>分类</span>
+          <label><span>{t("common.category")}</span>
             <div className="category-input">
-              <CategoryAvatar name={matchingCategories.find((item) => item.id === categoryId)?.name ?? "其他"} size="small" />
+              <CategoryAvatar name={matchingCategories.find((item) => item.id === categoryId)?.name ?? t("modals.editTransaction.defaultCategory")} size="small" />
               <select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>
                 {matchingCategories.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>
@@ -848,7 +863,7 @@ export function EditTransactionModal({
               </select>
             </div>
           </label>
-          <label><span>金额（{transaction.currency}）</span>
+          <label><span>{t("modals.editTransaction.amount", { currency: transaction.currency })}</span>
             <input
               required
               min="0.01"
@@ -860,7 +875,7 @@ export function EditTransactionModal({
             />
           </label>
           {foreign && (
-            <label><span>计入账户余额 · {accountCurrency}</span>
+            <label><span>{t("modals.editTransaction.settled", { currency: accountCurrency })}</span>
               <input
                 required
                 min="0.01"
@@ -872,21 +887,21 @@ export function EditTransactionModal({
               />
             </label>
           )}
-          <label><span>时间</span>
+          <label><span>{t("common.time")}</span>
             <input required type="datetime-local" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
           </label>
-          <label className="span-two"><span>备注</span>
-            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="可选" />
+          <label className="span-two"><span>{t("common.note")}</span>
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} />
           </label>
-          <label className="span-two"><span>标签</span>
+          <label className="span-two"><span>{t("common.tags")}</span>
             <TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} />
           </label>
         </div>
-        {reimbursementLocked && <p className="fx-hint">该笔支出已发生报销，仅可修改备注、分类和时间。</p>}
+        {reimbursementLocked && <p className="fx-hint">{t("modals.editTransaction.lockedNote")}</p>}
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting || !amount}>{submitting && <LoaderCircle className="spin" size={17} />}保存修改</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting || !amount}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.editTransaction.save")}</button>
         </div>
       </form>
     </ModalShell>
@@ -911,6 +926,7 @@ export function EditAccountModal({
   const [adjustment, setAdjustment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
@@ -926,39 +942,39 @@ export function EditAccountModal({
         adjustment: adjustment ? adjustment : undefined
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存失败");
+      setError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="EDIT ACCOUNT" title="编辑账户" onClose={onClose}>
+    <ModalShell eyebrow="EDIT ACCOUNT" title={t("accounts.editTitle")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p><strong>{account.name}</strong> · 当前余额 {formatMoney(account.balance, account.currency)}</p>
+          <p>{t("modals.editAccount.info", { name: account.name, amount: formatMoney(account.balance, account.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label className="span-two"><span>账户名称</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
-            <option value="cash">零钱</option>
-            <option value="savings">储蓄</option>
-            <option value="stock">股票</option>
-            <option value="credit">信用</option>
+          <label className="span-two"><span>{t("modals.editAccount.name")}</span><input value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <label><span>{t("modals.editAccount.type")}</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+            <option value="cash">{t("accounts.type.cash")}</option>
+            <option value="savings">{t("accounts.type.savings")}</option>
+            <option value="stock">{t("accounts.type.stock")}</option>
+            <option value="credit">{t("accounts.type.credit")}</option>
           </select></label>
-          <label><span>结算币种</span><select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+          <label><span>{t("modals.editAccount.currency")}</span><select value={currency} onChange={(e) => setCurrency(e.target.value)}>
             {currencies.map((item) => <option key={item} value={item}>{item}</option>)}
           </select></label>
-          <label className="span-two"><span>余额调整（正数增加 / 负数减少，留空则不调整）</span>
+          <label className="span-two"><span>{t("modals.editAccount.adjustment")}</span>
             <input step="0.01" inputMode="decimal" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} placeholder="0.00" />
           </label>
-          <label className="span-two"><span>信用额度（仅信用账户，留空表示不设置）</span>
-            <input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="例如 20000" />
+          <label className="span-two"><span>{t("modals.editAccount.creditLimit")}</span>
+            <input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder={t("modals.editAccount.creditLimitPlaceholder")} />
           </label>
         </div>
-        <p className="category-delete-note">余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。</p>
+        <p className="category-delete-note">{t("modals.editAccount.adjustmentNote")}</p>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}保存</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.save")}</button>
         </div>
       </form>
     </ModalShell>
@@ -973,6 +989,7 @@ export function AccountModal({ currencies, onClose, onSubmit }: { currencies: st
   const [creditLimit, setCreditLimit] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSubmitting(true); setError(null);
     try {
@@ -984,31 +1001,31 @@ export function AccountModal({ currencies, onClose, onSubmit }: { currencies: st
         credit_limit: creditLimit.trim() ? creditLimit.trim() : undefined
       });
     }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); setSubmitting(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed")); setSubmitting(false); }
   };
   return (
-    <ModalShell eyebrow="NEW ACCOUNT" title="新建账户" onClose={onClose}>
+    <ModalShell eyebrow="NEW ACCOUNT" title={t("accounts.newAccount")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
-          <label className="span-two"><span>账户名称</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：储蓄卡" /></label>
-          <label><span>账户类型</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
-            <option value="cash">零钱</option>
-            <option value="savings">储蓄</option>
-            <option value="stock">股票</option>
-            <option value="credit">信用</option>
+          <label className="span-two"><span>{t("modals.account.name")}</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder={t("modals.account.namePlaceholder")} /></label>
+          <label><span>{t("modals.editAccount.type")}</span><select value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+            <option value="cash">{t("accounts.type.cash")}</option>
+            <option value="savings">{t("accounts.type.savings")}</option>
+            <option value="stock">{t("accounts.type.stock")}</option>
+            <option value="credit">{t("accounts.type.credit")}</option>
           </select></label>
-          <label><span>账户结算币种</span>
+          <label><span>{t("modals.account.currency")}</span>
             <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
               {currencies.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </label>
-          <label className="span-two"><span>期初余额</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
+          <label className="span-two"><span>{t("modals.account.openingBalance")}</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} /></label>
           {type === "credit" && (
-            <label className="span-two"><span>信用额度（可选）</span><input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="例如 20000" /></label>
+            <label className="span-two"><span>{t("modals.account.creditLimit")}</span><input step="0.01" inputMode="decimal" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder={t("modals.editAccount.creditLimitPlaceholder")} /></label>
           )}
         </div>
         {error && <div className="form-error">{error}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建账户</button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.account.submit")}</button></div>
       </form>
     </ModalShell>
   );
@@ -1020,31 +1037,32 @@ export function CategoryModal({ categories, onClose, onSubmit, onDelete }: { cat
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSubmitting(true); setError(null);
     try { await onSubmit({ name, kind }); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "保存失败"); setSubmitting(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed")); setSubmitting(false); }
   };
   const remove = async (category: Category) => {
-    if (!window.confirm(`删除“${category.name}”？历史账单和统计不会受到影响。`)) return;
+    if (!window.confirm(t("modals.category.confirmDelete", { name: category.name }))) return;
     setDeletingId(category.id); setError(null);
     try { await onDelete(category); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "删除失败"); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t("modals.category.deleteFailed")); }
     finally { setDeletingId(null); }
   };
   return (
-    <ModalShell eyebrow="CATEGORIES" title="管理分类" onClose={onClose}>
+    <ModalShell eyebrow="CATEGORIES" title={t("modals.category.title")} onClose={onClose}>
       <div className="category-library">
         {([
-          { kind: "expense" as const, label: "支出分类" },
-          { kind: "income" as const, label: "收入分类" }
+          { kind: "expense" as const, label: t("modals.category.expenseGroup") },
+          { kind: "income" as const, label: t("modals.category.incomeGroup") }
         ]).map((group) => {
           const items = categories.filter((item) => item.kind === group.kind);
           return (
             <section key={group.kind}>
-              <header><strong>{group.label}</strong><small>{items.length} 项</small></header>
+              <header><strong>{group.label}</strong><small>{t("common.countItems", { count: items.length })}</small></header>
               <div className="category-chip-list">
-                {items.map((item) => <span key={item.id} className={item.kind}><CategoryAvatar name={item.name} size="tiny" /><span>{item.name}</span><button type="button" onClick={() => void remove(item)} disabled={deletingId !== null} aria-label={`删除${item.name}`}>{deletingId === item.id ? <LoaderCircle className="spin" size={11} /> : <X size={11} />}</button></span>)}
+                {items.map((item) => <span key={item.id} className={item.kind}><CategoryAvatar name={item.name} size="tiny" /><span>{item.name}</span><button type="button" onClick={() => void remove(item)} disabled={deletingId !== null} aria-label={t("modals.category.removeAria", { name: item.name })}>{deletingId === item.id ? <LoaderCircle className="spin" size={11} /> : <X size={11} />}</button></span>)}
               </div>
             </section>
           );
@@ -1052,11 +1070,11 @@ export function CategoryModal({ categories, onClose, onSubmit, onDelete }: { cat
       </div>
       <form className="entry-form category-form" onSubmit={submit}>
         <div className="form-grid">
-          <label><span>分类类型</span><select value={kind} onChange={(e) => setKind(e.target.value as CategoryKind)}><option value="expense">支出</option><option value="income">收入</option></select></label>
-          <label><span>新分类名称</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：旅行" /></label>
+          <label><span>{t("modals.category.kind")}</span><select value={kind} onChange={(e) => setKind(e.target.value as CategoryKind)}><option value="expense">{t("common.expense")}</option><option value="income">{t("common.income")}</option></select></label>
+          <label><span>{t("modals.category.name")}</span><input autoFocus required value={name} onChange={(e) => setName(e.target.value)} placeholder={t("modals.category.namePlaceholder")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
-        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>完成</button><button className="primary-button" disabled={submitting || !name}>{submitting && <LoaderCircle className="spin" size={17} />}添加分类</button></div>
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>{t("modals.category.done")}</button><button className="primary-button" disabled={submitting || !name}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.category.add")}</button></div>
       </form>
     </ModalShell>
   );
@@ -1090,6 +1108,7 @@ export function RecurringModal({
   const [startDate, setStartDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const kindCategories = categories.filter((category) => category.kind === kind);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1106,49 +1125,49 @@ export function RecurringModal({
         next_due_at
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="RECURRING" title="新建周期交易" onClose={onClose}>
+    <ModalShell eyebrow="RECURRING" title={t("modals.recurring.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
-          <label><span>类型</span>
+          <label><span>{t("modals.recurring.kind")}</span>
             <select value={kind} onChange={(event) => { setKind(event.target.value as "expense" | "income"); setCategoryId(""); }}>
-              <option value="expense">支出</option>
-              <option value="income">收入</option>
+              <option value="expense">{t("common.expense")}</option>
+              <option value="income">{t("common.income")}</option>
             </select>
           </label>
-          <label><span>金额</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
-          <label><span>资金账户</span>
+          <label><span>{t("common.amount")}</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("common.fundingAccount")}</span>
             <select required value={accountId} onChange={(event) => setAccountId(Number(event.target.value))}>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label><span>分类</span>
+          <label><span>{t("common.category")}</span>
             <select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-              <option value="" disabled>选择分类</option>
+              <option value="" disabled>{t("modals.recurring.selectCategory")}</option>
               {kindCategories.map((category) => (
                 <option key={category.id} value={category.id}>{category.name}</option>
               ))}
             </select>
           </label>
-          <label><span>周期</span>
+          <label><span>{t("modals.recurring.frequency")}</span>
             <select value={frequency} onChange={(event) => setFrequency(event.target.value as RecurrenceFrequency)}>
-              <option value="monthly">每月</option>
-              <option value="weekly">每周</option>
+              <option value="monthly">{t("common.monthly")}</option>
+              <option value="weekly">{t("common.weekly")}</option>
             </select>
           </label>
-          <label><span>首次日期</span><input required type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
-          <label className="span-two"><span>备注</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="可选，例如：房租 / 视频会员" /></label>
+          <label><span>{t("modals.recurring.startDate")}</span><input required type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder={t("modals.recurring.notePlaceholder")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}创建</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.create")}</button>
         </div>
       </form>
     </ModalShell>
@@ -1188,6 +1207,7 @@ export function TradeModal({
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
@@ -1205,39 +1225,39 @@ export function TradeModal({
         }
       });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "操作失败");
+      setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="TRADE" title={side === "buy" ? "买入股票" : "卖出股票"} onClose={onClose}>
+    <ModalShell eyebrow="TRADE" title={t(side === "buy" ? "modals.trade.titleBuy" : "modals.trade.titleSell")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="kind-tabs">
           {(["buy", "sell"] as const).map((item) => (
             <button type="button" key={item} className={side === item ? "active" : ""} onClick={() => setSide(item)}>
-              {item === "buy" ? "买入" : "卖出"}
+              {t(item === "buy" ? "modals.trade.buy" : "modals.trade.sell")}
             </button>
           ))}
         </div>
         <div className="form-grid">
-          <label><span>股票账户</span>
+          <label><span>{t("modals.trade.stockAccount")}</span>
             <select required value={accountId} onChange={(event) => setAccountId(Number(event.target.value))}>
-              {stockAccounts.length === 0 && <option value={0} disabled>没有股票账户</option>}
+              {stockAccounts.length === 0 && <option value={0} disabled>{t("modals.trade.noStockAccount")}</option>}
               {stockAccounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
-          <label><span>代码</span><input required autoFocus value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder="例如 AAPL" /></label>
-          <label><span>股数</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
-          <label><span>每股价格</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
-          <label><span>时间</span><input type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label>
-          <label className="span-two"><span>备注</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="可选" /></label>
+          <label><span>{t("modals.trade.symbol")}</span><input required autoFocus value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t("modals.trade.symbolPlaceholder")} /></label>
+          <label><span>{t("modals.trade.shares")}</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
+          <label><span>{t("modals.trade.price")}</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("common.time")}</span><input type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label>
+          <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder={t("common.optional")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting || !symbol || !shares || !price || !accountId}>{submitting && <LoaderCircle className="spin" size={17} />}{side === "buy" ? "买入" : "卖出"}</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting || !symbol || !shares || !price || !accountId}>{submitting && <LoaderCircle className="spin" size={17} />}{t(side === "buy" ? "modals.trade.buy" : "modals.trade.sell")}</button>
         </div>
       </form>
     </ModalShell>
@@ -1255,40 +1275,41 @@ export function PasswordModal({
   const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
     if (newPassword.length < 8) {
-      setError("新密码至少 8 位");
+      setError(t("modals.password.tooShort"));
       setSubmitting(false);
       return;
     }
     if (newPassword !== confirm) {
-      setError("两次输入的新密码不一致");
+      setError(t("modals.password.mismatch"));
       setSubmitting(false);
       return;
     }
     try {
       await onSubmit(oldPassword, newPassword);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "修改失败");
+      setError(reason instanceof Error ? reason.message : t("modals.password.changeFailed"));
       setSubmitting(false);
     }
   };
   return (
-    <ModalShell eyebrow="SECURITY" title="修改密码" onClose={onClose}>
+    <ModalShell eyebrow="SECURITY" title={t("modals.password.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
-          <label className="span-two"><span>当前密码</span><input required type="password" autoFocus autoComplete="current-password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
-          <label className="span-two"><span>新密码（至少 8 位）</span><input required type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
-          <label className="span-two"><span>确认新密码</span><input required type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
+          <label className="span-two"><span>{t("modals.password.current")}</span><input required type="password" autoFocus autoComplete="current-password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} /></label>
+          <label className="span-two"><span>{t("modals.password.new")}</span><input required type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+          <label className="span-two"><span>{t("modals.password.confirm")}</span><input required type="password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} /></label>
         </div>
-        <p className="fx-hint">修改后所有登录会话将失效，需要重新登录。</p>
+        <p className="fx-hint">{t("modals.password.note")}</p>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
-          <button className="primary-button" disabled={submitting || !oldPassword || !newPassword || !confirm}>{submitting && <LoaderCircle className="spin" size={17} />}保存并重新登录</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="primary-button" disabled={submitting || !oldPassword || !newPassword || !confirm}>{submitting && <LoaderCircle className="spin" size={17} />}{t("modals.password.submit")}</button>
         </div>
       </form>
     </ModalShell>
@@ -1318,6 +1339,7 @@ export function ImportModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const { t } = useTranslation();
 
   const input = (): { format?: string; account_id: number; category_id?: number; currency?: string } => ({
     format: format === "auto" ? undefined : format,
@@ -1333,7 +1355,7 @@ export function ImportModal({
     try {
       setResult(await importTransactions(file, input()));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "导入失败");
+      setError(reason instanceof Error ? reason.message : t("modals.import.importFailed"));
       setSubmitting(false);
     }
   };
@@ -1344,69 +1366,69 @@ export function ImportModal({
   };
 
   return (
-    <ModalShell eyebrow="IMPORT" title="导入交易" onClose={onClose}>
+    <ModalShell eyebrow="IMPORT" title={t("modals.import.title")} onClose={onClose}>
       {result ? (
         <div className="import-result">
           <div className="import-summary">
-            <span className="import-count ok"><strong>{result.imported}</strong>成功导入</span>
-            <span className="import-count skip"><strong>{result.skipped_duplicates}</strong>重复跳过</span>
-            <span className={`import-count ${result.failed > 0 ? "bad" : ""}`}><strong>{result.failed}</strong>失败</span>
+            <span className="import-count ok"><strong>{result.imported}</strong>{t("modals.import.imported", { count: result.imported })}</span>
+            <span className="import-count skip"><strong>{result.skipped_duplicates}</strong>{t("modals.import.skipped", { count: result.skipped_duplicates })}</span>
+            <span className={`import-count ${result.failed > 0 ? "bad" : ""}`}><strong>{result.failed}</strong>{t("modals.import.failed", { count: result.failed })}</span>
           </div>
           {result.issues.length > 0 && (
-            <div className="import-issues" aria-label="导入问题明细">
-              <div className="import-issues-head">以下 {result.issues.length} 行被跳过或失败：</div>
+            <div className="import-issues" aria-label={t("modals.import.issuesAria")}>
+              <div className="import-issues-head">{t("modals.import.issuesHead", { count: result.issues.length })}</div>
               {result.issues.map((issue, index) => (
                 <div className="import-issue" key={index}>
-                  <span>第 {issue.line} 行</span>
+                  <span>{t("modals.import.row", { line: issue.line })}</span>
                   <span>{issue.message}</span>
                 </div>
               ))}
             </div>
           )}
           <p className="fx-hint">
-            已导入 {result.format.toUpperCase()} 到该账户。点击「完成」刷新账本并提示结果。
+            {t("modals.import.doneHint", { format: result.format.toUpperCase() })}
           </p>
           <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
-            <button type="button" className="primary-button" onClick={finish}>完成</button>
+            <button type="button" className="secondary-button" onClick={onClose}>{t("common.close")}</button>
+            <button type="button" className="primary-button" onClick={finish}>{t("modals.category.done")}</button>
           </div>
         </div>
       ) : (
         <form className="entry-form" onSubmit={submit}>
           <div className="deposit-info">
-            <p>从账单文件批量导入流水，支持 CSV / QIF / OFX；格式可留空自动识别。</p>
+            <p>{t("modals.import.intro")}</p>
           </div>
           <div className="form-grid">
-            <label><span>目标账户</span>
+            <label><span>{t("modals.import.account")}</span>
               <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-                <option value="" disabled>选择账户</option>
+                <option value="" disabled>{t("common.selectAccount")}</option>
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
                 ))}
               </select>
             </label>
-            <label><span>文件格式</span>
+            <label><span>{t("modals.import.format")}</span>
               <select value={format} onChange={(e) => setFormat(e.target.value as "auto" | "csv" | "qif" | "ofx")}>
-                <option value="auto">自动识别</option>
+                <option value="auto">{t("modals.import.auto")}</option>
                 <option value="csv">CSV</option>
                 <option value="qif">QIF</option>
                 <option value="ofx">OFX</option>
               </select>
             </label>
-            <label className="span-two"><span>默认分类（可选）</span>
+            <label className="span-two"><span>{t("modals.import.defaultCategory")}</span>
               <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                <option value="">不指定（仅 Koku 导出 CSV 可带分类）</option>
+                <option value="">{t("modals.import.noCategory")}</option>
                 {categories.map((category) => (
                   <option key={category.id} value={category.id}>
-                    {category.kind === "income" ? "收入 · " : "支出 · "}{category.name}
+                    {t(category.kind === "income" ? "modals.import.incomePrefix" : "modals.import.expensePrefix")}{category.name}
                   </option>
                 ))}
               </select>
             </label>
-            <label><span>默认币种（可选）</span>
-              <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="例如 CNY" />
+            <label><span>{t("modals.import.defaultCurrency")}</span>
+              <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder={t("modals.import.currencyPlaceholder")} />
             </label>
-            <label className="span-two"><span>账单文件</span>
+            <label className="span-two"><span>{t("modals.import.file")}</span>
               <input
                 required
                 type="file"
@@ -1417,10 +1439,10 @@ export function ImportModal({
           </div>
           {error && <div className="form-error">{error}</div>}
           <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+            <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
             <button className="primary-button" disabled={submitting || !file || !accountId}>
               {submitting ? <LoaderCircle className="spin" size={17} /> : <Upload size={16} />}
-              {submitting ? "正在导入…" : "开始导入"}
+              {submitting ? t("modals.import.importing") : t("modals.import.start")}
             </button>
           </div>
         </form>
@@ -1440,9 +1462,9 @@ function parseDay(value: string): Date {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
 }
 
-/** 日期展示（如 "2026年8月15日"）。 */
+/** 日期展示（如 "2026年8月15日"），随界面语言变化。 */
 function formatDay(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(parseDay(value));
+  return new Intl.DateTimeFormat(uiLocale(), { year: "numeric", month: "long", day: "numeric" }).format(parseDay(value));
 }
 
 /** 二步验证（TOTP）管理弹窗：查看状态、开始设置、关闭。 */
@@ -1458,6 +1480,7 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState<"" | "secret" | "uri">("");
+  const { t } = useTranslation();
 
   useEffect(() => {
     let cancelled = false;
@@ -1470,14 +1493,14 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
       })
       .catch((reason) => {
         if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "无法读取安全设置");
+          setError(reason instanceof Error ? reason.message : t("totp.loadFailed"));
           setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   const copy = async (text: string, which: "secret" | "uri") => {
     try {
@@ -1485,7 +1508,7 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
       setCopied(which);
       window.setTimeout(() => setCopied(""), 1600);
     } catch {
-      setError("复制失败，请手动选择复制");
+      setError(t("totp.copyFailed"));
     }
   };
 
@@ -1499,7 +1522,7 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
       setPassword("");
       setStep("secret");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "设置失败");
+      setError(reason instanceof Error ? reason.message : t("totp.setupFailed"));
     } finally {
       setBusy(false);
     }
@@ -1512,10 +1535,10 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
       await totpEnable(code.trim());
       setCode("");
       setEnabled(true);
-      setNotice("已启用二步验证。请确认验证器已保存密钥，此后登录需输入动态码。");
+      setNotice(t("totp.enabledNotice"));
       setStep("intro");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "启用失败");
+      setError(reason instanceof Error ? reason.message : t("totp.enableFailed"));
     } finally {
       setBusy(false);
     }
@@ -1528,110 +1551,110 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
       await totpDisable(code.trim());
       setCode("");
       setEnabled(false);
-      setNotice("二步验证已关闭。");
+      setNotice(t("totp.disabledNotice"));
       setStep("intro");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "关闭失败");
+      setError(reason instanceof Error ? reason.message : t("totp.disableFailed"));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <ModalShell eyebrow="TWO-FACTOR AUTH" title="二步验证" onClose={onClose}>
+    <ModalShell eyebrow="TWO-FACTOR AUTH" title={t("totp.title")} onClose={onClose}>
       <div className="entry-form">
         {loading ? (
-          <div className="totp-loading"><LoaderCircle className="spin" size={18} /> 正在读取安全设置…</div>
+          <div className="totp-loading"><LoaderCircle className="spin" size={18} /> {t("totp.loading")}</div>
         ) : step === "secret" ? (
           <>
-            <p className="fx-hint">把下面的密钥添加到你的验证器（如 Google Authenticator、1Password），建议同时保存 otpauth 链接备用。</p>
+            <p className="fx-hint">{t("totp.secretIntro")}</p>
             <div className="totp-secret-block">
-              <span>账户密钥（Base32）</span>
+              <span>{t("totp.secretLabel")}</span>
               <div className="totp-secret-row">
                 <code className="totp-secret">{secret}</code>
                 <button type="button" className="copy-button" onClick={() => void copy(secret, "secret")}>
                   {copied === "secret" ? <Check size={13} /> : <Copy size={13} />}
-                  {copied === "secret" ? "已复制" : "复制"}
+                  {copied === "secret" ? t("totp.copied") : t("totp.copy")}
                 </button>
               </div>
             </div>
             <div className="totp-secret-block">
-              <span>验证器链接（otpauth://）</span>
+              <span>{t("totp.uriLabel")}</span>
               <div className="totp-secret-row">
                 <code className="totp-uri">{otpauthUri}</code>
                 <button type="button" className="copy-button" onClick={() => void copy(otpauthUri, "uri")}>
                   {copied === "uri" ? <Check size={13} /> : <Copy size={13} />}
-                  {copied === "uri" ? "已复制" : "复制"}
+                  {copied === "uri" ? t("totp.copied") : t("totp.copy")}
                 </button>
               </div>
             </div>
             <form onSubmit={enable}>
               <div className="form-grid">
-                <label className="span-two"><span>验证器动态码</span>
-                  <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder="输入 6 位动态码" />
+                <label className="span-two"><span>{t("totp.code")}</span>
+                  <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t("totp.codePlaceholder")} />
                 </label>
               </div>
               {error && <div className="form-error">{error}</div>}
               <div className="modal-actions">
-                <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+                <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
                 <button className="primary-button" disabled={busy || code.trim().length !== 6}>
-                  {busy && <LoaderCircle className="spin" size={17} />}确认开启
+                  {busy && <LoaderCircle className="spin" size={17} />}{t("totp.confirmEnable")}
                 </button>
               </div>
             </form>
           </>
         ) : step === "password" ? (
           <form onSubmit={startSetup}>
-            <div className="deposit-info"><p>开启前需要验证当前登录密码，防止他人擅自开启。</p></div>
+            <div className="deposit-info"><p>{t("totp.passwordIntro")}</p></div>
             <div className="form-grid">
-              <label className="span-two"><span>当前密码</span>
-                <input required type="password" autoFocus autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="输入当前密码" />
+              <label className="span-two"><span>{t("modals.password.current")}</span>
+                <input required type="password" autoFocus autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t("totp.passwordPlaceholder")} />
               </label>
             </div>
             {error && <div className="form-error">{error}</div>}
             <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={() => { setError(null); setStep("intro"); }}>返回</button>
-              <button className="primary-button" disabled={busy || !password}>{busy && <LoaderCircle className="spin" size={17} />}下一步</button>
+              <button type="button" className="secondary-button" onClick={() => { setError(null); setStep("intro"); }}>{t("totp.back")}</button>
+              <button className="primary-button" disabled={busy || !password}>{busy && <LoaderCircle className="spin" size={17} />}{t("totp.next")}</button>
             </div>
           </form>
         ) : enabled ? (
           <div className="totp-enabled">
-            <p className="totp-status"><ShieldCheck size={17} /> 二步验证已启用</p>
+            <p className="totp-status"><ShieldCheck size={17} /> {t("totp.enabledStatus")}</p>
             {notice && <div className="totp-notice" role="status"><Check size={14} /> {notice}</div>}
             {step === "disable" ? (
               <form onSubmit={disable}>
-                <div className="deposit-info"><p>关闭后恢复仅凭密码登录。请输入验证器中的当前动态码确认。</p></div>
+                <div className="deposit-info"><p>{t("totp.disableIntro")}</p></div>
                 <div className="form-grid">
-                  <label className="span-two"><span>当前动态码</span>
-                    <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder="输入 6 位动态码" />
+                  <label className="span-two"><span>{t("totp.currentCode")}</span>
+                    <input required autoFocus inputMode="numeric" maxLength={6} pattern="[0-9]*" value={code} onChange={(e) => setCode(e.target.value)} placeholder={t("totp.codePlaceholder")} />
                   </label>
                 </div>
                 {error && <div className="form-error">{error}</div>}
                 <div className="modal-actions">
-                  <button type="button" className="secondary-button" onClick={() => { setError(null); setCode(""); setStep("intro"); }}>取消</button>
-                  <button className="primary-button" disabled={busy || code.trim().length !== 6}>{busy && <LoaderCircle className="spin" size={17} />}关闭二步验证</button>
+                  <button type="button" className="secondary-button" onClick={() => { setError(null); setCode(""); setStep("intro"); }}>{t("common.cancel")}</button>
+                  <button className="primary-button" disabled={busy || code.trim().length !== 6}>{busy && <LoaderCircle className="spin" size={17} />}{t("totp.disable")}</button>
                 </div>
               </form>
             ) : (
               <>
-                <p className="fx-hint">每次登录都需要输入验证器中的 6 位动态码。如需关闭，请先验证当前动态码。</p>
+                <p className="fx-hint">{t("totp.enabledHint")}</p>
                 {error && <div className="form-error">{error}</div>}
                 <div className="modal-actions">
-                  <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
-                  <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("disable"); }}><KeyRound size={16} />关闭二步验证</button>
+                  <button type="button" className="secondary-button" onClick={onClose}>{t("common.close")}</button>
+                  <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("disable"); }}><KeyRound size={16} />{t("totp.disable")}</button>
                 </div>
               </>
             )}
           </div>
         ) : (
           <>
-            <p className="totp-intro-copy"><LockKeyhole size={17} /> 当前未开启二步验证</p>
-            <p className="fx-hint">开启后，每次登录除密码外还需输入验证器生成的 6 位动态码，可防止密码泄露后被他人登录。</p>
+            <p className="totp-intro-copy"><LockKeyhole size={17} /> {t("totp.disabledStatus")}</p>
+            <p className="fx-hint">{t("totp.disabledHint")}</p>
             {notice && <div className="totp-notice" role="status"><Check size={14} /> {notice}</div>}
             {error && <div className="form-error">{error}</div>}
             <div className="modal-actions">
-              <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
-              <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("password"); }}><ShieldCheck size={16} />开始设置</button>
+              <button type="button" className="secondary-button" onClick={onClose}>{t("common.close")}</button>
+              <button type="button" className="primary-button" onClick={() => { setError(null); setNotice(null); setStep("password"); }}><ShieldCheck size={16} />{t("totp.startSetup")}</button>
             </div>
           </>
         )}
@@ -1641,7 +1664,8 @@ export function TotpModal({ onClose }: { onClose: () => void }) {
 }
 
 function ReconciliationStatusBadge({ status }: { status: ReconciliationStatus }) {
-  const label = status === "open" ? "进行中" : status === "completed" ? "已完成" : "已取消";
+  const { t } = useTranslation();
+  const label = status === "open" ? t("reconcile.statusOpen") : status === "completed" ? t("reconcile.statusCompleted") : t("reconcile.statusCancelled");
   return <span className={`reconcile-status ${status}`}>{label}</span>;
 }
 
@@ -1664,13 +1688,14 @@ export function ReconciliationModal({
   const [submitting, setSubmitting] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
 
   const refresh = async () => {
     try {
       setItems(await listReconciliations(account.id));
       setLoadError(null);
     } catch (reason) {
-      setLoadError(reason instanceof Error ? reason.message : "加载对账记录失败");
+      setLoadError(reason instanceof Error ? reason.message : t("reconcile.loadFailed"));
     }
   };
   useEffect(() => {
@@ -1692,7 +1717,7 @@ export function ReconciliationModal({
       setNote("");
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "新建对账失败");
+      setError(reason instanceof Error ? reason.message : t("reconcile.createFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -1705,7 +1730,7 @@ export function ReconciliationModal({
       await onChanged();
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "完成对账失败");
+      setError(reason instanceof Error ? reason.message : t("reconcile.completeFailed"));
     } finally {
       setBusyId(null);
     }
@@ -1717,39 +1742,39 @@ export function ReconciliationModal({
       await cancelReconciliation(item.id);
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "取消对账失败");
+      setError(reason instanceof Error ? reason.message : t("reconcile.cancelFailed"));
     } finally {
       setBusyId(null);
     }
   };
 
   return (
-    <ModalShell eyebrow="RECONCILE" title={`对账 · ${account.name}`} onClose={onClose}>
+    <ModalShell eyebrow="RECONCILE" title={t("reconcile.title", { name: account.name })} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p>当前账面余额 {formatMoney(account.balance, account.currency)}。完成对账时若与对账单有差额，将自动生成调整流水修正余额。</p>
+          <p>{t("reconcile.intro", { amount: formatMoney(account.balance, account.currency) })}</p>
         </div>
         <div className="form-grid">
-          <label><span>对账日</span><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-          <label><span>对账单余额（{account.currency}）</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="0.00" /></label>
-          <label className="span-two"><span>备注（可选）</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="例如：与银行流水核对无误" /></label>
+          <label><span>{t("reconcile.date")}</span><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+          <label><span>{t("reconcile.statementBalance", { currency: account.currency })}</span><input required step="0.01" inputMode="decimal" value={balance} onChange={(e) => setBalance(e.target.value)} placeholder="0.00" /></label>
+          <label className="span-two"><span>{t("reconcile.note")}</span><input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("reconcile.notePlaceholder")} /></label>
         </div>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>关闭</button>
+          <button type="button" className="secondary-button" onClick={onClose}>{t("common.close")}</button>
           <button className="primary-button" disabled={submitting || !date || !balance}>
-            {submitting && <LoaderCircle className="spin" size={17} />}新建对账
+            {submitting && <LoaderCircle className="spin" size={17} />}{t("reconcile.create")}
           </button>
         </div>
       </form>
 
       <div className="reconcile-history">
-        <div className="reconcile-history-head"><strong>历史对账</strong><small>{items ? `${items.length} 笔` : ""}</small></div>
+        <div className="reconcile-history-head"><strong>{t("reconcile.history")}</strong><small>{items ? t("reconcile.count", { count: items.length }) : ""}</small></div>
         {loadError && <div className="form-error">{loadError}</div>}
         {items === null ? (
-          loadError ? null : <div className="empty-hint"><LoaderCircle className="spin" size={16} /> 正在加载…</div>
+          loadError ? null : <div className="empty-hint"><LoaderCircle className="spin" size={16} /> {t("common.loading")}</div>
         ) : items.length === 0 ? (
-          <div className="empty-hint">还没有对账记录。</div>
+          <div className="empty-hint">{t("reconcile.empty")}</div>
         ) : (
           <div className="reconcile-list">
             {items.map((item) => (
@@ -1759,22 +1784,22 @@ export function ReconciliationModal({
                   <ReconciliationStatusBadge status={item.status} />
                 </div>
                 <div className="reconcile-item-meta">
-                  <span>对账单 {formatMoney(item.statement_balance, account.currency)}</span>
-                  <span>账面 {formatMoney(item.book_balance, account.currency)}</span>
-                  <span>开始于 {formatDate(item.opened_at)}</span>
+                  <span>{t("reconcile.statementLabel", { amount: formatMoney(item.statement_balance, account.currency) })}</span>
+                  <span>{t("reconcile.bookLabel", { amount: formatMoney(item.book_balance, account.currency) })}</span>
+                  <span>{t("reconcile.openedAt", { date: formatDate(item.opened_at) })}</span>
                 </div>
                 {item.note && <p className="fx-hint">{item.note}</p>}
-                {item.completed_at && <p className="fx-hint">完成于 {formatDate(item.completed_at)}</p>}
+                {item.completed_at && <p className="fx-hint">{t("reconcile.completedAt", { date: formatDate(item.completed_at) })}</p>}
                 {item.adjustment_transaction_id != null && (
-                  <p className="reconcile-adjustment"><RotateCcw size={12} /> 已自动生成调整流水，余额已修正</p>
+                  <p className="reconcile-adjustment"><RotateCcw size={12} /> {t("reconcile.adjustmentNote")}</p>
                 )}
                 {item.status === "open" && (
                   <div className="reconcile-actions">
                     <button type="button" className="text-button" disabled={busyId === item.id} onClick={() => void complete(item)}>
-                      {busyId === item.id ? <LoaderCircle className="spin" size={13} /> : <ClipboardCheck size={13} />}完成对账
+                      {busyId === item.id ? <LoaderCircle className="spin" size={13} /> : <ClipboardCheck size={13} />}{t("reconcile.complete")}
                     </button>
                     <button type="button" className="text-button danger" disabled={busyId === item.id} onClick={() => void cancel(item)}>
-                      <X size={13} />取消
+                      <X size={13} />{t("common.cancel")}
                     </button>
                   </div>
                 )}

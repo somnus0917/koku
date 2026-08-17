@@ -120,6 +120,19 @@ button:disabled {
   backdrop-filter: blur(14px);
 }
 
+.login-corner-actions {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 4;
+  display: flex;
+  gap: 10px;
+}
+
+.login-corner-actions .login-theme-button {
+  position: static;
+}
+
 .login-story {
   position: relative;
   display: flex;
@@ -2666,6 +2679,7 @@ button:disabled {
   .login-panel { min-height: auto; padding: 42px 24px 56px; }
   .login-card { width: min(100%, 440px); }
   .login-theme-button { top: 18px; right: 18px; border-color: rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.08); color: #f4f6f0; }
+  .login-corner-actions { top: 18px; right: 18px; }
   .sidebar {
     width: 246px;
     transform: translateX(-102%);

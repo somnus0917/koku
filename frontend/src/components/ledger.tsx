@@ -1,5 +1,6 @@
 //! 页面级组件：总览、账户、交易、分析、借贷区块。
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -134,6 +135,7 @@ function useConversionRates(currencies: string[], display: string) {
 }
 
 function ReminderBanner({ deposits, loans }: { deposits: Deposit[]; loans: Loan[] }) {
+  const { t } = useTranslation();
   const now = Date.now();
   const maturedDeposits = deposits.filter(
     (deposit) => !deposit.settled_at && new Date(deposit.maturity_at).getTime() <= now
@@ -147,11 +149,15 @@ function ReminderBanner({ deposits, loans }: { deposits: Deposit[]; loans: Loan[
       <BellRing size={18} />
       <div>
         {maturedDeposits.map((deposit) => (
-          <p key={deposit.id}>定期「{deposit.term_days} 天」已于 {formatDate(deposit.maturity_at)} 到期，可结清转回。</p>
+          <p key={deposit.id}>{t("dashboard.reminderDepositMatured", { days: deposit.term_days, date: formatDate(deposit.maturity_at) })}</p>
         ))}
         {overdueLoans.map((loan) => (
           <p key={loan.id}>
-            {loan.loan_type === "lend" ? "借出" : "借入"}「{loan.counterparty}」已于 {formatDate(loan.due_at!)} 到期。
+            {t("dashboard.reminderLoanDue", {
+              type: t(loan.loan_type === "lend" ? "common.lend" : "common.borrow"),
+              counterparty: loan.counterparty,
+              date: formatDate(loan.due_at!)
+            })}
           </p>
         ))}
       </div>
@@ -169,6 +175,7 @@ export function Dashboard({
   onShowTransactions: () => void;
 }) {
   const [hidden, setHidden] = useState(false);
+  const { t } = useTranslation();
   const activeTransactions = data.transactions.filter((item) => !item.voided_at);
   const recent = activeTransactions.slice(0, 5);
   const display = data.monthly.currency;
@@ -184,13 +191,13 @@ export function Dashboard({
   const rates = useConversionRates(rateCurrencies, display);
   return (
     <div className="page page-enter">
-      <PageTitle eyebrow="WELCOME BACK" title="今天，也把生活记清楚。" />
+      <PageTitle eyebrow="WELCOME BACK" title={t("dashboard.greeting")} />
       <ReminderBanner deposits={data.deposits} loans={data.loans} />
       <section className="hero-grid">
         <article className="net-worth-card">
           <div className="card-heading">
-            <span>净资产 · {data.balance.currency}</span>
-            <button className="bare-button" onClick={() => setHidden((value) => !value)} aria-label="隐藏金额">
+            <span>{t("dashboard.netWorth", { currency: data.balance.currency })}</span>
+            <button className="bare-button" onClick={() => setHidden((value) => !value)} aria-label={t("dashboard.hideAmounts")}>
               {hidden ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
@@ -200,28 +207,28 @@ export function Dashboard({
           <div className="hero-meta">
             <span className={Number(data.monthly.net) >= 0 ? "positive" : "negative"}>
               {Number(data.monthly.net) >= 0 ? <ArrowUpRight size={15} /> : <ArrowDownLeft size={15} />}
-              本月结余 {hidden ? "••••" : formatMoney(data.monthly.net, data.monthly.currency)}
+              {t("dashboard.monthlyNet")} {hidden ? "••••" : formatMoney(data.monthly.net, data.monthly.currency)}
             </span>
-            <span>{data.accounts.length} 个账户已连接</span>
+            <span>{t("dashboard.accountsConnected", { count: data.accounts.length })}</span>
           </div>
           <TrendChart transactions={activeTransactions} currency={display} rates={rates} />
         </article>
 
         <article className="month-card">
           <div className="card-heading">
-            <span>{data.monthly.month} 月现金流</span>
+            <span>{t("dashboard.monthCashFlow", { month: data.monthly.month })}</span>
             <CircleDollarSign size={19} />
           </div>
           <div className="flow-row income">
             <span className="flow-icon"><ArrowDownLeft size={18} /></span>
-            <div><small>收入</small><strong>{hidden ? "••••" : formatMoney(data.monthly.total_income, data.monthly.currency)}</strong></div>
+            <div><small>{t("common.income")}</small><strong>{hidden ? "••••" : formatMoney(data.monthly.total_income, data.monthly.currency)}</strong></div>
           </div>
           <div className="flow-row expense">
             <span className="flow-icon"><ArrowUpRight size={18} /></span>
-            <div><small>支出</small><strong>{hidden ? "••••" : formatMoney(data.monthly.total_expense, data.monthly.currency)}</strong></div>
+            <div><small>{t("common.expense")}</small><strong>{hidden ? "••••" : formatMoney(data.monthly.total_expense, data.monthly.currency)}</strong></div>
           </div>
           <div className="saving-rate">
-            <span>收支健康度</span>
+            <span>{t("dashboard.healthScore")}</span>
             <strong>{healthScore(data.monthly)}%</strong>
             <div><i style={{ width: `${healthScore(data.monthly)}%` }} /></div>
           </div>
@@ -230,8 +237,8 @@ export function Dashboard({
 
       <section className="section-block">
         <div className="section-heading">
-          <div><span>ACCOUNTS</span><h2>你的账户</h2></div>
-          <button className="text-button" onClick={onAdd}><Plus size={16} /> 快速记账</button>
+          <div><span>ACCOUNTS</span><h2>{t("dashboard.yourAccounts")}</h2></div>
+          <button className="text-button" onClick={onAdd}><Plus size={16} /> {t("dashboard.quickAdd")}</button>
         </div>
         <div className="account-strip">
           {data.accounts.map((account, index) => (
@@ -243,8 +250,8 @@ export function Dashboard({
       <section className="dashboard-lower">
         <article className="panel recent-panel">
           <div className="section-heading compact-heading">
-            <div><span>ACTIVITY</span><h2>最近交易</h2></div>
-            <button className="text-button" onClick={onShowTransactions}>查看全部</button>
+            <div><span>ACTIVITY</span><h2>{t("dashboard.recentTransactions")}</h2></div>
+            <button className="text-button" onClick={onShowTransactions}>{t("dashboard.viewAll")}</button>
           </div>
           <TransactionList
             transactions={recent}
@@ -256,7 +263,7 @@ export function Dashboard({
         </article>
         <article className="panel categories-panel">
           <div className="section-heading compact-heading">
-            <div><span>SPENDING</span><h2>支出去向</h2></div>
+            <div><span>SPENDING</span><h2>{t("dashboard.spending")}</h2></div>
           </div>
           <CategoryBars summary={data.monthly} />
         </article>
@@ -303,8 +310,9 @@ export function TrendChart({
   }));
   const line = coords.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
   const area = `${line} L710,205 L10,205 Z`;
+  const { t } = useTranslation();
   return (
-    <div className="trend-chart" aria-label="本月现金流趋势图">
+    <div className="trend-chart" aria-label={t("dashboard.trendAria")}>
       <svg viewBox="0 0 720 220" role="img">
         <defs>
           <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
@@ -317,7 +325,7 @@ export function TrendChart({
         <path d={line} className="trend-line" />
         <circle cx={coords.at(-1)?.x} cy={coords.at(-1)?.y} r="4.5" className="trend-dot" />
       </svg>
-      <div className="chart-labels"><span>月初</span><span>月中</span><span>今天</span></div>
+      <div className="chart-labels"><span>{t("dashboard.monthStart")}</span><span>{t("dashboard.monthMiddle")}</span><span>{t("dashboard.today")}</span></div>
     </div>
   );
 }
@@ -336,16 +344,17 @@ export function AccountMiniCard({
   rates: Record<string, number>;
 }) {
   const Icon = accountIcon(account);
+  const { t } = useTranslation();
   const shown = convertedMoney(account.balance, account.currency, display, rates)
     ?? { amount: account.balance, currency: account.currency };
   const isConverted = shown.currency !== account.currency;
   return (
     <article
       className={`account-mini tone-${index % 4}`}
-      title={isConverted ? `原币 ${formatMoney(account.balance, account.currency)}` : undefined}
+      title={isConverted ? t("accounts.originalCurrency", { amount: formatMoney(account.balance, account.currency) }) : undefined}
     >
       <div><span className="account-icon"><Icon size={19} /></span><MoreHorizontal size={18} /></div>
-      <small>{account.account_type === "credit" ? "信用" : ({ cash: "零钱账户", savings: "储蓄账户", stock: "股票账户" } as Record<AccountType, string>)[account.account_type]}</small>
+      <small>{account.account_type === "credit" ? t("accounts.type.credit") : t(`accounts.typeCard.${account.account_type}`)}</small>
       <h3>{account.name}</h3>
       <strong>{hidden ? "••••••" : formatMoney(shown.amount, shown.currency)}</strong>
       <span className="currency-badge">{shown.currency}</span>
@@ -405,20 +414,21 @@ export function AccountsPage({
     [data.accounts, data.loans]
   );
   const rates = useConversionRates(rateCurrencies, display);
+  const { t } = useTranslation();
   return (
     <div className="page page-enter">
       <PageTitle
         eyebrow="ACCOUNTS"
-        title="账户"
-        actions={<button className="primary-button" onClick={onAddAccount}><Plus size={18} /> 新建账户</button>}
+        title={t("nav.accounts")}
+        actions={<button className="primary-button" onClick={onAddAccount}><Plus size={18} /> {t("accounts.newAccount")}</button>}
       />
       <section className="balance-summary-row">
-        <SummaryCard label="总资产" value={data.balance.total_assets} currency={data.balance.currency} tone="green" />
-        <SummaryCard label="总负债" value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
-        <SummaryCard label="净资产" value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
+        <SummaryCard label={t("accounts.totalAssets")} value={data.balance.total_assets} currency={data.balance.currency} tone="green" />
+        <SummaryCard label={t("accounts.totalLiabilities")} value={data.balance.total_liabilities} currency={data.balance.currency} tone="orange" />
+        <SummaryCard label={t("accounts.netWorth")} value={data.balance.net_worth} currency={data.balance.currency} tone="blue" />
       </section>
-      <AccountGroup title="零钱" subtitle={`${cash.length} 个账户`} accounts={cash} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
-      <AccountGroup title="储蓄" subtitle={`${savings.length} 个账户`} accounts={savings} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title={t("accounts.type.cash")} subtitle={t("accounts.accountCount", { count: cash.length })} accounts={cash} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title={t("accounts.type.savings")} subtitle={t("accounts.accountCount", { count: savings.length })} accounts={savings} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <DepositSection
         deposits={data.deposits}
         accounts={data.accounts}
@@ -427,8 +437,8 @@ export function AccountsPage({
         onDeposit={onDeposit}
         onSettle={onSettle}
       />
-      <AccountGroup title="股票" subtitle={`${stock.length} 个账户`} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
-      <AccountGroup title="信用" subtitle={`${credit.length} 个账户`} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title={t("accounts.type.stock")} subtitle={t("accounts.accountCount", { count: stock.length })} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <AccountGroup title={t("accounts.type.credit")} subtitle={t("accounts.accountCount", { count: credit.length })} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <LoansSection
         loans={data.loans}
         accounts={data.accounts}
@@ -488,6 +498,7 @@ export function AccountGroup({
   /** 折算汇率表：账户币种 → 1 unit = factor display */
   rates: Record<string, number>;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
@@ -508,20 +519,20 @@ export function AccountGroup({
               <div className="account-detail-copy">
                 <h3>{account.name}</h3>
                 <span>
-                  {isConverted ? `原币 ${formatMoney(account.balance, account.currency)} · ` : ""}
+                  {isConverted ? `${t("accounts.originalCurrency", { amount: formatMoney(account.balance, account.currency) })} · ` : ""}
                   {account.credit_limit
-                    ? `额度 ${formatMoney(limitShown?.amount ?? account.credit_limit, limitShown?.currency ?? account.currency)}`
+                    ? `${t("accounts.limitLabel")} ${formatMoney(limitShown?.amount ?? account.credit_limit, limitShown?.currency ?? account.currency)}`
                     : ""}
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
               <div className="account-card-actions">
-                {onReconcile && <button className="text-button" onClick={() => onReconcile(account)}>对账</button>}
-                <button className="bare-button" aria-label={`编辑${account.name}`} title="编辑账户" onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>              </div>
+                {onReconcile && <button className="text-button" onClick={() => onReconcile(account)}>{t("reconcile.start")}</button>}
+                <button className="bare-button" aria-label={t("accounts.editAria", { name: account.name })} title={t("accounts.editTitle")} onClick={() => onEdit?.(account)}><MoreHorizontal size={19} /></button>              </div>
             </article>
           );
         })}
-        {accounts.length === 0 && <EmptyState title="这里还没有账户" detail="新建账户后即可开始记账。" />}
+        {accounts.length === 0 && <EmptyState title={t("accounts.emptyTitle")} detail={t("accounts.emptyDetail")} />}
       </div>
     </section>
   );
@@ -554,6 +565,7 @@ function TagMultiSelect({
   const toggle = (name: string) => {
     onChange(selected.includes(name) ? selected.filter((item) => item !== name) : [...selected, name]);
   };
+  const { t } = useTranslation();
   return (
     <div className="tag-multiselect" ref={ref}>
       <button
@@ -564,7 +576,7 @@ function TagMultiSelect({
         aria-haspopup="listbox"
       >
         <Tags size={14} />
-        {selected.length === 0 ? "标签" : selected.join(" + ")}
+        {selected.length === 0 ? t("transactions.tagFilter") : selected.join(" + ")}
       </button>
       {open && (
         <div className="tag-multiselect-menu" role="listbox" aria-multiselectable="true">
@@ -579,7 +591,7 @@ function TagMultiSelect({
           })}
           {selected.length > 0 && (
             <button type="button" className="tag-multiselect-clear" onClick={() => onChange([])}>
-              清除筛选
+              {t("transactions.clearTagFilter")}
             </button>
           )}
         </div>
@@ -631,13 +643,14 @@ export function TransactionsPage({
   const [tagSummaryError, setTagSummaryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const { t } = useTranslation();
   const handleExport = async () => {
     setExporting(true);
     setExportError(null);
     try {
       await exportTransactions(exportYear, exportMonth);
     } catch (reason) {
-      setExportError(reason instanceof Error ? reason.message : "导出失败");
+      setExportError(reason instanceof Error ? reason.message : t("transactions.exportLoadFailed"));
     } finally {
       setExporting(false);
     }
@@ -667,7 +680,7 @@ export function TransactionsPage({
       .catch((reason) => {
         if (!cancelled) {
           setTagSummary(null);
-          setTagSummaryError(reason instanceof Error ? reason.message : "标签统计加载失败");
+          setTagSummaryError(reason instanceof Error ? reason.message : t("transactions.tagSummaryLoadFailed"));
         }
       });
     return () => {
@@ -686,15 +699,15 @@ export function TransactionsPage({
     <div className="page page-enter">
       <PageTitle
         eyebrow="TRANSACTIONS"
-        title="交易流水"
-        actions={<button className="primary-button" onClick={onAdd}><Plus size={18} /> 记一笔</button>}
+        title={t("transactions.title")}
+        actions={<button className="primary-button" onClick={onAdd}><Plus size={18} /> {t("common.quickAdd")}</button>}
       />
       <div className="transaction-toolbar">
-        <label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索备注、分类或账户" /></label>
+        <label className="search-box"><Search size={18} /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("transactions.searchPlaceholder")} /></label>
         <div className="segmented-filter">
           {(["all", "expense", "income", "transfer", "loan"] as const).map((item) => (
             <button key={item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>
-              {{ all: "全部", expense: "支出", income: "收入", transfer: "转账", loan: "借贷" }[item]}
+              {t(`transactions.kind.${item}`)}
             </button>
           ))}
         </div>
@@ -710,34 +723,36 @@ export function TransactionsPage({
           className="text-button export-button"
           onClick={() => void handleExport()}
           disabled={exporting}
-          title={exportYear !== undefined && exportMonth !== undefined ? `导出 ${exportYear}年${exportMonth}月` : "导出全部交易"}
+          title={exportYear !== undefined && exportMonth !== undefined ? t("transactions.exportTitle", { year: exportYear, month: exportMonth }) : t("transactions.exportAll")}
         >
           {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
-          {exporting ? "导出中…" : "导出 CSV"}
+          {exporting ? t("transactions.exporting") : t("transactions.exportCsv")}
         </button>
         <button
           type="button"
           className="text-button import-button"
           onClick={onImport}
-          title="从账单文件批量导入流水"
+          title={t("transactions.importTitle")}
         >
-          <Upload size={16} /> 导入
+          <Upload size={16} /> {t("transactions.import")}
         </button>
       </div>
       {tagFilter.length > 0 && (
-        <section className="tag-summary" aria-label="标签统计">
+        <section className="tag-summary" aria-label={t("transactions.tagSummaryAria")}>
           {tagSummaryError ? (
-            <span className="inline-error">标签统计加载失败:{tagSummaryError}</span>
+            <span className="inline-error">{t("transactions.tagSummaryError")}{tagSummaryError}</span>
           ) : tagSummary ? (
             <>
               <div className="tag-summary-total">
                 <span className="tag-summary-label">
-                  标签「{tagSummary.tags.join(" + ")}」{tagSummary.year ? `（${tagSummary.year}年${tagSummary.month}月）` : "（全部历史）"}合计
+                  {t("transactions.tagSummary.tags", { tags: tagSummary.tags.join(" + ") })}
+                  {tagSummary.year ? t("transactions.tagSummary.period", { year: tagSummary.year, month: tagSummary.month }) : t("transactions.tagSummary.allHistory")}
+                  {t("transactions.tagSummary.total")}
                 </span>
-                <strong>支出 {formatMoney(tagSummary.total_expense, tagSummary.currency)}</strong>
-                <span>收入 {formatMoney(tagSummary.total_income, tagSummary.currency)}</span>
+                <strong>{t("common.expense")} {formatMoney(tagSummary.total_expense, tagSummary.currency)}</strong>
+                <span>{t("common.income")} {formatMoney(tagSummary.total_income, tagSummary.currency)}</span>
                 <span className={Number(tagSummary.retained) >= 0 ? "positive" : "negative"}>
-                  结余 {formatMoney(tagSummary.retained, tagSummary.currency)}
+                  {t("common.net")} {formatMoney(tagSummary.retained, tagSummary.currency)}
                 </span>
               </div>
               {tagSummary.expense_destinations.length > 0 && (
@@ -752,13 +767,13 @@ export function TransactionsPage({
               )}
             </>
           ) : (
-            <span className="inline-error">正在加载标签统计…</span>
+            <span className="inline-error">{t("transactions.tagSummaryLoading")}</span>
           )}
         </section>
       )}
-      {exportError && <div className="inline-error">导出失败:{exportError}</div>}
+      {exportError && <div className="inline-error">{t("transactions.exportFailed")}{exportError}</div>}
       <article className="panel transaction-table">
-        <div className="table-header"><span>交易</span><span>账户</span><span>日期</span><span>金额</span><span /><span /></div>
+        <div className="table-header"><span>{t("transactions.colTransaction")}</span><span>{t("transactions.colAccount")}</span><span>{t("transactions.colDate")}</span><span>{t("transactions.colAmount")}</span><span /><span /></div>
         {filtered.map((transaction) => (
           <TransactionRow
             key={transaction.id}
@@ -778,7 +793,7 @@ export function TransactionsPage({
             onUploadReceipt={(file) => onUploadReceipt(transaction, file)}
           />
         ))}
-        {filtered.length === 0 && <EmptyState title="没有找到交易" detail="换个关键词，或记录一笔新的交易。" />}
+        {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </article>
       {hasMore && (
         <div className="load-more-row">
@@ -789,8 +804,8 @@ export function TransactionsPage({
             disabled={loadingMore}
           >
             {loadingMore
-              ? <><LoaderCircle className="spin" size={16} /> 正在加载…</>
-              : `加载更多（已显示 ${data.transactions.length} 条）`}
+              ? <><LoaderCircle className="spin" size={16} /> {t("common.loading")}</>
+              : t("transactions.loadMore", { count: data.transactions.length })}
           </button>
         </div>
       )}
@@ -815,6 +830,7 @@ export function TransactionList({
 }) {
   const accountMap = new Map(accounts.map((item) => [item.id, item]));
   const categoryMap = new Map(categories.map((item) => [item.id, item]));
+  const { t } = useTranslation();
   return (
     <div className="simple-list">
       {transactions.map((transaction) => (
@@ -829,7 +845,7 @@ export function TransactionList({
           rates={rates}
         />
       ))}
-      {transactions.length === 0 && <EmptyState title="还没有交易" detail="点击“记一笔”开始。" />}
+      {transactions.length === 0 && <EmptyState title={t("transactions.emptyTitle")} detail={t("transactions.emptyDetail")} />}
     </div>
   );
 }
@@ -887,14 +903,15 @@ export function TransactionRow({
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [menuOpen]);
+  const { t } = useTranslation();
   const meta = {
-    expense: { icon: ArrowUpRight, label: category?.name ?? "支出", className: "expense" },
-    income: { icon: ArrowDownLeft, label: category?.name ?? "收入", className: "income" },
-    transfer: { icon: ArrowLeftRight, label: "账户转账", className: "transfer" },
-    loan: { icon: Handshake, label: transaction.note || "借款", className: "transfer" },
-    adjustment: { icon: RotateCcw, label: "余额调整", className: "transfer" },
-    trade: { icon: TrendingUp, label: "股票交易", className: "transfer" },
-    deposit: { icon: PiggyBank, label: "定期存款", className: "transfer" }
+    expense: { icon: ArrowUpRight, label: category?.name ?? t("transactions.kind.expense"), className: "expense" },
+    income: { icon: ArrowDownLeft, label: category?.name ?? t("transactions.kind.income"), className: "income" },
+    transfer: { icon: ArrowLeftRight, label: t("transactions.meta.transfer"), className: "transfer" },
+    loan: { icon: Handshake, label: transaction.note || t("transactions.meta.loan"), className: "transfer" },
+    adjustment: { icon: RotateCcw, label: t("transactions.meta.adjustment"), className: "transfer" },
+    trade: { icon: TrendingUp, label: t("transactions.meta.trade"), className: "transfer" },
+    deposit: { icon: PiggyBank, label: t("transactions.meta.deposit"), className: "transfer" }
   }[transaction.kind];
   const Icon = meta.icon;
   const prefix =
@@ -935,31 +952,31 @@ export function TransactionRow({
         <div>
           <strong>
             {transaction.note || meta.label}
-            {transaction.voided_at ? " · 已撤销" : ""}
+            {transaction.voided_at ? t("transactions.voidedSuffix") : ""}
           </strong>
           <span className="transaction-meta">
             <span>{meta.label}</span>
-            {reimbursable ? <span className="reimburse-status">待报销</span> : ""}
-            {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> 小票</span> : ""}
+            {reimbursable ? <span className="reimburse-status">{t("transactions.pendingReimburse")}</span> : ""}
+            {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> {t("transactions.receipt")}</span> : ""}
             {transaction.tags.map((tag) => (
               <span className="transaction-tag" key={tag}>#{tag}</span>
             ))}
           </span>
         </div>
       </div>
-      {!compact && <span className="table-account">{account?.name ?? "未知账户"}{target ? ` → ${target.name}` : ""}</span>}
+      {!compact && <span className="table-account">{account?.name ?? t("common.unknownAccount")}{target ? ` → ${target.name}` : ""}</span>}
       {!compact && <span className="table-date">{formatDate(transaction.occurred_at)}</span>}
       <div className={`transaction-amount ${meta.className}`}>
         <strong>{prefix}{formatMoney(mainAmount, mainCurrency)}</strong>
-        {converted && <span>原币 {formatMoney(transaction.amount, transaction.currency)}</span>}
+        {converted && <span>{t("transactions.original")} {formatMoney(transaction.amount, transaction.currency)}</span>}
         {transaction.kind === "transfer" && targetAmount && targetCurrency && (
-          <span>到账 {formatMoney(targetAmount, targetCurrency)}</span>
+          <span>{t("transactions.arrived")} {formatMoney(targetAmount, targetCurrency)}</span>
         )}
         {!converted && transaction.kind !== "transfer" && transaction.kind !== "loan" && transaction.kind !== "adjustment" && account && transaction.currency !== account.currency && (
-          <span>入账 {formatMoney(transaction.settled_amount, account.currency)}</span>
+          <span>{t("transactions.settledLabel")} {formatMoney(transaction.settled_amount, account.currency)}</span>
         )}
         {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && !transaction.reimbursed_at && (
-          <span>已报销 {reimbursedShown}</span>
+          <span>{t("transactions.reimbursedLabel")} {reimbursedShown}</span>
         )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
@@ -968,16 +985,16 @@ export function TransactionRow({
           {hasReimburseActions && (
             reimbursable
               ? <>
-                  <button className="row-action reimburse" onClick={onReimburse} title="报销" aria-label="报销"><BadgeDollarSign size={16} /></button>
-                  <button className="row-action reimburse" onClick={onUnmarkReimbursable} title="取消待报销" aria-label="取消待报销"><X size={16} /></button>
+                  <button className="row-action reimburse" onClick={onReimburse} title={t("transactions.reimburse")} aria-label={t("transactions.reimburse")}><BadgeDollarSign size={16} /></button>
+                  <button className="row-action reimburse" onClick={onUnmarkReimbursable} title={t("transactions.unmarkReimburse")} aria-label={t("transactions.unmarkReimburse")}><X size={16} /></button>
                 </>
-              : <button className="row-action reimburse" onClick={onMarkReimbursable} title="标记待报销" aria-label="标记待报销"><Tags size={16} /></button>
+              : <button className="row-action reimburse" onClick={onMarkReimbursable} title={t("transactions.markReimburse")} aria-label={t("transactions.markReimburse")}><Tags size={16} /></button>
           )}
           {transaction.reimbursed_at && (
             <span
               className="reimbursed-indicator"
-              title={`已报销 ${reimbursedShown}`}
-              aria-label={`已报销 ${reimbursedShown}`}
+              title={t("transactions.reimbursedTitle", { amount: reimbursedShown })}
+              aria-label={t("transactions.reimbursedTitle", { amount: reimbursedShown })}
             ><CircleCheck size={16} /></span>
           )}
           {transaction.voided_at
@@ -985,8 +1002,8 @@ export function TransactionRow({
                 <button
                   className="row-action"
                   onClick={onRestore}
-                  title="撤销删除，恢复这笔交易"
-                  aria-label="恢复交易"
+                  title={t("transactions.restoreTitle")}
+                  aria-label={t("transactions.restore")}
                 ><RotateCcw size={16} /></button>
               )
             : (
@@ -994,8 +1011,8 @@ export function TransactionRow({
                   className="row-action"
                   disabled={transaction.kind === "loan" || transaction.kind === "trade" || transaction.kind === "deposit"}
                   onClick={onVoid}
-                  title="撤销并恢复余额"
-                  aria-label="撤销交易"
+                  title={t("transactions.voidTitle")}
+                  aria-label={t("transactions.voidAria")}
                 ><Trash2 size={16} /></button>
               )}
         </div>
@@ -1006,8 +1023,8 @@ export function TransactionRow({
             type="button"
             className={`row-action ${menuOpen ? "active" : ""}`}
             onClick={() => setMenuOpen((open) => !open)}
-            title="更多操作"
-            aria-label="更多操作"
+            title={t("transactions.moreActions")}
+            aria-label={t("transactions.moreActions")}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
           ><MoreHorizontal size={16} /></button>
@@ -1017,7 +1034,7 @@ export function TransactionRow({
                 <>
                   {onRestore && (
                     <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onRestore(); }}>
-                      恢复交易
+                      {t("transactions.restore")}
                     </button>
                   )}
                   {onDeletePermanently && (
@@ -1027,7 +1044,7 @@ export function TransactionRow({
                       className="menu-danger"
                       onClick={() => { setMenuOpen(false); onDeletePermanently(); }}
                     >
-                      永久删除
+                      {t("transactions.deletePermanent")}
                     </button>
                   )}
                   {transaction.has_receipt && (
@@ -1039,7 +1056,7 @@ export function TransactionRow({
                         window.open(receiptUrl(transaction.id), "_blank", "noopener");
                       }}
                     >
-                      查看小票
+                      {t("transactions.viewReceipt")}
                     </button>
                   )}
                 </>
@@ -1047,13 +1064,13 @@ export function TransactionRow({
                 <>
                   {onEdit && (
                     <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onEdit(); }}>
-                      编辑交易
+                      {t("transactions.edit")}
                     </button>
                   )}
                   {onUploadReceipt && (
                     <>
                       <button type="button" role="menuitem" onClick={() => fileRef.current?.click()}>
-                        上传小票
+                        {t("transactions.uploadReceipt")}
                       </button>
                       {transaction.has_receipt && (
                         <button
@@ -1064,7 +1081,7 @@ export function TransactionRow({
                             window.open(receiptUrl(transaction.id), "_blank", "noopener");
                           }}
                         >
-                          查看小票
+                          {t("transactions.viewReceipt")}
                         </button>
                       )}
                       <input
@@ -1107,13 +1124,14 @@ export function InsightsPage({
   onClearBudget: (categoryId: number) => void;
 }) {
   const gradient = buildDonutGradient(summary);
+  const { t } = useTranslation();
   return (
     <div className="page page-enter">
-      <PageTitle eyebrow="INSIGHTS" title="收支分析" />
+      <PageTitle eyebrow="INSIGHTS" title={t("insights.title")} />
       <section className="insight-kpis">
-        <SummaryCard label="本月收入" value={summary.total_income} currency={summary.currency} tone="green" />
-        <SummaryCard label="本月支出" value={summary.total_expense} currency={summary.currency} tone="orange" />
-        <SummaryCard label="本月结余" value={summary.net} currency={summary.currency} tone="blue" />
+        <SummaryCard label={t("insights.incomeLabel")} value={summary.total_income} currency={summary.currency} tone="green" />
+        <SummaryCard label={t("insights.expenseLabel")} value={summary.total_expense} currency={summary.currency} tone="orange" />
+        <SummaryCard label={t("insights.netLabel")} value={summary.net} currency={summary.currency} tone="blue" />
       </section>
       <MonthlyTrendPanel currency={summary.currency} />
       <YearlySummaryPanel currency={summary.currency} />
@@ -1128,10 +1146,10 @@ export function InsightsPage({
       />
       <section className="insights-grid">
         <article className="panel donut-panel">
-          <div className="section-heading compact-heading"><div><span>CATEGORY MIX</span><h2>分类占比</h2></div></div>
+          <div className="section-heading compact-heading"><div><span>CATEGORY MIX</span><h2>{t("insights.categoryMix")}</h2></div></div>
           <div className="donut-layout">
             <div className="donut" style={{ "--donut": gradient } as CSSProperties}>
-              <div><span>总支出</span><strong>{formatMoney(summary.total_expense, summary.currency, true)}</strong></div>
+              <div><span>{t("insights.totalExpense")}</span><strong>{formatMoney(summary.total_expense, summary.currency, true)}</strong></div>
             </div>
             <div className="donut-legend">
               {summary.expenses_by_category.map((item) => (
@@ -1141,13 +1159,13 @@ export function InsightsPage({
           </div>
         </article>
         <article className="panel insight-detail">
-          <div className="section-heading compact-heading"><div><span>BREAKDOWN</span><h2>支出明细</h2></div></div>
+          <div className="section-heading compact-heading"><div><span>BREAKDOWN</span><h2>{t("insights.breakdown")}</h2></div></div>
           <CategoryBars summary={summary} detailed />
         </article>
       </section>
       <article className="insight-callout">
         <span className="callout-icon"><ChartNoAxesCombined size={22} /></span>
-        <div><span>KOKU NOTE</span><h3>你保留了 {healthScore(summary)}% 的本月收入</h3></div>
+        <div><span>KOKU NOTE</span><h3>{t("insights.retainedNote", { percent: healthScore(summary) })}</h3></div>
       </article>
     </div>
   );
@@ -1156,6 +1174,7 @@ export function InsightsPage({
 export function MonthlyTrendPanel({ currency }: { currency: string }) {
   const [points, setPoints] = useState<MonthlyTrendPoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
   useEffect(() => {
     let cancelled = false;
     loadTrend(12, currency)
@@ -1166,27 +1185,28 @@ export function MonthlyTrendPanel({ currency }: { currency: string }) {
         }
       })
       .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载趋势");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : t("insights.trendLoadFailed"));
       });
     return () => {
       cancelled = true;
     };
-  }, [currency]);
+  }, [currency, t]);
   return (
     <section className="panel trend-panel">
       <div className="section-heading compact-heading">
-        <div><span>TREND</span><h2>近 12 个月趋势</h2></div>
+        <div><span>TREND</span><h2>{t("insights.trendTitle")}</h2></div>
       </div>
-      {error && <div className="trend-note">趋势加载失败：{error}</div>}
-      {!error && !points && <div className="trend-note">正在加载…</div>}
+      {error && <div className="trend-note">{t("insights.trendError")}{error}</div>}
+      {!error && !points && <div className="trend-note">{t("common.loading")}</div>}
       {points && <MonthlyTrendChart points={points} currency={currency} />}
     </section>
   );
 }
 
 export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPoint[]; currency: string }) {
+  const { t } = useTranslation();
   if (points.length === 0) {
-    return <EmptyState title="暂无趋势数据" detail="记录交易后，这里会显示最近几个月的收支走势。" />;
+    return <EmptyState title={t("insights.trendEmptyTitle")} detail={t("insights.trendEmptyDetail")} />;
   }
   const width = 720;
   const height = 250;
@@ -1210,8 +1230,8 @@ export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPo
   const gridLines = [0, 0.25, 0.5, 0.75, 1].map((fraction) => padT + fraction * innerH);
   return (
     <div className="monthly-trend-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="近 12 个月收支趋势">
-        <title>近 12 个月收支趋势（{currency}）</title>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("insights.trendChartAria")}>
+        <title>{t("insights.trendChartTitle", { currency })}</title>
         {gridLines.map((gy) => (
           <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
         ))}
@@ -1236,14 +1256,14 @@ export function MonthlyTrendChart({ points, currency }: { points: MonthlyTrendPo
             textAnchor="middle"
             className="chart-axis-label"
           >
-            {point.month === 1 ? `${point.year}年` : `${point.month}月`}
+            {point.month === 1 ? t("insights.yearLabel", { year: point.year }) : t("insights.monthLabel", { month: point.month })}
           </text>
         ))}
       </svg>
       <div className="trend-legend">
-        <span className="legend-income"><i />收入</span>
-        <span className="legend-expense"><i />支出</span>
-        <span className="legend-net"><i />结余</span>
+        <span className="legend-income"><i />{t("common.income")}</span>
+        <span className="legend-expense"><i />{t("common.expense")}</span>
+        <span className="legend-net"><i />{t("common.net")}</span>
       </div>
     </div>
   );
@@ -1255,6 +1275,7 @@ export function YearlySummaryPanel({ currency }: { currency: string }) {
   const [summary, setSummary] = useState<YearlySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const { t } = useTranslation();
   useEffect(() => {
     let cancelled = false;
     setSummary(null);
@@ -1267,40 +1288,40 @@ export function YearlySummaryPanel({ currency }: { currency: string }) {
         }
       })
       .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载年度汇总");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : t("insights.yearly.loadFailed"));
       });
     return () => {
       cancelled = true;
     };
-  }, [year, currency, attempt]);
+  }, [year, currency, attempt, t]);
   return (
     <section className="panel trend-panel">
       <div className="section-heading compact-heading">
-        <div><span>YEARLY</span><h2>年度汇总</h2></div>
+        <div><span>YEARLY</span><h2>{t("insights.yearly.title")}</h2></div>
         <div className="year-selector">
-          <button type="button" className="icon-button" onClick={() => setYear((value) => value - 1)} aria-label="上一年" title="上一年"><ChevronLeft size={16} /></button>
-          <strong>{year} 年</strong>
-          <button type="button" className="icon-button" onClick={() => setYear((value) => value + 1)} aria-label="下一年" title="下一年"><ChevronRight size={16} /></button>
+          <button type="button" className="icon-button" onClick={() => setYear((value) => value - 1)} aria-label={t("insights.yearly.prevYear")} title={t("insights.yearly.prevYear")}><ChevronLeft size={16} /></button>
+          <strong>{t("insights.yearly.yearLabel", { year })}</strong>
+          <button type="button" className="icon-button" onClick={() => setYear((value) => value + 1)} aria-label={t("insights.yearly.nextYear")} title={t("insights.yearly.nextYear")}><ChevronRight size={16} /></button>
         </div>
       </div>
       {error && (
         <div className="trend-note panel-error">
-          <span>年度汇总加载失败：{error}</span>
-          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> 重试</button>
+          <span>{t("insights.yearly.error")}{error}</span>
+          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> {t("common.retry")}</button>
         </div>
       )}
-      {!error && !summary && <div className="trend-note">正在加载…</div>}
+      {!error && !summary && <div className="trend-note">{t("common.loading")}</div>}
       {summary && (
         <>
           <div className="balance-summary-row insight-kpis">
-            <SummaryCard label="全年收入" value={summary.total_income} currency={summary.currency} tone="green" />
-            <SummaryCard label="全年支出" value={summary.total_expense} currency={summary.currency} tone="orange" />
-            <SummaryCard label="全年结余" value={summary.net} currency={summary.currency} tone="blue" />
+            <SummaryCard label={t("insights.yearly.income")} value={summary.total_income} currency={summary.currency} tone="green" />
+            <SummaryCard label={t("insights.yearly.expense")} value={summary.total_expense} currency={summary.currency} tone="orange" />
+            <SummaryCard label={t("insights.yearly.net")} value={summary.net} currency={summary.currency} tone="blue" />
           </div>
           <YearlyBarChart summary={summary} />
           <div className="yearly-categories">
-            <YearlyCategoryList title="收入来源" items={summary.income_sources} currency={summary.currency} />
-            <YearlyCategoryList title="支出去向" items={summary.expense_destinations} currency={summary.currency} />
+            <YearlyCategoryList title={t("common.incomeSources")} items={summary.income_sources} currency={summary.currency} />
+            <YearlyCategoryList title={t("common.expenseDestinations")} items={summary.expense_destinations} currency={summary.currency} />
           </div>
         </>
       )}
@@ -1326,10 +1347,11 @@ function YearlyBarChart({ summary }: { summary: YearlySummary }) {
   const y = (value: number) => padT + innerH - (value / max) * innerH;
   const barH = (value: number) => (value / max) * innerH;
   const gridLines = [0, 0.25, 0.5, 0.75, 1].map((fraction) => padT + fraction * innerH);
+  const { t } = useTranslation();
   return (
     <div className="yearly-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${summary.year} 年逐月收支`}>
-        <title>{summary.year} 年逐月收支（{summary.currency}）</title>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("insights.yearly.chartAria", { year: summary.year })}>
+        <title>{t("insights.yearly.chartTitle", { year: summary.year, currency: summary.currency })}</title>
         {gridLines.map((gy) => (
           <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
         ))}
@@ -1341,15 +1363,15 @@ function YearlyBarChart({ summary }: { summary: YearlySummary }) {
               <rect x={cx - barWidth - 1.5} y={y(income)} width={barWidth} height={barH(income)} rx="2" className="yearly-bar income" />
               <rect x={cx + 1.5} y={y(expense)} width={barWidth} height={barH(expense)} rx="2" className="yearly-bar expense" />
               <text x={cx} y={height - 10} textAnchor="middle" className="chart-axis-label">
-                {point.month === 1 ? `${point.year}年` : `${point.month}月`}
+                {point.month === 1 ? t("insights.yearLabel", { year: point.year }) : t("insights.monthLabel", { month: point.month })}
               </text>
             </g>
           );
         })}
       </svg>
       <div className="trend-legend">
-        <span className="legend-income"><i />收入</span>
-        <span className="legend-expense"><i />支出</span>
+        <span className="legend-income"><i />{t("common.income")}</span>
+        <span className="legend-expense"><i />{t("common.expense")}</span>
       </div>
     </div>
   );
@@ -1381,6 +1403,7 @@ export function RollingSummaryPanel({ currency }: { currency: string }) {
   const [summary, setSummary] = useState<RollingSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const { t } = useTranslation();
   const monthsSize = Number(monthsInput);
   const windowSize = Number(windowInput);
   const monthsValid = Number.isInteger(monthsSize) && monthsSize >= 1 && monthsSize <= 120;
@@ -1400,41 +1423,41 @@ export function RollingSummaryPanel({ currency }: { currency: string }) {
         }
       })
       .catch((reason) => {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "无法加载滚动平均");
+        if (!cancelled) setError(reason instanceof Error ? reason.message : t("insights.rolling.loadFailed"));
       });
     return () => {
       cancelled = true;
     };
-  }, [monthsSize, effectiveWindow, currency, valid, attempt]);
+  }, [monthsSize, effectiveWindow, currency, valid, attempt, t]);
   const windowClamped = windowValid && windowSize > monthsSize;
   return (
     <section className="panel trend-panel">
       <div className="section-heading compact-heading">
-        <div><span>ROLLING AVG</span><h2>滚动平均</h2></div>
+        <div><span>ROLLING AVG</span><h2>{t("insights.rolling.title")}</h2></div>
         <div className="rolling-controls">
-          <label><span>月数</span><input type="number" min={1} max={120} value={monthsInput} onChange={(e) => setMonthsInput(e.target.value)} aria-label="趋势月数" /></label>
-          <label><span>窗口</span><input type="number" min={1} max={120} value={windowInput} onChange={(e) => setWindowInput(e.target.value)} aria-label="平均窗口（月）" /></label>
+          <label><span>{t("insights.rolling.months")}</span><input type="number" min={1} max={120} value={monthsInput} onChange={(e) => setMonthsInput(e.target.value)} aria-label={t("insights.rolling.monthsAria")} /></label>
+          <label><span>{t("insights.rolling.window")}</span><input type="number" min={1} max={120} value={windowInput} onChange={(e) => setWindowInput(e.target.value)} aria-label={t("insights.rolling.windowAria")} /></label>
         </div>
       </div>
-      {!valid && <div className="trend-note">请输入 1–120 之间的整数月数。</div>}
-      {windowClamped && <div className="trend-note">平均窗口不能超过趋势月数，已按 {monthsSize} 个月计算。</div>}
+      {!valid && <div className="trend-note">{t("insights.rolling.invalid")}</div>}
+      {windowClamped && <div className="trend-note">{t("insights.rolling.clamped", { months: monthsSize })}</div>}
       {error && (
         <div className="trend-note panel-error">
-          <span>滚动平均加载失败：{error}</span>
-          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> 重试</button>
+          <span>{t("insights.rolling.error")}{error}</span>
+          <button type="button" className="text-button" onClick={() => setAttempt((value) => value + 1)}><RefreshCcw size={13} /> {t("common.retry")}</button>
         </div>
       )}
-      {valid && !error && !summary && <div className="trend-note">正在加载…</div>}
+      {valid && !error && !summary && <div className="trend-note">{t("common.loading")}</div>}
       {valid && summary && (
         <>
           <RollingChart summary={summary} />
           <div className="trend-legend rolling-legend">
-            <span className="legend-income"><i />收入</span>
-            <span className="legend-expense"><i />支出</span>
-            <span className="legend-income avg"><i />收入均值</span>
-            <span className="legend-expense avg"><i />支出均值</span>
+            <span className="legend-income"><i />{t("common.income")}</span>
+            <span className="legend-expense"><i />{t("common.expense")}</span>
+            <span className="legend-income avg"><i />{t("insights.rolling.incomeAvg")}</span>
+            <span className="legend-expense avg"><i />{t("insights.rolling.expenseAvg")}</span>
           </div>
-          <p className="rolling-hint">实线为当月收支，虚线为截至该月的 {summary.window} 个月滚动均值（{summary.currency}）。</p>
+          <p className="rolling-hint">{t("insights.rolling.hint", { window: summary.window, currency: summary.currency })}</p>
         </>
       )}
     </section>
@@ -1444,8 +1467,9 @@ export function RollingSummaryPanel({ currency }: { currency: string }) {
 /** 滚动平均曲线：收入/支出实线 + 各自 trailing avg 虚线。 */
 function RollingChart({ summary }: { summary: RollingSummary }) {
   const points = summary.points;
+  const { t } = useTranslation();
   if (points.length === 0) {
-    return <EmptyState title="暂无数据" detail="记录交易后，这里会显示收支的滚动平均走势。" />;
+    return <EmptyState title={t("insights.rolling.emptyTitle")} detail={t("insights.rolling.emptyDetail")} />;
   }
   const width = 720;
   const height = 250;
@@ -1469,8 +1493,8 @@ function RollingChart({ summary }: { summary: RollingSummary }) {
   const labelEvery = Math.max(1, Math.ceil(points.length / 12));
   return (
     <div className="monthly-trend-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="收支滚动平均趋势">
-        <title>最近 {summary.months} 个月收支与 {summary.window} 个月滚动均值（{summary.currency}）</title>
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("insights.rolling.chartAria")}>
+        <title>{t("insights.rolling.chartTitle", { months: summary.months, window: summary.window, currency: summary.currency })}</title>
         {gridLines.map((gy) => (
           <line key={gy} x1={padL} x2={width - padR} y1={gy} y2={gy} className="grid-line" />
         ))}
@@ -1486,7 +1510,7 @@ function RollingChart({ summary }: { summary: RollingSummary }) {
             textAnchor="middle"
             className="chart-axis-label"
           >
-            {index % labelEvery === 0 ? (point.month === 1 ? `${point.year}年` : `${point.month}月`) : ""}
+            {index % labelEvery === 0 ? (point.month === 1 ? t("insights.yearLabel", { year: point.year }) : t("insights.monthLabel", { month: point.month })) : ""}
           </text>
         ))}
       </svg>
@@ -1524,14 +1548,15 @@ export function BudgetPanel({
   const rows = expenseCategories.filter(
     (category) => actualByCategory.has(category.id) || limitByCategory.has(category.id)
   );
+  const { t } = useTranslation();
   return (
     <section className="panel budget-panel">
       <div className="section-heading compact-heading">
-        <div><span>BUDGET</span><h2>月度预算</h2></div>
-        <small>{summary.year}年{summary.month}月</small>
+        <div><span>BUDGET</span><h2>{t("insights.budget.title")}</h2></div>
+        <small>{t("insights.budget.period", { year: summary.year, month: summary.month })}</small>
       </div>
       {rows.length === 0 ? (
-        <EmptyState title="还没有预算" detail="在支出分类上设置月度上限，即可跟踪预算进度。" />
+        <EmptyState title={t("insights.budget.emptyTitle")} detail={t("insights.budget.emptyDetail")} />
       ) : (
         <div className="budget-list">
           {rows.map((category) => {
@@ -1556,14 +1581,14 @@ export function BudgetPanel({
                         step="0.01"
                         value={draft}
                         onChange={(event) => setDraft(event.target.value)}
-                        placeholder="每月上限"
+                        placeholder={t("insights.budget.placeholder")}
                         autoFocus
                       />
                       <button
                         type="button"
                         className="row-action"
-                        title="保存预算"
-                        aria-label="保存预算"
+                        title={t("insights.budget.save")}
+                        aria-label={t("insights.budget.save")}
                         onClick={() => {
                           if (draft.trim()) onSetBudget(category.id, draft.trim());
                           setEditingId(null);
@@ -1573,8 +1598,8 @@ export function BudgetPanel({
                         <button
                           type="button"
                           className="row-action"
-                          title="清除预算"
-                          aria-label="清除预算"
+                          title={t("insights.budget.clear")}
+                          aria-label={t("insights.budget.clear")}
                           onClick={() => {
                             onClearBudget(category.id);
                             setEditingId(null);
@@ -1584,20 +1609,20 @@ export function BudgetPanel({
                       <button
                         type="button"
                         className="row-action"
-                        title="取消"
-                        aria-label="取消"
+                        title={t("common.cancel")}
+                        aria-label={t("common.cancel")}
                         onClick={() => setEditingId(null)}
                       ><X size={16} /></button>
                     </span>
                   ) : (
                     <span className="budget-amount">
                       <strong>{formatMoney(String(actual), summary.currency)}</strong>
-                      <span>{limitNumber === null ? " / 未设预算" : ` / ${formatMoney(limit!, summary.currency)}`}</span>
+                      <span>{limitNumber === null ? ` / ${t("insights.budget.unset")}` : ` / ${formatMoney(limit!, summary.currency)}`}</span>
                       <button
                         type="button"
                         className="row-action"
-                        title="设置预算"
-                        aria-label="设置预算"
+                        title={t("insights.budget.set")}
+                        aria-label={t("insights.budget.set")}
                         onClick={() => {
                           setDraft(limit ?? "");
                           setEditingId(category.id);
@@ -1616,7 +1641,7 @@ export function BudgetPanel({
                 </div>
                 {over && (
                   <small className="budget-over-note">
-                    已超支 {formatMoney(String(actual - limitNumber!), summary.currency)}
+                    {t("insights.budget.over", { amount: formatMoney(String(actual - limitNumber!), summary.currency) })}
                   </small>
                 )}
               </div>
@@ -1652,9 +1677,10 @@ export function MobileCashFlowGroup({
   total: number;
   currency: string;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="mobile-flow-group">
-      <header><span>{label}</span><small>{nodes.length} 项</small></header>
+      <header><span>{label}</span><small>{t("common.countItems", { count: nodes.length })}</small></header>
       <div className="mobile-flow-list">
         {nodes.map((node) => (
           <article className="mobile-flow-item" key={node.id}>
@@ -1678,6 +1704,7 @@ export function MobileCashFlowGroup({
 }
 
 export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
+  const { t } = useTranslation();
   const layout = useMemo(() => {
     const retained = Number(summary.retained);
     const sources: SankeyDatum[] = summary.income_sources.map((item) => ({
@@ -1697,7 +1724,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
     if (retained < 0) {
       sources.push({
         id: "deficit",
-        name: "动用存量资金",
+        name: t("insights.cashflow.deficitSource"),
         amount: Math.abs(retained),
         amountText: String(Math.abs(retained)),
         color: "#c27b58"
@@ -1705,7 +1732,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
     } else if (retained > 0) {
       destinations.push({
         id: "retained",
-        name: "本月结余",
+        name: t("insights.cashflow.retained"),
         amount: retained,
         amountText: summary.retained,
         color: "#3f9d70"
@@ -1745,13 +1772,13 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
       centerHeight,
       empty: flowTotal <= 0
     };
-  }, [summary]);
+  }, [summary, t]);
 
   if (layout.empty) {
     return (
       <details className="panel cash-flow-panel" open>
-        <summary><span><ChevronDown size={18} />现金流</span><small>收入如何流向支出</small></summary>
-        <EmptyState title="暂无现金流" detail="记录本月收入或支出后，这里会生成资金流向图。" />
+        <summary><span><ChevronDown size={18} />{t("insights.cashflow.title")}</span><small>{t("insights.cashflow.subtitle")}</small></summary>
+        <EmptyState title={t("insights.cashflow.emptyTitle")} detail={t("insights.cashflow.emptyDetail")} />
       </details>
     );
   }
@@ -1772,17 +1799,17 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
   return (
     <details className="panel cash-flow-panel" open>
       <summary>
-        <span><ChevronDown size={18} />现金流</span>
+        <span><ChevronDown size={18} />{t("insights.cashflow.title")}</span>
       </summary>
       <div className="sankey-scroll">
         <svg
           className="sankey-canvas"
           viewBox={`0 0 1080 ${layout.height}`}
           role="img"
-          aria-label={`${summary.month}月现金流向图`}
+          aria-label={t("insights.cashflow.chartAria", { month: summary.month })}
         >
-          <title>{summary.month} 月现金流</title>
-          <desc>左侧为收入分类，中间为本月现金流，右侧为支出分类与结余，连线宽度代表金额。</desc>
+          <title>{t("insights.cashflow.chartTitle", { month: summary.month })}</title>
+          <desc>{t("insights.cashflow.chartDesc")}</desc>
           {sourceRibbons.map(({ node, centerY }) => (
             <path
               key={`source-ribbon-${node.id}`}
@@ -1790,7 +1817,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
               d={sankeyRibbonPath(158, node.y, node.height, 522, centerY, node.height)}
               style={{ fill: node.color }}
             >
-              <title>{node.name}：{formatMoney(node.amountText, summary.currency)}</title>
+              <title>{t("insights.cashflow.ribbonTitle", { name: node.name, amount: formatMoney(node.amountText, summary.currency) })}</title>
             </path>
           ))}
           {destinationRibbons.map(({ node, centerY }) => (
@@ -1800,7 +1827,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
               d={sankeyRibbonPath(546, centerY, node.height, 930, node.y, node.height)}
               style={{ fill: node.color }}
             >
-              <title>{node.name}：{formatMoney(node.amountText, summary.currency)}</title>
+              <title>{t("insights.cashflow.ribbonTitle", { name: node.name, amount: formatMoney(node.amountText, summary.currency) })}</title>
             </path>
           ))}
 
@@ -1817,7 +1844,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
           <g className="sankey-center-node">
             <rect x="522" y={layout.centerY} width="24" height={layout.centerHeight} rx="5" />
             <text x="558" y={layout.centerY + layout.centerHeight / 2 - 3}>
-              <tspan className="center-name">本月现金流</tspan>
+              <tspan className="center-name">{t("insights.cashflow.center")}</tspan>
               <tspan className="center-amount" x="558" dy="20">{formatMoney(summary.flow_total, summary.currency)}</tspan>
             </text>
           </g>
@@ -1833,20 +1860,20 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
           ))}
         </svg>
       </div>
-      <div className="cash-flow-mobile" role="img" aria-label={`${summary.month}月现金流向明细`}>
+      <div className="cash-flow-mobile" role="img" aria-label={t("insights.cashflow.mobileAria", { month: summary.month })}>
         <MobileCashFlowGroup
-          label="收入来源"
+          label={t("common.incomeSources")}
           nodes={layout.sources}
           total={Number(summary.flow_total)}
           currency={summary.currency}
         />
         <div className="mobile-flow-core">
-          <span>汇入本月现金流</span>
+          <span>{t("insights.cashflow.mobileCore")}</span>
           <strong>{formatMoney(summary.flow_total, summary.currency)}</strong>
           <ChevronDown size={17} />
         </div>
         <MobileCashFlowGroup
-          label="支出去向与结余"
+          label={t("insights.cashflow.mobileDestinations")}
           nodes={layout.destinations}
           total={Number(summary.flow_total)}
           currency={summary.currency}
@@ -1875,14 +1902,15 @@ export function sankeyRibbonPath(
 }
 
 export function CategoryBars({ summary, detailed = false }: { summary: MonthlySummary; detailed?: boolean }) {
-  if (!summary.expenses_by_category.length) return <EmptyState title="暂无支出数据" detail="记录支出后会自动生成分类分析。" />;
+  const { t } = useTranslation();
+  if (!summary.expenses_by_category.length) return <EmptyState title={t("insights.categoryBars.emptyTitle")} detail={t("insights.categoryBars.emptyDetail")} />;
   return (
     <div className={`category-bars ${detailed ? "detailed" : ""}`}>
       {summary.expenses_by_category.slice(0, detailed ? 8 : 4).map((item) => (
         <div className="category-bar" key={item.category_id}>
           <div><span><CategoryAvatar name={item.category_name} size="small" />{item.category_name}</span><strong>{formatMoney(item.amount, summary.currency)}</strong></div>
           <div className="bar-track"><i style={{ width: `${item.percentage}%`, background: categoryVisual(item.category_name).color }} /></div>
-          {detailed && <small>{item.percentage}% 的本月支出</small>}
+          {detailed && <small>{t("insights.categoryBars.percentLabel", { percent: item.percentage })}</small>}
         </div>
       ))}
     </div>
@@ -1917,15 +1945,16 @@ export function LoansSection({
   const borrowOutstanding = open
     .filter((loan) => loan.loan_type === "borrow")
     .reduce((sum, loan) => sum + Number(shown(loan.outstanding, loan.currency).amount), 0);
+  const { t } = useTranslation();
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
-        <div><span>LOANS</span><h2>借入与借出</h2></div>
-        <button className="text-button" onClick={onCreateLoan}><Plus size={16} /> 记一笔借款</button>
+        <div><span>LOANS</span><h2>{t("accounts.loans.title")}</h2></div>
+        <button className="text-button" onClick={onCreateLoan}><Plus size={16} /> {t("accounts.loans.add")}</button>
       </div>
       <div className="balance-summary-row">
-        <SummaryCard label="借出应收" value={lendOutstanding.toFixed(2)} currency={display} tone="green" />
-        <SummaryCard label="借入应付" value={borrowOutstanding.toFixed(2)} currency={display} tone="orange" />
+        <SummaryCard label={t("accounts.loans.receivable")} value={lendOutstanding.toFixed(2)} currency={display} tone="green" />
+        <SummaryCard label={t("accounts.loans.payable")} value={borrowOutstanding.toFixed(2)} currency={display} tone="orange" />
       </div>
       <div className="account-grid">
         {open.map((loan) => {
@@ -1939,24 +1968,24 @@ export function LoansSection({
                 <h3>
                   {loan.counterparty}
                   <small className={loan.loan_type === "lend" ? "income-text" : "expense-text"}>
-                    {loan.loan_type === "lend" ? "借出" : "借入"}
+                    {t(loan.loan_type === "lend" ? "common.lend" : "common.borrow")}
                   </small>
                 </h3>
                 <span>
                   {loan.currency}
-                  {isConverted ? `（原币 ${formatMoney(loan.outstanding, loan.currency)}）` : ""} · 本金{" "}
+                  {isConverted ? `（${t("accounts.originalCurrency", { amount: formatMoney(loan.outstanding, loan.currency) })}）` : ""} · {t("accounts.loans.principal")}{" "}
                   {formatMoney(principalShown.amount, principalShown.currency)}
-                  {isConverted ? `（原币 ${formatMoney(loan.principal, loan.currency)}）` : ""} ·{" "}
-                  {accountMap.get(loan.account_id)?.name ?? "未知账户"}
+                  {isConverted ? `（${t("accounts.originalCurrency", { amount: formatMoney(loan.principal, loan.currency) })}）` : ""} ·{" "}
+                  {accountMap.get(loan.account_id)?.name ?? t("common.unknownAccount")}
                   {loan.note ? ` · ${loan.note}` : ""}
                 </span>
               </div>
               <strong>{formatMoney(outstandingShown.amount, outstandingShown.currency)}</strong>
-              <button className="row-action" onClick={() => onRepay(loan)} title="还款" aria-label="还款"><RefreshCcw size={16} /></button>
+              <button className="row-action" onClick={() => onRepay(loan)} title={t("accounts.loans.repay")} aria-label={t("accounts.loans.repay")}><RefreshCcw size={16} /></button>
             </article>
           );
         })}
-        {open.length === 0 && <EmptyState title="没有进行中的借款" detail="点击“记一笔借款”借出或借入。" />}
+        {open.length === 0 && <EmptyState title={t("accounts.loans.emptyTitle")} detail={t("accounts.loans.emptyDetail")} />}
       </div>
       {closed.length > 0 && (
         <div className="account-grid closed-loans">
@@ -1964,10 +1993,10 @@ export function LoansSection({
             <article className="account-detail-card muted" key={loan.id}>
               <span className="large-account-icon"><Handshake size={23} /></span>
               <div className="account-detail-copy">
-                <h3>{loan.counterparty}<small>{loan.loan_type === "lend" ? "借出" : "借入"}</small></h3>
-                <span>{formatDate(loan.opened_at)} 开立{loan.closed_at ? ` · ${formatDate(loan.closed_at)} 结清` : ""}</span>
+                <h3>{loan.counterparty}<small>{t(loan.loan_type === "lend" ? "common.lend" : "common.borrow")}</small></h3>
+                <span>{formatDate(loan.opened_at)} {t("common.opened")}{loan.closed_at ? ` · ${formatDate(loan.closed_at)} ${t("common.settled")}` : ""}</span>
               </div>
-              <strong>已结清</strong>
+              <strong>{t("common.settledDone")}</strong>
             </article>
           ))}
         </div>
@@ -1991,11 +2020,12 @@ export function RecurringSection({
 }) {
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const categoryMap = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
+  const { t } = useTranslation();
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
-        <div><span>RECURRING</span><h2>周期交易</h2></div>
-        <button className="text-button" onClick={onCreate}><Plus size={16} /> 新建周期</button>
+        <div><span>RECURRING</span><h2>{t("accounts.recurring.title")}</h2></div>
+        <button className="text-button" onClick={onCreate}><Plus size={16} /> {t("accounts.recurring.new")}</button>
       </div>
       <div className="account-grid">
         {rules.map((rule) => {
@@ -2007,19 +2037,19 @@ export function RecurringSection({
             <article className="account-detail-card" key={rule.id}>
               <span className={`large-account-icon ${isExpense ? "tone-1" : "tone-2"}`}><Icon size={23} /></span>
               <div className="account-detail-copy">
-                <h3>{rule.note || category?.name || "周期交易"}</h3>
+                <h3>{rule.note || category?.name || t("accounts.recurring.title")}</h3>
                 <span>
-                  {category?.name ?? "未知分类"} · {rule.frequency === "monthly" ? "每月" : "每周"} · 下次 {formatDate(rule.next_due_at)} · {account?.name ?? "未知账户"}
+                  {category?.name ?? t("common.unknownCategory")} · {rule.frequency === "monthly" ? t("common.monthly") : t("common.weekly")} · {t("accounts.recurring.next")} {formatDate(rule.next_due_at)} · {account?.name ?? t("common.unknownAccount")}
                 </span>
               </div>
               <strong className={isExpense ? "expense-text" : "income-text"}>
                 {isExpense ? "−" : "+"}{formatMoney(rule.amount, account?.currency ?? "CNY")}
               </strong>
-              <button className="row-action" onClick={() => onDelete(rule.id)} title="删除周期交易" aria-label="删除周期交易"><Trash2 size={16} /></button>
+              <button className="row-action" onClick={() => onDelete(rule.id)} title={t("accounts.recurring.delete")} aria-label={t("accounts.recurring.delete")}><Trash2 size={16} /></button>
             </article>
           );
         })}
-        {rules.length === 0 && <EmptyState title="还没有周期交易" detail="房租、订阅等固定收支可设为自动重复。" />}
+        {rules.length === 0 && <EmptyState title={t("accounts.recurring.emptyTitle")} detail={t("accounts.recurring.emptyDetail")} />}
       </div>
     </section>
   );
@@ -2046,12 +2076,13 @@ export function DepositSection({
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const shown = (value: string, from: string) =>
     convertedMoney(value, from, display, rates) ?? { amount: value, currency: from };
+  const { t } = useTranslation();
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
-        <div><span>DEPOSITS</span><h2>定期存款</h2></div>
+        <div><span>DEPOSITS</span><h2>{t("deposit.title")}</h2></div>
         {savings.length > 0 && (
-          <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> 转定期</button>
+          <button className="text-button" onClick={() => onDeposit(savings[0])}><PiggyBank size={16} /> {t("deposit.convert")}</button>
         )}
       </div>
       <div className="account-grid">
@@ -2061,17 +2092,17 @@ export function DepositSection({
             <article className="account-detail-card" key={deposit.id}>
               <span className="large-account-icon tone-1"><PiggyBank size={23} /></span>
               <div className="account-detail-copy">
-                <h3>定期 · {deposit.term_days} 天</h3>
+                <h3>{t("deposit.term", { days: deposit.term_days })}</h3>
                 <span>
-                  年利率 {deposit.rate}% · {formatDate(deposit.maturity_at)} 到期 · {accountMap.get(deposit.source_account_id)?.name ?? "未知账户"}
+                  {t("deposit.meta", { rate: deposit.rate, date: formatDate(deposit.maturity_at), account: accountMap.get(deposit.source_account_id)?.name ?? t("common.unknownAccount") })}
                 </span>
               </div>
               <strong>{formatMoney(principal.amount, principal.currency)}</strong>
-              <button className="row-action" onClick={() => onSettle(deposit)} title="结清定期并转回" aria-label="结清定期"><RotateCcw size={16} /></button>
+              <button className="row-action" onClick={() => onSettle(deposit)} title={t("deposit.settleTitle")} aria-label={t("deposit.settleAria")}><RotateCcw size={16} /></button>
             </article>
           );
         })}
-        {open.length === 0 && <EmptyState title="没有进行中的定期" detail="从储蓄账户转入一笔定期，到期自动计息。" />}
+        {open.length === 0 && <EmptyState title={t("deposit.emptyTitle")} detail={t("deposit.emptyDetail")} />}
       </div>
       {closed.length > 0 && (
         <div className="account-grid closed-loans">
@@ -2079,10 +2110,10 @@ export function DepositSection({
             <article className="account-detail-card muted" key={deposit.id}>
               <span className="large-account-icon"><PiggyBank size={23} /></span>
               <div className="account-detail-copy">
-                <h3>定期 · {deposit.term_days} 天</h3>
-                <span>{formatDate(deposit.opened_at)} 开立{deposit.settled_at ? ` · ${formatDate(deposit.settled_at)} 结清` : ""}</span>
+                <h3>{t("deposit.term", { days: deposit.term_days })}</h3>
+                <span>{formatDate(deposit.opened_at)} {t("common.opened")}{deposit.settled_at ? ` · ${formatDate(deposit.settled_at)} ${t("common.settled")}` : ""}</span>
               </div>
-              <strong>已结清</strong>
+              <strong>{t("common.settledDone")}</strong>
             </article>
           ))}
         </div>
@@ -2117,6 +2148,7 @@ export function HoldingSection({
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const { t } = useTranslation();
   // 挂载后懒拉取：只要存在从未刷新或超过 24 小时未刷新的持仓，就在后台刷新一次市价。
   const didAutoRefresh = useRef(false);
   useEffect(() => {
@@ -2135,10 +2167,10 @@ export function HoldingSection({
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
-        <div><span>HOLDINGS</span><h2>股票持仓</h2></div>
+        <div><span>HOLDINGS</span><h2>{t("holdings.title")}</h2></div>
         <div className="holding-actions">
-          <button className="text-button" onClick={() => void onRefreshHoldings()} title="刷新过期/缺失市价" aria-label="刷新市价"><RefreshCcw size={14} /> 刷新市价</button>
-          <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> 买入</button>
+          <button className="text-button" onClick={() => void onRefreshHoldings()} title={t("holdings.refreshStaleTitle")} aria-label={t("holdings.refreshAria")}><RefreshCcw size={14} /> {t("holdings.refresh")}</button>
+          <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> {t("holdings.buy")}</button>
         </div>
       </div>
       <div className="account-grid">
@@ -2157,34 +2189,34 @@ export function HoldingSection({
               <div className="account-detail-copy">
                 <h3>{holding.symbol}</h3>
                 <span>
-                  {shares} 股 · 成本 {formatMoney(holding.average_cost, currency)}
-                  {lastPrice !== null ? ` · 现价 ${formatMoney(holding.last_price!, currency)}` : " · 未设现价"}
-                  {holding.updated_at ? ` · 更新于 ${formatDate(holding.updated_at)}` : ""}
+                  {t("holdings.meta", { shares, cost: formatMoney(holding.average_cost, currency) })}
+                  {lastPrice !== null ? t("holdings.metaPrice", { price: formatMoney(holding.last_price!, currency) }) : t("holdings.noPrice")}
+                  {holding.updated_at ? t("holdings.updatedAt", { date: formatDate(holding.updated_at) }) : ""}
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
               <div className="account-card-actions">
                 {editing ? (
                   <>
-                    <input className="inline-number" type="number" min="0" step="0.01" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="市价" autoFocus />
-                    <button className="row-action" onClick={() => { if (draft.trim()) onSetPrice(holding.id, draft.trim()); setEditingId(null); }} title="保存市价" aria-label="保存市价"><Check size={16} /></button>
-                    <button className="row-action" onClick={() => setEditingId(null)} title="取消" aria-label="取消"><X size={16} /></button>
+                    <input className="inline-number" type="number" min="0" step="0.01" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={t("holdings.pricePlaceholder")} autoFocus />
+                    <button className="row-action" onClick={() => { if (draft.trim()) onSetPrice(holding.id, draft.trim()); setEditingId(null); }} title={t("holdings.savePrice")} aria-label={t("holdings.savePrice")}><Check size={16} /></button>
+                    <button className="row-action" onClick={() => setEditingId(null)} title={t("common.cancel")} aria-label={t("common.cancel")}><X size={16} /></button>
                   </>
                 ) : (
                   <>
-                    <button className="row-action" onClick={() => { setDraft(holding.last_price ?? ""); setEditingId(holding.id); }} title="更新市价" aria-label="更新市价"><RefreshCcw size={16} /></button>
+                    <button className="row-action" onClick={() => { setDraft(holding.last_price ?? ""); setEditingId(holding.id); }} title={t("holdings.updatePrice")} aria-label={t("holdings.updatePrice")}><RefreshCcw size={16} /></button>
                     {onRefreshHolding && (
-                      <button className="text-button" onClick={() => void onRefreshHolding(holding.id)} title="强制刷新该持仓市价">刷新</button>
+                      <button className="text-button" onClick={() => void onRefreshHolding(holding.id)} title={t("holdings.forceRefresh")}>{t("holdings.refreshShort")}</button>
                     )}
-                    <button className="text-button" onClick={() => onBuy(holding.symbol)}>买</button>
-                    <button className="text-button" onClick={() => onSell(holding.symbol)}>卖</button>
+                    <button className="text-button" onClick={() => onBuy(holding.symbol)}>{t("holdings.buyShort")}</button>
+                    <button className="text-button" onClick={() => onSell(holding.symbol)}>{t("holdings.sellShort")}</button>
                   </>
                 )}
               </div>
             </article>
           );
         })}
-        {holdings.length === 0 && <EmptyState title="还没有持仓" detail="在股票账户上买入第一笔，即可追踪持仓与成本。" />}
+        {holdings.length === 0 && <EmptyState title={t("holdings.emptyTitle")} detail={t("holdings.emptyDetail")} />}
       </div>
     </section>
   );

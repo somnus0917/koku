@@ -16,6 +16,7 @@ import {
   CircleDollarSign,
   Eye,
   EyeOff,
+  Globe,
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
@@ -37,6 +38,8 @@ import {
   X,
   type LucideIcon
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { changeLanguage, uiLocale } from "./i18n";
 import {
   ApiError,
   adjustBalance,
@@ -135,23 +138,23 @@ import type {
 type View = "dashboard" | "accounts" | "transactions" | "insights" | "users" | "system";
 type Modal = "transaction" | "account" | "category" | "deposit" | "settle" | "reimburse" | "loan" | "repay" | "edit-account" | "edit-transaction" | "recurring" | "trade" | "password" | "import" | "totp" | "reconcile" | null;
 
-const NAV_ITEMS: Array<{ id: View; label: string; icon: LucideIcon }> = [
-  { id: "dashboard", label: "总览", icon: LayoutDashboard },
-  { id: "accounts", label: "账户", icon: WalletCards },
-  { id: "transactions", label: "交易", icon: ReceiptText },
-  { id: "insights", label: "分析", icon: ChartNoAxesCombined },
-  { id: "users", label: "用户", icon: Users },
-  { id: "system", label: "系统", icon: Settings }
+const NAV_ITEMS: Array<{ id: View; icon: LucideIcon }> = [
+  { id: "dashboard", icon: LayoutDashboard },
+  { id: "accounts", icon: WalletCards },
+  { id: "transactions", icon: ReceiptText },
+  { id: "insights", icon: ChartNoAxesCombined },
+  { id: "users", icon: Users },
+  { id: "system", icon: Settings }
 ];
 
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
 const TRANSACTIONS_PAGE_SIZE = 200;
 const MONTH_TRANSACTIONS_LIMIT = 1000;
 
-/** 提醒到期日展示：YYYY-MM-DD / RFC3339 → "8月20日"。 */
+/** 提醒到期日展示：YYYY-MM-DD / RFC3339 → "8月20日"（随界面语言变化）。 */
 function formatReminderDay(value: string): string {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
-  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(date);
+  return new Intl.DateTimeFormat(uiLocale(), { month: "long", day: "numeric" }).format(date);
 }
 
 export default function App() {
@@ -201,6 +204,7 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { theme, setTheme } = useTheme();
+  const { t, i18n } = useTranslation();
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -217,7 +221,7 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
       }
       onAuthenticated(result);
     } catch (reason) {
-      setError(reason instanceof ApiError && reason.status === 401 ? "用户名或密码不正确" : reason instanceof Error ? reason.message : "暂时无法登录");
+      setError(reason instanceof ApiError && reason.status === 401 ? t("login.invalidCredentials") : reason instanceof Error ? reason.message : t("login.unavailable"));
       setSubmitting(false);
     }
   };
@@ -228,54 +232,65 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession
     try {
       onAuthenticated(await verifyTotp(totpToken, code.trim()));
     } catch (reason) {
-      setError(reason instanceof ApiError && reason.status === 401 ? "动态码不正确或已过期" : reason instanceof Error ? reason.message : "暂时无法登录");
+      setError(reason instanceof ApiError && reason.status === 401 ? t("login.totpInvalid") : reason instanceof Error ? reason.message : t("login.unavailable"));
       setSubmitting(false);
     }
   };
 
   return (
     <main className="login-page">
-      <button
-        className="login-theme-button"
-        type="button"
-        onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
-        aria-label="切换主题"
-        title={theme === "light" ? "浅色 · 点击切换" : theme === "dark" ? "深色 · 点击切换" : "跟随系统 · 点击切换"}
-      >
-        {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
-      </button>
-      <section className="login-story" aria-label="Koku 私人账本">
+      <div className="login-corner-actions">
+        <button
+          className="login-theme-button"
+          type="button"
+          onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
+          aria-label={t("common.themeToggle")}
+          title={theme === "light" ? t("common.themeLight") : theme === "dark" ? t("common.themeDark") : t("common.themeSystem")}
+        >
+          {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
+        </button>
+        <button
+          className="login-theme-button"
+          type="button"
+          onClick={() => void changeLanguage(i18n.language?.toLowerCase().startsWith("en") ? "zh" : "en")}
+          aria-label={t("common.language")}
+          title={t("common.language")}
+        >
+          <Globe size={18} />
+        </button>
+      </div>
+      <section className="login-story" aria-label={t("login.storyLabel")}>
         <div className="login-brand"><div className="brand-mark" aria-hidden="true"><span /><span /></div><div><strong>Koku</strong><small>PRIVATE LEDGER</small></div></div>
         <div className="login-story-copy">
           <span>YOUR MONEY, QUIETLY KEPT</span>
-          <h1>只属于你的，<br />私人账本。</h1>
-          <p>账户、交易和统计仅保存在你自己的服务器中。没有广告，没有第三方分析，也不会上传到其他平台。</p>
+          <h1>{t("login.headlineLine1")}<br />{t("login.headlineLine2")}</h1>
+          <p>{t("login.blurb")}</p>
         </div>
-        <div className="login-trust-row"><span><ShieldCheck size={16} />私有部署</span><span><LockKeyhole size={16} />加密会话</span></div>
+        <div className="login-trust-row"><span><ShieldCheck size={16} />{t("login.selfHosted")}</span><span><LockKeyhole size={16} />{t("login.encryptedSession")}</span></div>
       </section>
       <section className="login-panel">
         {step === "totp" ? (
           <form className="login-card" onSubmit={submitTotp}>
             <div className="login-lock"><ShieldCheck size={20} /></div>
             <span className="login-eyebrow">TWO-FACTOR AUTH</span>
-            <h2>二步验证</h2>
-            <p>已开启二步验证，请输入验证器中的 6 位动态码。</p>
-            <label><span>动态码</span><input autoFocus required inputMode="numeric" maxLength={6} pattern="[0-9]*" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder="输入 6 位动态码" /></label>
+            <h2>{t("totp.title")}</h2>
+            <p>{t("login.totpIntro")}</p>
+            <label><span>{t("login.totpCode")}</span><input autoFocus required inputMode="numeric" maxLength={6} pattern="[0-9]*" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} placeholder={t("totp.codePlaceholder")} /></label>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <button className="login-submit" disabled={submitting || code.trim().length !== 6}>{submitting ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={17} />}{submitting ? "正在验证" : "验证并登录"}</button>
-            <button type="button" className="login-back" onClick={() => { setStep("credentials"); setError(null); setCode(""); }}>← 返回用户名 / 密码登录</button>
+            <button className="login-submit" disabled={submitting || code.trim().length !== 6}>{submitting ? <LoaderCircle className="spin" size={18} /> : <ShieldCheck size={17} />}{submitting ? t("login.verifying") : t("login.verifyAndLogin")}</button>
+            <button type="button" className="login-back" onClick={() => { setStep("credentials"); setError(null); setCode(""); }}>{t("login.backToCredentials")}</button>
           </form>
         ) : (
           <form className="login-card" onSubmit={submit}>
             <div className="login-lock"><LockKeyhole size={20} /></div>
             <span className="login-eyebrow">WELCOME BACK</span>
-            <h2>登录你的账本</h2>
-            <p>验证身份后才能读取服务器中的财务数据。</p>
-            <label><span>用户名</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="输入用户名" /></label>
-            <label><span>密码</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="输入密码" /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "隐藏密码" : "显示密码"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
+            <h2>{t("login.title")}</h2>
+            <p>{t("login.subtitle")}</p>
+            <label><span>{t("login.username")}</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder={t("login.usernamePlaceholder")} /></label>
+            <label><span>{t("login.password")}</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? "正在验证" : "安全登录"}</button>
-            <small className="login-footnote">登录会话仅存储在此浏览器的安全 Cookie 中</small>
+            <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? t("login.verifying") : t("login.signIn")}</button>
+            <small className="login-footnote">{t("login.footnote")}</small>
           </form>
         )}
       </section>
@@ -309,6 +324,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
   const [reminderError, setReminderError] = useState<string | null>(null);
   const reminderRef = useRef<HTMLDivElement | null>(null);
   const { theme, setTheme } = useTheme();
+  const { t, i18n } = useTranslation();
   const [txOffset, setTxOffset] = useState(0);
   const [txHasMore, setTxHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -339,13 +355,13 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         setTxHasMore(month === undefined && transactions.length === TRANSACTIONS_PAGE_SIZE);
         setError(null);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "无法连接 Koku API");
+        setError(reason instanceof Error ? reason.message : t("app.apiUnreachable"));
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [currency, month, year]
+    [currency, month, year, t]
   );
 
   const loadMore = useCallback(async () => {
@@ -359,11 +375,11 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
       setTxOffset((offset) => offset + page.length);
       setTxHasMore(page.length === TRANSACTIONS_PAGE_SIZE);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法加载更多交易");
+      setError(reason instanceof Error ? reason.message : t("app.loadMoreFailed"));
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, txHasMore, txOffset]);
+  }, [loadingMore, txHasMore, txOffset, t]);
 
   useEffect(() => {
     void refresh();
@@ -418,10 +434,10 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
     setReminderError(null);
     try {
       const result = await sendReminderDigest();
-      setToast(`邮件提醒已发送（${result.count} 条）`);
+      setToast(t("reminders.digestSent", { count: result.count }));
       setReminderOpen(false);
     } catch (reason) {
-      setReminderError(reason instanceof Error ? reason.message : "发送失败");
+      setReminderError(reason instanceof Error ? reason.message : t("reminders.sendFailed"));
     } finally {
       setReminderSending(false);
     }
@@ -456,7 +472,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             }}
             onCreateRecurring={() => setModal("recurring")}
             onDeleteRecurring={(id) =>
-              void mutate(() => deleteRecurringRule(id), "周期交易已删除")
+              void mutate(() => deleteRecurringRule(id), t("accounts.recurringDeleted"))
             }
             onBuyStock={(symbol = "") => {
               setTradeSide("buy");
@@ -469,14 +485,14 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               setModal("trade");
             }}
             onSetHoldingPrice={(holdingId, price) =>
-              void mutate(() => setHoldingPrice(holdingId, price), "已更新市价")
+              void mutate(() => setHoldingPrice(holdingId, price), t("holdings.updated"))
             }
             onReconcile={(account) => {
               setReconcileAccount(account);
               setModal("reconcile");
             }}
-            onRefreshHoldings={() => mutate(() => refreshHoldings(), "市价已更新")}
-            onRefreshHolding={(holdingId) => mutate(() => refreshHolding(holdingId), "市价已更新")}
+            onRefreshHoldings={() => mutate(() => refreshHoldings(), t("holdings.updated"))}
+            onRefreshHolding={(holdingId) => mutate(() => refreshHolding(holdingId), t("holdings.updated"))}
           />
         );
       case "transactions":
@@ -486,21 +502,21 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             onAdd={() => setModal("transaction")}
             onImport={() => setModal("import")}
             onVoid={(transaction) =>
-              void mutate(() => voidTransaction(transaction.id), "交易已撤销，余额已恢复")
+              void mutate(() => voidTransaction(transaction.id), t("transactions.voided"))
             }
             onRestore={(transaction) =>
-              void mutate(() => restoreTransaction(transaction.id), "交易已恢复")
+              void mutate(() => restoreTransaction(transaction.id), t("transactions.restored"))
             }
             onDeletePermanently={(transaction) => {
               const label = transaction.note || transaction.kind;
-              if (!window.confirm(`永久删除「${label}」？此操作不可恢复，将同时删除小票与报销记录。`)) return;
-              void mutate(() => deleteTransactionPermanently(transaction.id), "交易已永久删除");
+              if (!window.confirm(t("transactions.confirmDeletePermanent", { label }))) return;
+              void mutate(() => deleteTransactionPermanently(transaction.id), t("transactions.deletedPermanently"));
             }}
             onMarkReimbursable={(transaction) =>
-              void mutate(() => markReimbursable(transaction.id), "已标记为待报销")
+              void mutate(() => markReimbursable(transaction.id), t("transactions.markedReimbursable"))
             }
             onUnmarkReimbursable={(transaction) =>
-              void mutate(() => unmarkReimbursable(transaction.id), "已取消待报销标记")
+              void mutate(() => unmarkReimbursable(transaction.id), t("transactions.unmarkedReimbursable"))
             }
             onReimburse={(transaction) => {
               setReimburseTarget(transaction);
@@ -511,7 +527,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               setModal("edit-transaction");
             }}
             onUploadReceipt={(transaction, file) =>
-              void mutate(() => uploadReceipt(transaction.id, file), "小票已上传")
+              void mutate(() => uploadReceipt(transaction.id, file), t("transactions.receiptUploaded"))
             }
             onLoadMore={loadMore}
             loadingMore={loadingMore}
@@ -530,13 +546,13 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             onSetBudget={(categoryId, limit) =>
               void mutate(
                 () => setBudget(categoryId, data.monthly.year, data.monthly.month, limit),
-                "预算已更新"
+                t("insights.budget.updated")
               )
             }
             onClearBudget={(categoryId) =>
               void mutate(
                 () => clearBudget(categoryId, data.monthly.year, data.monthly.month),
-                "预算已清除"
+                t("insights.budget.cleared")
               )
             }
           />
@@ -568,13 +584,13 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             <strong>Koku</strong>
             <small>PRIVATE LEDGER</small>
           </div>
-          <button className="mobile-close" onClick={() => setMobileNavOpen(false)} aria-label="关闭菜单">
+          <button className="mobile-close" onClick={() => setMobileNavOpen(false)} aria-label={t("nav.closeMenu")}>
             <X size={20} />
           </button>
         </div>
 
-        <nav className="primary-nav" aria-label="主导航">
-          {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, label, icon: Icon }) => (
+        <nav className="primary-nav" aria-label={t("nav.main")}>
+          {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, icon: Icon }) => (
             <button
               className={activeView === id ? "active" : ""}
               key={id}
@@ -584,7 +600,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               }}
             >
               <Icon size={19} strokeWidth={1.8} />
-              <span>{label}</span>
+              <span>{t(`nav.${id}`)}</span>
             </button>
           ))}
         </nav>
@@ -598,9 +614,9 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             </span>
             <MoreHorizontal size={18} />
           </button>
-          <button className="password-button" onClick={() => setModal("password")} aria-label="修改密码" title="修改密码"><KeyRound size={17} /></button>
-          <button className="password-button" onClick={() => setModal("totp")} aria-label="二步验证" title="二步验证"><ShieldCheck size={17} /></button>
-          <button className="logout-button" onClick={() => void onLogout()} aria-label="退出登录" title="退出登录"><LogOut size={17} /></button>
+          <button className="password-button" onClick={() => setModal("password")} aria-label={t("common.changePassword")} title={t("common.changePassword")}><KeyRound size={17} /></button>
+          <button className="password-button" onClick={() => setModal("totp")} aria-label={t("totp.title")} title={t("totp.title")}><ShieldCheck size={17} /></button>
+          <button className="logout-button" onClick={() => void onLogout()} aria-label={t("common.logout")} title={t("common.logout")}><LogOut size={17} /></button>
         </div>
       </aside>
 
@@ -608,13 +624,13 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
 
       <main className="main-content">
         <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setMobileNavOpen(true)} aria-label="打开菜单">
+          <button className="icon-button mobile-menu" onClick={() => setMobileNavOpen(true)} aria-label={t("nav.openMenu")}>
             <Menu size={20} />
           </button>
           <div className="period-control">
             <CalendarDays size={17} />
             <input
-              aria-label="统计月份"
+              aria-label={t("topbar.statMonth")}
               type="month"
               value={monthValue}
               disabled={monthValue === ""}
@@ -625,14 +641,14 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               className={`all-months-toggle ${monthValue === "" ? "active" : ""}`}
               onClick={() => setMonthValue((value) => (value === "" ? currentMonthValue() : ""))}
               aria-pressed={monthValue === ""}
-              title={monthValue === "" ? "切回按月查看" : "查看全部月份（交易列表分页加载）"}
+              title={monthValue === "" ? t("topbar.backToMonthly") : t("topbar.viewAllMonths")}
             >
-              全部
+              {t("topbar.allMonths")}
             </button>
           </div>
           <div className="topbar-actions">
             <label className="currency-select">
-              <select aria-label="显示币种（按当前汇率折算所有金额）" value={currency} onChange={(event) => setCurrency(event.target.value)}>
+              <select aria-label={t("topbar.currencySelect")} value={currency} onChange={(event) => setCurrency(event.target.value)}>
                 {currencies.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
@@ -642,7 +658,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             <button
               className={`icon-button ${refreshing ? "spinning" : ""}`}
               onClick={() => void refresh(true)}
-              aria-label="刷新数据"
+              aria-label={t("topbar.refresh")}
             >
               <RefreshCcw size={18} />
             </button>
@@ -650,23 +666,23 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               <button
                 className={`icon-button reminder-bell ${reminders.length > 0 ? "has-alerts" : ""}`}
                 onClick={() => setReminderOpen((value) => !value)}
-                aria-label="到期提醒"
+                aria-label={t("reminders.title")}
                 aria-haspopup="dialog"
                 aria-expanded={reminderOpen}
-                title="到期提醒"
+                title={t("reminders.title")}
               >
                 <Bell size={18} />
                 {reminders.length > 0 && <span className="reminder-count">{reminders.length > 99 ? "99+" : reminders.length}</span>}
               </button>
               {reminderOpen && (
-                <div className="reminder-popover" role="dialog" aria-label="到期提醒">
+                <div className="reminder-popover" role="dialog" aria-label={t("reminders.title")}>
                   <header>
-                    <div><span>REMINDERS</span><strong>到期提醒</strong></div>
-                    <small>未来 30 天</small>
+                    <div><span>REMINDERS</span><strong>{t("reminders.title")}</strong></div>
+                    <small>{t("reminders.next30Days")}</small>
                   </header>
                   <div className="reminder-popover-list">
                     {reminders.length === 0 ? (
-                      <p className="reminder-empty">暂无到期提醒</p>
+                      <p className="reminder-empty">{t("reminders.empty")}</p>
                     ) : (
                       reminders.map((item) => (
                         <div className="reminder-item" key={`${item.kind}-${item.id}`}>
@@ -675,7 +691,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
                             <span>{formatMoney(item.amount, item.currency)} · {formatReminderDay(item.due_at)}</span>
                           </div>
                           <span className={`reminder-badge ${item.overdue ? "overdue" : ""}`}>
-                            {item.overdue ? `已逾期 ${Math.abs(item.days_left)} 天` : `${item.days_left} 天后`}
+                            {item.overdue ? t("reminders.overdueDays", { days: Math.abs(item.days_left) }) : t("reminders.daysLeft", { days: item.days_left })}
                           </span>
                         </div>
                       ))
@@ -686,7 +702,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
                       {reminderError && <span className="reminder-error">{reminderError}</span>}
                       <button type="button" className="text-button" onClick={() => void sendDigest()} disabled={reminderSending}>
                         {reminderSending ? <LoaderCircle className="spin" size={14} /> : <Mail size={14} />}
-                        {reminderSending ? "正在发送…" : "发送邮件提醒"}
+                        {reminderSending ? t("reminders.sending") : t("reminders.sendDigest")}
                       </button>
                     </div>
                   )}
@@ -696,30 +712,38 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
             <button
               className="icon-button"
               onClick={() => setTheme(theme === "light" ? "dark" : theme === "dark" ? "system" : "light")}
-              aria-label="切换主题"
-              title={theme === "light" ? "浅色 · 点击切换" : theme === "dark" ? "深色 · 点击切换" : "跟随系统 · 点击切换"}
+              aria-label={t("common.themeToggle")}
+              title={theme === "light" ? t("common.themeLight") : theme === "dark" ? t("common.themeDark") : t("common.themeSystem")}
             >
               {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Monitor size={18} />}
             </button>
+            <button
+              className="icon-button"
+              onClick={() => void changeLanguage(i18n.language?.toLowerCase().startsWith("en") ? "zh" : "en")}
+              aria-label={t("common.language")}
+              title={t("common.language")}
+            >
+              <Globe size={18} />
+            </button>
             <button className="primary-button compact" onClick={() => setModal("transaction")}>
               <Plus size={18} />
-              <span>记一笔</span>
+              <span>{t("common.quickAdd")}</span>
             </button>
           </div>
         </header>
 
-        {error && data && <div className="inline-error">同步失败：{error}</div>}
+        {error && data && <div className="inline-error">{t("app.syncFailed")}{error}</div>}
         {content}
       </main>
 
-      <nav className="mobile-bottom-nav" aria-label="移动端导航">
-        {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, label, icon: Icon }) => (
+      <nav className="mobile-bottom-nav" aria-label={t("nav.mobile")}>
+        {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, icon: Icon }) => (
           <button key={id} className={activeView === id ? "active" : ""} onClick={() => setActiveView(id)}>
             <Icon size={20} />
-            <span>{label}</span>
+            <span>{t(`nav.${id}`)}</span>
           </button>
         ))}
-        <button className="mobile-add" onClick={() => setModal("transaction")} aria-label="记一笔">
+        <button className="mobile-add" onClick={() => setModal("transaction")} aria-label={t("common.quickAdd")}>
           <Plus size={23} />
         </button>
       </nav>
@@ -736,7 +760,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
                 input.kind === "transfer"
                   ? createTransfer(input.payload)
                   : createTransaction(input.payload),
-              input.kind === "transfer" ? "转账完成" : "交易已记录"
+              input.kind === "transfer" ? t("transactions.transferDone") : t("transactions.recorded")
             )
           }
         />
@@ -745,7 +769,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         <AccountModal
           currencies={currencies}
           onClose={() => setModal(null)}
-          onSubmit={(input) => mutate(() => createAccount(input), "账户已创建")}
+          onSubmit={(input) => mutate(() => createAccount(input), t("accounts.created"))}
         />
       )}
       {modal === "edit-account" && data && editAccount && (
@@ -758,10 +782,10 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
               async () => {
                 await updateAccount(editAccount.id, input.details);
                 if (input.adjustment !== undefined) {
-                  await adjustBalance(editAccount.id, { amount: input.adjustment, note: "余额调整" });
+                  await adjustBalance(editAccount.id, { amount: input.adjustment, note: t("accounts.balanceAdjustment") });
                 }
               },
-              "账户已更新"
+              t("accounts.updated")
             )
           }
         />
@@ -770,10 +794,10 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         <CategoryModal
           categories={data?.categories ?? []}
           onClose={() => setModal(null)}
-          onSubmit={(input) => mutate(() => createCategory(input), "分类已创建")}
+          onSubmit={(input) => mutate(() => createCategory(input), t("modals.category.created"))}
           onDelete={async (category) => {
             await deleteCategory(category.id);
-            setToast(`“${category.name}”已删除，历史账单保持不变`);
+            setToast(t("modals.category.deleted", { name: category.name }));
             await refresh(true);
           }}
         />
@@ -785,7 +809,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(input) =>
             mutate(
               () => createDeposit({ from_account_id: depositFrom.id, ...input }),
-              "已转为定期存款"
+              t("deposit.converted")
             )
           }
         />
@@ -798,7 +822,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(to_account_id) =>
             mutate(
               () => settleDeposit(settleTarget.id, to_account_id),
-              "定期已结清，本息已转回"
+              t("deposit.settled")
             )
           }
         />
@@ -811,7 +835,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(input) =>
             mutate(
               () => reimburse({ expense_id: reimburseTarget.id, ...input }),
-              "报销完成"
+              t("transactions.reimbursed")
             )
           }
         />
@@ -821,7 +845,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           accounts={data.accounts}
           counterparties={[...new Set(data.loans.map((loan) => loan.counterparty))]}
           onClose={() => setModal(null)}
-          onSubmit={(input) => mutate(() => createLoan(input), "借款已记录")}
+          onSubmit={(input) => mutate(() => createLoan(input), t("accounts.loanRecorded"))}
         />
       )}
       {modal === "repay" && data && loanTarget && (
@@ -832,7 +856,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(input) =>
             mutate(
               () => repayLoan(loanTarget.id, input),
-              "还款已入账"
+              t("accounts.repaid")
             )
           }
         />
@@ -842,7 +866,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           accounts={data.accounts}
           categories={data.categories}
           onClose={() => setModal(null)}
-          onSubmit={(input) => mutate(() => createRecurringRule(input), "周期交易已创建")}
+          onSubmit={(input) => mutate(() => createRecurringRule(input), t("accounts.recurringCreated"))}
         />
       )}
       {modal === "trade" && data && (
@@ -854,7 +878,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(input) =>
             mutate(
               () => (input.side === "buy" ? buyStock(input.payload) : sellStock(input.payload)),
-              input.side === "buy" ? "买入已记录" : "卖出已记录"
+              input.side === "buy" ? t("holdings.buyRecorded") : t("holdings.sellRecorded")
             )
           }
         />
@@ -878,7 +902,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
         <ReconciliationModal
           account={reconcileAccount}
           onClose={() => setModal(null)}
-          onChanged={() => void mutate(async () => undefined, "对账已完成，余额已刷新")}
+          onChanged={() => void mutate(async () => undefined, t("reconcile.done"))}
         />
       )}
       {modal === "import" && data && (
@@ -886,7 +910,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           accounts={data.accounts}
           categories={data.categories}
           onClose={() => setModal(null)}
-          onComplete={() => void mutate(async () => undefined, "导入完成")}
+          onComplete={() => void mutate(async () => undefined, t("modals.import.done"))}
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (
@@ -899,7 +923,7 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
           onSubmit={(input) =>
             mutate(
               () => updateTransaction(editTransaction.id, input),
-              "交易已更新"
+              t("transactions.updated")
             )
           }
         />
@@ -914,13 +938,16 @@ function LedgerApp({ username, role, userId, onLogout }: { username: string; rol
 }
 
 function AuthLoadingState() {
-  return <main className="auth-loading"><div className="loading-mark"><span /><span /></div><p>正在验证安全会话…</p></main>;
+  const { t } = useTranslation();
+  return <main className="auth-loading"><div className="loading-mark"><span /><span /></div><p>{t("app.checkingSession")}</p></main>;
 }
 
 function LoadingState() {
-  return <div className="loading-state"><div className="loading-mark"><span /><span /></div><p>正在打开你的账本…</p></div>;
+  const { t } = useTranslation();
+  return <div className="loading-state"><div className="loading-mark"><span /><span /></div><p>{t("app.loadingLedger")}</p></div>;
 }
 
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <div className="error-state"><CircleDollarSign size={34} /><h2>暂时无法读取账本</h2><p>{message}</p><button className="primary-button" onClick={onRetry}><RefreshCcw size={17} />重新连接</button></div>;
+  const { t } = useTranslation();
+  return <div className="error-state"><CircleDollarSign size={34} /><h2>{t("app.errorTitle")}</h2><p>{message}</p><button className="primary-button" onClick={onRetry}><RefreshCcw size={17} />{t("app.reconnect")}</button></div>;
 }
