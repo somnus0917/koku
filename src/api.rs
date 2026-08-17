@@ -236,14 +236,6 @@ struct SetBudgetRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct CopyBudgetsRequest {
-    from_year: i32,
-    from_month: u32,
-    to_year: i32,
-    to_month: u32,
-}
-
-#[derive(Debug, Deserialize)]
 struct CreateRecurringRequest {
     kind: TransactionKind,
     account_id: i64,
@@ -571,20 +563,13 @@ async fn api_clear_budget(
     Ok(Json(ApiResponse::new(budget)))
 }
 
-async fn api_copy_budgets(
+async fn api_rollover_budgets(
     State(state): State<AppState>,
-    Json(request): Json<CopyBudgetsRequest>,
-) -> Result<(StatusCode, Json<ApiResponse<serde_json::Value>>)> {
-    let copied = lock_service(&state)?.copy_budgets(
-        request.from_year,
-        request.from_month,
-        request.to_year,
-        request.to_month,
-    )?;
-    Ok((
-        StatusCode::CREATED,
-        Json(ApiResponse::new(serde_json::json!({ "copied": copied }))),
-    ))
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    let copied = lock_service(&state)?.rollover_budgets_once(Utc::now())?;
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "copied": copied }),
+    )))
 }
 
 async fn api_recurring_rules(
@@ -1194,7 +1179,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/categories/{category_id}", delete(api_delete_category))
         .route("/api/tags", get(api_tags))
         .route("/api/budgets", get(api_budgets))
-        .route("/api/budgets/copy", post(api_copy_budgets))
+        .route("/api/budgets/rollover", post(api_rollover_budgets))
         .route(
             "/api/budgets/{category_id}",
             put(api_set_budget).delete(api_clear_budget),

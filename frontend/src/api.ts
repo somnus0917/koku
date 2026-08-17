@@ -266,21 +266,9 @@ export function clearBudget(categoryId: number, year: number, month: number): Pr
   return request(`/api/budgets/${categoryId}?${query.toString()}`, { method: "DELETE" });
 }
 
-export function copyBudgets(
-  fromYear: number,
-  fromMonth: number,
-  toYear: number,
-  toMonth: number
-): Promise<{ copied: number }> {
-  return request("/api/budgets/copy", {
-    method: "POST",
-    body: JSON.stringify({
-      from_year: fromYear,
-      from_month: fromMonth,
-      to_year: toYear,
-      to_month: toMonth
-    })
-  });
+/** 触发月度预算自动延续（每月只执行一次，幂等），返回带入的预算条数。 */
+export function rolloverBudgets(): Promise<{ copied: number }> {
+  return request("/api/budgets/rollover", { method: "POST" });
 }
 
 export function createRecurringRule(input: {

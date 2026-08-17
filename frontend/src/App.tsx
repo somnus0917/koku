@@ -37,7 +37,6 @@ import {
   buyStock,
   changePassword,
   clearBudget,
-  copyBudgets,
   createAccount,
   createCategory,
   createDeposit,
@@ -55,6 +54,7 @@ import {
   markReimbursable,
   reimburse,
   repayLoan,
+  rolloverBudgets,
   runRecurring,
   sellStock,
   setBudget,
@@ -247,8 +247,9 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       if (quiet) setRefreshing(true);
       else setLoading(true);
       try {
-        // 先触发周期交易到期生成（请求驱动、无后台任务），再读取最新数据。
+        // 先触发周期交易到期生成与月度预算自动延续（均请求驱动、无后台任务），再读取最新数据。
         await runRecurring().catch(() => undefined);
+        await rolloverBudgets().catch(() => undefined);
         const now = new Date();
         const summaryYear = year ?? now.getFullYear();
         const summaryMonth = month ?? now.getMonth() + 1;
@@ -287,19 +288,6 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
       setLoadingMore(false);
     }
   }, [loadingMore, txHasMore, txOffset]);
-
-  const copyLastMonthBudgets = async () => {
-    if (!data) return;
-    const { year, month } = data.monthly;
-    const last = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
-    try {
-      const result = await copyBudgets(last.year, last.month, year, month);
-      setToast(result.copied > 0 ? "已复制上月预算" : "上月没有可复制的预算");
-      await refresh(true);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "复制预算失败");
-    }
-  };
 
   useEffect(() => {
     void refresh();
@@ -426,7 +414,6 @@ function LedgerApp({ username, onLogout }: { username: string; onLogout: () => P
                 "预算已清除"
               )
             }
-            onCopyLastMonth={copyLastMonthBudgets}
           />
         );
       default:

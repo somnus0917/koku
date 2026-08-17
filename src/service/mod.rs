@@ -1258,6 +1258,32 @@ mod tests {
     }
 
     #[test]
+    fn budgets_rollover_once_per_month() -> Result<()> {
+        let mut service = test_service()?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let now = Utc::now();
+        let (year, month) = (now.year(), now.month());
+        let (last_year, last_month) = if month == 1 {
+            (year - 1, 12)
+        } else {
+            (year, month - 1)
+        };
+        service.set_budget(food.id, last_year, last_month, Decimal::from(500_u32))?;
+
+        // 首次 rollover：把上月预算带入本月。
+        let copied = service.rollover_budgets_once(now)?;
+        assert_eq!(copied, 1);
+        assert_eq!(
+            service.budget(food.id, year, month)?.limit_amount,
+            Decimal::from(500_u32)
+        );
+
+        // 再次 rollover：幂等，不重复复制。
+        assert_eq!(service.rollover_budgets_once(now)?, 0);
+        Ok(())
+    }
+
+    #[test]
     fn recurring_rules_generate_due_transactions_and_advance() -> Result<()> {
         let mut service = test_service()?;
         let cash =

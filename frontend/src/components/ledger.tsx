@@ -902,8 +902,7 @@ export function InsightsPage({
   categories,
   budgets,
   onSetBudget,
-  onClearBudget,
-  onCopyLastMonth
+  onClearBudget
 }: {
   summary: MonthlySummary;
   cashFlow: CashFlowSummary;
@@ -911,7 +910,6 @@ export function InsightsPage({
   budgets: Budget[];
   onSetBudget: (categoryId: number, limit: string) => void;
   onClearBudget: (categoryId: number) => void;
-  onCopyLastMonth: () => void;
 }) {
   const gradient = buildDonutGradient(summary);
   return (
@@ -930,7 +928,6 @@ export function InsightsPage({
         budgets={budgets}
         onSetBudget={onSetBudget}
         onClearBudget={onClearBudget}
-        onCopyLastMonth={onCopyLastMonth}
       />
       <section className="insights-grid">
         <article className="panel donut-panel">
@@ -1060,15 +1057,13 @@ export function BudgetPanel({
   categories,
   budgets,
   onSetBudget,
-  onClearBudget,
-  onCopyLastMonth
+  onClearBudget
 }: {
   summary: MonthlySummary;
   categories: Category[];
   budgets: Budget[];
   onSetBudget: (categoryId: number, limit: string) => void;
   onClearBudget: (categoryId: number) => void;
-  onCopyLastMonth: () => void;
 }) {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
@@ -1091,10 +1086,7 @@ export function BudgetPanel({
     <section className="panel budget-panel">
       <div className="section-heading compact-heading">
         <div><span>BUDGET</span><h2>月度预算</h2></div>
-        <div className="heading-meta">
-          <small>{summary.year}年{summary.month}月</small>
-          <button type="button" className="text-button" onClick={onCopyLastMonth}>复制上月预算</button>
-        </div>
+        <small>{summary.year}年{summary.month}月</small>
       </div>
       {rows.length === 0 ? (
         <EmptyState title="还没有预算" detail="在支出分类上设置月度上限，即可跟踪预算进度。" />

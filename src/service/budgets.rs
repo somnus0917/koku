@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Datelike, Utc};
 use rusqlite::{params, OptionalExtension};
 use rust_decimal::Decimal;
 
@@ -131,6 +131,24 @@ impl BookkeepingService {
             copied += 1;
         }
         tx.commit()?;
+        Ok(copied)
+    }
+
+    /// 每月首次访问时把上月的预算自动带入本月（每个自然月只执行一次，幂等）。
+    pub fn rollover_budgets_once(&mut self, now: DateTime<Utc>) -> Result<usize> {
+        let year = now.year();
+        let month = now.month();
+        let key = format!("budget_rollover:{year:04}-{month:02}");
+        if self.get_setting(&key)?.is_some() {
+            return Ok(0);
+        }
+        let (last_year, last_month) = if month == 1 {
+            (year - 1, 12)
+        } else {
+            (year, month - 1)
+        };
+        let copied = self.copy_budgets(last_year, last_month, year, month)?;
+        self.set_setting(&key, "done")?;
         Ok(copied)
     }
 
