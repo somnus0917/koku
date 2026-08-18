@@ -210,6 +210,17 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             updated_at     TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS transaction_splits (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            transaction_id INTEGER NOT NULL REFERENCES transactions(id),
+            category_id    INTEGER NOT NULL REFERENCES categories(id),
+            amount         TEXT NOT NULL,
+            note           TEXT,
+            created_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_transaction_splits_transaction
+            ON transaction_splits(transaction_id);
+
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             username      TEXT NOT NULL UNIQUE,

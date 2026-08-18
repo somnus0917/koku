@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::domain::{Receipt, Transaction, TransactionKind};
+use crate::domain::{Receipt, SplitInput, Transaction, TransactionKind, TransactionSplit};
 use crate::error::{KokuError, Result};
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
@@ -250,6 +250,45 @@ async fn api_update_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+/// 列出交易的拆分分类（无拆分为空数组）。
+async fn api_list_transaction_splits(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Vec<TransactionSplit>>>> {
+    let splits = lock_ledger(&state, user.user_id)
+        .await?
+        .list_transaction_splits(transaction_id)?;
+    Ok(Json(ApiResponse::new(splits)))
+}
+
+/// 清除交易的拆分分类（恢复父交易分类统计）。
+async fn api_clear_transaction_splits(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    lock_ledger(&state, user.user_id)
+        .await?
+        .clear_transaction_splits(transaction_id)?;
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "cleared": true }),
+    )))
+}
+
+/// 原子替换交易的拆分分类（金额总和须等于父交易金额）。
+async fn api_set_transaction_splits(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(transaction_id): AxumPath<i64>,
+    Json(request): Json<Vec<SplitInput>>,
+) -> Result<Json<ApiResponse<Vec<TransactionSplit>>>> {
+    let splits = lock_ledger(&state, user.user_id)
+        .await?
+        .set_transaction_splits(transaction_id, &request)?;
+    Ok(Json(ApiResponse::new(splits)))
+}
+
 async fn api_upload_receipt(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -318,6 +357,12 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/api/transactions/{transaction_id}",
             delete(api_delete_transaction).patch(api_update_transaction),
+        )
+        .route(
+            "/api/transactions/{transaction_id}/splits",
+            get(api_list_transaction_splits)
+                .put(api_set_transaction_splits)
+                .delete(api_clear_transaction_splits),
         )
         .route(
             "/api/transactions/{transaction_id}/receipt",

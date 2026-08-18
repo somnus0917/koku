@@ -35,6 +35,7 @@ mod reminders;
 mod rows;
 mod schema;
 mod settings;
+mod splits;
 mod summaries;
 mod tags;
 mod transactions;

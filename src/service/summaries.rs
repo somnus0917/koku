@@ -15,6 +15,34 @@ use crate::domain::{
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
+/// 按分类聚合的公共 FROM 子句：把交易按「有效分类」展开——有拆分
+/// （transaction_splits）的交易按拆分行计入，父分类不参与统计；无拆分的
+/// 按自身分类计入。父交易金额与拆分同时出现时不双计。
+const CATEGORY_AGG_FROM: &str = r#"
+FROM transactions t
+JOIN categories c ON c.id = t.category_id
+LEFT JOIN transaction_splits s ON s.transaction_id = t.id
+LEFT JOIN categories cs ON cs.id = s.category_id
+"#;
+
+/// 有效分类 id / 名称列表达式（有拆分用拆分行分类，否则用父分类）。
+const CATEGORY_AGG_CLASS: &str = r#"
+COALESCE(s.category_id, t.category_id) AS category_id,
+COALESCE(cs.name, c.name) AS category_name
+"#;
+
+/// 净额表达式：有拆分按拆分行金额（父交易已报销额按金额比例分摊扣减），
+/// 无拆分按父交易金额 - 已报销额。
+const CATEGORY_AGG_AMOUNT: &str = r#"
+SUM(CASE WHEN s.id IS NOT NULL
+         THEN CAST(s.amount AS REAL)
+              - CAST(COALESCE(t.reimbursed_amount, '0') AS REAL)
+                * (CAST(s.amount AS REAL) / CAST(t.amount AS REAL))
+         ELSE CAST(t.amount AS REAL)
+              - CAST(COALESCE(t.reimbursed_amount, '0') AS REAL)
+    END)
+"#;
+
 /// 分类聚合行的公共结果：(总收入, 总支出, 收入分类明细, 支出分类明细)。
 type FlowTotals = (
     Decimal,
@@ -60,19 +88,24 @@ impl BookkeepingService {
         let (start, end) = month_bounds(year, month)?;
         let currency = normalize_currency(currency.to_owned())?;
         let today = Utc::now().date_naive();
-        let mut statement = self.conn.prepare(
+        let sql = format!(
             r#"
-            SELECT t.kind, t.category_id, c.name, t.currency,
-                   SUM(CAST(t.amount AS REAL)) - SUM(CAST(COALESCE(t.reimbursed_amount, '0') AS REAL))
-            FROM transactions t
-            JOIN categories c ON c.id = t.category_id
+            SELECT t.kind,
+                   {class},
+                   t.currency,
+                   {amount}
+            {from}
             WHERE t.voided_at IS NULL
               AND t.kind IN ('expense', 'income')
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
-            GROUP BY t.kind, t.category_id, c.name, t.currency
-            ORDER BY t.kind, t.category_id, t.currency
+            GROUP BY 1, 2, 3, 4
+            ORDER BY 1, 2, 4
             "#,
-        )?;
+            class = CATEGORY_AGG_CLASS,
+            amount = CATEGORY_AGG_AMOUNT,
+            from = CATEGORY_AGG_FROM,
+        );
+        let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(params![timestamp(start), timestamp(end)], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -115,13 +148,17 @@ impl BookkeepingService {
         let range = optional_month_bounds(year, month)?;
         let (filter_sql, params) = tag_filter_sql(&normalized, range.as_ref());
         let sql = format!(
-            "SELECT t.kind, t.category_id, c.name, t.currency,
-                    SUM(CAST(t.amount AS REAL)) - SUM(CAST(COALESCE(t.reimbursed_amount, '0') AS REAL))
-             FROM transactions t
-             JOIN categories c ON c.id = t.category_id
+            "SELECT t.kind,
+                    {class},
+                    t.currency,
+                    {amount}
+             {from}
              WHERE {filter_sql}
-             GROUP BY t.kind, t.category_id, c.name, t.currency
-             ORDER BY t.kind, t.category_id, t.currency"
+             GROUP BY 1, 2, 3, 4
+             ORDER BY 1, 2, 4",
+            class = CATEGORY_AGG_CLASS,
+            amount = CATEGORY_AGG_AMOUNT,
+            from = CATEGORY_AGG_FROM,
         );
         let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(
@@ -335,20 +372,25 @@ impl BookkeepingService {
         let currency = normalize_currency(currency.to_owned())?;
         let (start, end) = year_bounds(year)?;
         let today = Utc::now().date_naive();
-        let mut statement = self.conn.prepare(
+        let sql = format!(
             r#"
-            SELECT CAST(strftime('%m', occurred_at) AS INTEGER),
-                   t.kind, t.category_id, c.name, t.currency,
-                   SUM(CAST(amount AS REAL)) - SUM(CAST(COALESCE(reimbursed_amount, '0') AS REAL))
-            FROM transactions t
-            JOIN categories c ON c.id = t.category_id
+            SELECT CAST(strftime('%m', t.occurred_at) AS INTEGER),
+                   t.kind,
+                   {class},
+                   t.currency,
+                   {amount}
+            {from}
             WHERE t.voided_at IS NULL
               AND t.kind IN ('expense', 'income')
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
             GROUP BY 1, 2, 3, 4, 5
             ORDER BY 1, 2, 3
             "#,
-        )?;
+            class = CATEGORY_AGG_CLASS,
+            amount = CATEGORY_AGG_AMOUNT,
+            from = CATEGORY_AGG_FROM,
+        );
+        let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(params![timestamp(start), timestamp(end)], |row| {
             Ok((
                 row.get::<_, u32>(0)?,

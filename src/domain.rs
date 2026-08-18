@@ -594,6 +594,29 @@ pub struct RollingSummary {
     pub points: Vec<RollingPoint>,
 }
 
+/// 交易拆分：把一笔 expense/income 的金额按多个分类归属。
+/// 父交易负责真实资金流（余额只动一次）；分类统计按拆分展开。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransactionSplit {
+    pub id: i64,
+    pub transaction_id: i64,
+    pub category_id: i64,
+    /// 拆分行金额（> 0；所有行总和 == 父交易金额）。
+    pub amount: Decimal,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// 设置拆分时的单行输入（不包含 id/created_at）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SplitInput {
+    pub category_id: i64,
+    pub amount: Decimal,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// 账户对账状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

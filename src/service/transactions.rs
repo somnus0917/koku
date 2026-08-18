@@ -510,6 +510,8 @@ impl BookkeepingService {
         )?;
         // 永久删除必须同步撤销该交易贡献的学习样本（幽灵样本防护）。
         Self::revoke_transaction_learning_in_tx(tx, transaction_id)?;
+        // 拆分随交易一并删除。
+        Self::delete_transaction_splits_in_tx(tx, transaction_id)?;
         tx.execute(
             "DELETE FROM reimbursements WHERE expense_id = ?1 OR income_id = ?1",
             [transaction_id],
@@ -603,6 +605,16 @@ impl BookkeepingService {
             positive_amount(settled)?;
             settled
         };
+        // 拆分一致性：已有拆分时，父金额必须等于拆分总和（第一版不自动按比例改拆分）。
+        if amount.is_some() {
+            if let Some(total) = Self::splits_total_in_tx(&tx, transaction_id)? {
+                if total != new_amount {
+                    return Err(KokuError::InvalidInput(format!(
+                        "transaction amount must equal the split total ({total}) when splits exist"
+                    )));
+                }
+            }
+        }
         if let Some(category_id) = category_id {
             let category = Self::category_in_tx(&tx, category_id)?;
             let expected = match transaction.kind {
