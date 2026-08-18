@@ -98,21 +98,28 @@ export function TransactionRow({
   const reimbursedShown = converted
     ? formatMoney((Number(transaction.reimbursed_amount) * factor!).toFixed(2), display!)
     : formatMoney(transaction.reimbursed_amount, transaction.currency);
+  // 普通收支且设置了商户：主标题展示商户，meta 展示「分类 · 备注」。
+  const showPayee =
+    (transaction.kind === "expense" || transaction.kind === "income") &&
+    Boolean(transaction.payee_name);
+  const payeeMeta = showPayee
+    ? [meta.label, transaction.note].filter(Boolean).join(" · ")
+    : null;
   return (
     <div className={`transaction-row ${compact ? "compact-row" : ""} ${transaction.voided_at ? "voided" : ""}`}>
       <div className="transaction-main">
         {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" || transaction.kind === "trade" || transaction.kind === "deposit" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
-          <CategoryAvatar name={meta.label} className={`transaction-icon ${meta.className}`} />
+          <CategoryAvatar name={showPayee ? transaction.payee_name! : meta.label} className={`transaction-icon ${meta.className}`} />
         )}
         <div>
           <strong>
-            {transaction.note || meta.label}
+            {showPayee ? transaction.payee_name : transaction.note || meta.label}
             {transaction.voided_at ? t("transactions.voidedSuffix") : ""}
           </strong>
           <span className="transaction-meta">
-            <span>{meta.label}</span>
+            <span>{payeeMeta ?? meta.label}</span>
             {reimbursable ? <span className="reimburse-status">{t("transactions.pendingReimburse")}</span> : ""}
             {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> {t("transactions.receipt")}</span> : ""}
             {transaction.tags.map((tag) => (

@@ -162,7 +162,7 @@ export function TransactionsPage({
   const filtered = data.transactions.filter((item) => {
     const category = item.category_id ? categoriesById.get(item.category_id)?.name ?? "" : "转账";
     const account = accountsById.get(item.account_id)?.name ?? "";
-    const matchesSearch = `${item.note} ${category} ${account}`.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = `${item.note} ${item.payee_name ?? ""} ${category} ${account}`.toLowerCase().includes(search.toLowerCase());
     const matchesTag = tagFilter.length === 0 || tagFilter.every((name) => item.tags.includes(name));
     return matchesSearch && matchesTag && (kind === "all" || item.kind === kind);
   });
