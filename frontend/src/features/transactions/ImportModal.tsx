@@ -64,6 +64,14 @@ export function ImportModal({
             <span className="import-count skip"><strong>{result.skipped_duplicates}</strong>{t("modals.import.skipped", { count: result.skipped_duplicates })}</span>
             <span className={`import-count ${result.failed > 0 ? "bad" : ""}`}><strong>{result.failed}</strong>{t("modals.import.failed", { count: result.failed })}</span>
           </div>
+          {(result.payees_recognized > 0 || result.categories_auto_applied > 0 || result.category_suggestions > 0 || result.unrecognized > 0) && (
+            <div className="import-summary learn-summary" aria-label={t("modals.import.learningAria")}>
+              <span className="import-count ok"><strong>{result.payees_recognized}</strong>{t("modals.import.payeesRecognized", { count: result.payees_recognized })}</span>
+              <span className="import-count ok"><strong>{result.categories_auto_applied}</strong>{t("modals.import.autoApplied", { count: result.categories_auto_applied })}</span>
+              <span className={`import-count ${result.category_suggestions > 0 ? "" : "skip"}`}><strong>{result.category_suggestions}</strong>{t("modals.import.suggestions", { count: result.category_suggestions })}</span>
+              <span className={`import-count ${result.unrecognized > 0 ? "" : "skip"}`}><strong>{result.unrecognized}</strong>{t("modals.import.unrecognized", { count: result.unrecognized })}</span>
+            </div>
+          )}
           {result.issues.length > 0 && (
             <div className="import-issues" aria-label={t("modals.import.issuesAria")}>
               <div className="import-issues-head">{t("modals.import.issuesHead", { count: result.issues.length })}</div>

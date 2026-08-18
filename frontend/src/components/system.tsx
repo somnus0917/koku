@@ -22,7 +22,8 @@ import {
   r2Restore,
   r2Status,
   r2Upload,
-  restoreBackup
+  restoreBackup,
+  clearPayeeLearning
 } from "../api";
 import { formatBytes, formatDate } from "../lib";
 import { EmptyState } from "./EmptyState";
@@ -37,6 +38,7 @@ export function SystemAdminPage() {
   const successTimer = useRef<number | undefined>(undefined);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const { t } = useTranslation();
 
   const flash = (message: string) => {
@@ -160,6 +162,21 @@ export function SystemAdminPage() {
     }
   };
 
+  /** 清除自动分类学习数据（保留 Payee 与交易，执行前确认）。 */
+  const clearLearning = async () => {
+    if (!window.confirm(t("system.clearLearningConfirm"))) return;
+    setClearing(true);
+    setError(null);
+    try {
+      await clearPayeeLearning();
+      flash(t("system.clearedLearning"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("system.clearLearningFailed"));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="page page-enter">
       <PageTitle
@@ -206,6 +223,28 @@ export function SystemAdminPage() {
             <span>{t("system.r2DisabledHint")}</span>
           </div>
         )}
+      </article>
+
+      {/* 自动分类学习数据清理 */}
+      <article className="panel r2-panel">
+        <div className="section-heading compact-heading">
+          <div>
+            <span>AUTO-LEARNING</span>
+            <h2>{t("system.learningTitle")}</h2>
+          </div>
+        </div>
+        <p className="fx-hint">{t("system.learningHint")}</p>
+        <div className="modal-actions" style={{ justifyContent: "flex-start" }}>
+          <button
+            type="button"
+            className="text-button danger"
+            onClick={() => void clearLearning()}
+            disabled={clearing}
+          >
+            {clearing ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}
+            {clearing ? t("system.clearing") : t("system.clearLearning")}
+          </button>
+        </div>
       </article>
 
       <div className="backup-note">

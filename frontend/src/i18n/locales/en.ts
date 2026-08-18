@@ -466,6 +466,8 @@ export const en = {
           settledPlaceholder: "Converted settlement amount",
           targetAmount: "Transfer in · {{currency}}",
           notePlaceholder: "What was this for?",
+          payee: "Payee",
+          payeePlaceholder: "Enter or pick a payee (optional)",
           sameEndpointError: "Source and target accounts must differ.",
           saveFailed: "Failed to save",
           submit: "Confirm entry"
@@ -554,6 +556,11 @@ export const en = {
           importFailed: "Import failed",
           doneHint: "Imported {{format}} into this account. Click “Done” to refresh the ledger and see the result.",
           done: "Import complete",
+          learningAria: "Merchant and category auto-recognition results",
+          payeesRecognized: "{{count}} merchants recognized",
+          autoApplied: "{{count}} auto-categorized",
+          suggestions: "{{count}} suggestions",
+          unrecognized: "{{count}} unrecognized",
           intro: "Bulk-import transactions from a statement file; CSV / QIF / OFX are supported, and the format can be left empty for auto-detection.",
           account: "Target account",
           format: "File format",
@@ -700,7 +707,14 @@ export const en = {
         r2RestoreConfirm: "Download “{{filename}}” from R2 and restore? Restoring overwrites the shared library and all ledger files and invalidates every session.",
         r2Restored: "Restored from R2; all sessions invalidated. You will be signed in again shortly…",
         r2RestoreFailed: "Failed to restore from R2",
-        r2StatusLoadFailed: "Failed to load R2 status"
+        r2StatusLoadFailed: "Failed to load R2 status",
+        learningTitle: "Auto-categorization learning",
+        learningHint: "Koku learns from the payees and categories you confirm. Clearing stops future imports from reusing these stats; existing transactions and payees are untouched.",
+        clearLearning: "Clear auto-categorization learning data",
+        clearing: "Clearing…",
+        clearLearningConfirm: "Clear auto-categorization learning data? This empties merchant aliases and category stats, but keeps payees, transactions, and existing categories.",
+        clearedLearning: "Auto-categorization learning data cleared",
+        clearLearningFailed: "Failed to clear"
       }
 
   }

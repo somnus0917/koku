@@ -466,6 +466,8 @@ export const zh = {
           settledPlaceholder: "换算后的结算金额",
           targetAmount: "转入金额 · {{currency}}",
           notePlaceholder: "这笔钱花在了哪里？",
+          payee: "商户/收款方",
+          payeePlaceholder: "输入或选择商户（可选）",
           sameEndpointError: "转出与转入账户不能相同。",
           saveFailed: "保存失败",
           submit: "确认记录"
@@ -554,6 +556,11 @@ export const zh = {
           importFailed: "导入失败",
           doneHint: "已导入 {{format}} 到该账户。点击「完成」刷新账本并提示结果。",
           done: "导入完成",
+          learningAria: "商户与分类自动识别结果",
+          payeesRecognized: "{{count}}自动识别商户",
+          autoApplied: "{{count}}自动分类",
+          suggestions: "{{count}}建议确认",
+          unrecognized: "{{count}}未识别",
           intro: "从账单文件批量导入流水，支持 CSV / QIF / OFX；格式可留空自动识别。",
           account: "目标账户",
           format: "文件格式",
@@ -700,7 +707,14 @@ export const zh = {
         r2RestoreConfirm: "从 R2 下载「{{filename}}」并恢复？恢复会覆盖共享库与全部账本文件，并使所有会话失效。",
         r2Restored: "已从 R2 恢复，所有会话已失效，即将重新登录…",
         r2RestoreFailed: "从 R2 恢复失败",
-        r2StatusLoadFailed: "加载 R2 状态失败"
+        r2StatusLoadFailed: "加载 R2 状态失败",
+        learningTitle: "自动分类学习",
+        learningHint: "Koku 会从你确认的商户与分类中自动学习。清除后，导入将不再复用这些历史统计，已记交易与商户本身不受影响。",
+        clearLearning: "清除自动分类学习数据",
+        clearing: "正在清除…",
+        clearLearningConfirm: "确定清除自动分类学习数据？将清空商户别名与分类统计，但不会删除商户、交易或修改已有分类。",
+        clearedLearning: "自动分类学习数据已清除",
+        clearLearningFailed: "清除失败"
       }
 
   }
