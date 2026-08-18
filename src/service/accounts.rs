@@ -5,7 +5,8 @@ use rust_decimal::Decimal;
 
 use super::*;
 use crate::domain::{
-    Account, AccountType, BalanceSummary, Category, CategoryKind, Transaction, DEFAULT_CATEGORIES,
+    Account, AccountType, BalanceSummary, Category, CategoryKind, LoanType, Transaction,
+    DEFAULT_CATEGORIES,
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;

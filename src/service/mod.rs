@@ -10,11 +10,7 @@ use rusqlite::{
 };
 use rust_decimal::Decimal;
 
-use crate::auth::{generate_session_token, session_token_hash};
-use crate::domain::{
-    Account, AccountType, CashFlowItem, Category, CategoryKind, Loan, LoanType, Transaction,
-    TransactionKind, User, UserRole,
-};
+use crate::domain::{Account, CashFlowItem, Category, Loan, Transaction, User};
 use crate::error::{KokuError, Result};
 
 pub struct BookkeepingService {
@@ -22,6 +18,7 @@ pub struct BookkeepingService {
 }
 
 mod accounts;
+mod auth;
 mod budgets;
 mod deposits;
 mod holdings;
@@ -35,11 +32,15 @@ mod reconciliations;
 mod recurring;
 mod reimbursements;
 mod reminders;
+mod rows;
 mod schema;
+mod settings;
 mod summaries;
 mod tags;
 mod transactions;
 mod users;
+
+use rows::*;
 
 pub use import::ImportResult;
 pub use reminders::{reminder_digest_text, ReminderItem};
@@ -63,83 +64,6 @@ impl BookkeepingService {
         schema::initialize(&conn)?;
         migrations::run(&conn)?;
         Ok(Self { conn })
-    }
-
-    pub fn create_auth_session(
-        &mut self,
-        user_id: i64,
-        username: &str,
-        ttl_seconds: i64,
-    ) -> Result<String> {
-        let token = generate_session_token()?;
-        let now = Utc::now();
-        let expires_at = now.timestamp() + ttl_seconds;
-        let transaction = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
-            "DELETE FROM auth_sessions WHERE expires_at <= ?1",
-            [now.timestamp()],
-        )?;
-        transaction.execute(
-            "INSERT INTO auth_sessions(token_hash, user_id, username, created_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                session_token_hash(&token),
-                user_id,
-                username,
-                timestamp(now),
-                expires_at
-            ],
-        )?;
-        transaction.commit()?;
-        Ok(token)
-    }
-
-    /// 根据会话令牌解析当前登录用户；会话过期或用户被停用时返回 None。
-    pub fn authenticated_user(&self, token: &str) -> Result<Option<User>> {
-        let row = self
-            .conn
-            .query_row(
-                "SELECT u.id, u.username, u.password_hash, u.role, u.enabled, u.created_at, u.totp_enabled
-                 FROM auth_sessions s
-                 JOIN users u ON u.id = s.user_id
-                 WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND u.enabled = 1",
-                params![session_token_hash(token), Utc::now().timestamp()],
-                user_row,
-            )
-            .optional()
-            .map_err(KokuError::from)?;
-        row.map(user_from_row).transpose()
-    }
-
-    pub fn delete_auth_session(&mut self, token: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM auth_sessions WHERE token_hash = ?1",
-            [session_token_hash(token)],
-        )?;
-        Ok(())
-    }
-
-    /// 读取持久化的应用设置；不存在时返回 None。
-    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        self.conn
-            .query_row(
-                "SELECT value FROM app_settings WHERE key = ?1",
-                [key],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(KokuError::from)
-    }
-
-    /// 写入（覆盖）一条应用设置。
-    pub fn set_setting(&mut self, key: &str, value: &str) -> Result<()> {
-        self.conn.execute(
-            "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )?;
-        Ok(())
     }
 
     fn account_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Account> {
@@ -308,186 +232,6 @@ impl BookkeepingService {
     }
 }
 
-type AccountRow = (i64, String, String, String, String, Option<String>);
-type CategoryRow = (i64, String, String);
-type UserRow = (i64, String, String, String, i64, String, i64);
-type TransactionRow = (
-    i64,
-    String,
-    i64,
-    Option<i64>,
-    Option<i64>,
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-    String,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-    String,
-    bool,
-    String,
-    Option<i64>,
-    Option<String>,
-    Option<String>,
-);
-
-fn account_from_row(row: AccountRow) -> Result<Account> {
-    Ok(Account {
-        id: row.0,
-        name: row.1,
-        account_type: AccountType::from_db(&row.2)?,
-        currency: row.3,
-        balance: decimal_from_db(&row.4)?,
-        credit_limit: row.5.as_deref().map(decimal_from_db).transpose()?,
-    })
-}
-
-fn user_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-    ))
-}
-
-fn user_from_row(row: UserRow) -> Result<User> {
-    Ok(User {
-        id: row.0,
-        username: row.1,
-        password_hash: row.2,
-        role: UserRole::from_db(&row.3)?,
-        enabled: row.4 != 0,
-        created_at: parse_timestamp(&row.5)?,
-        totp_enabled: row.6 != 0,
-    })
-}
-
-fn category_from_row(row: CategoryRow) -> Result<Category> {
-    Ok(Category {
-        id: row.0,
-        name: row.1,
-        kind: CategoryKind::from_db(&row.2)?,
-    })
-}
-
-fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-        row.get(11)?,
-        row.get(12)?,
-        row.get(13)?,
-        row.get(14)?,
-        row.get(15)?,
-        row.get(16)?,
-        row.get(17)?,
-        row.get(18)?,
-        row.get(19)?,
-        row.get(20)?,
-        row.get(21)?,
-    ))
-}
-
-fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
-    Ok(Transaction {
-        id: row.0,
-        kind: TransactionKind::from_db(&row.1)?,
-        account_id: row.2,
-        to_account_id: row.3,
-        category_id: row.4,
-        amount: decimal_from_db(&row.5)?,
-        currency: row.6,
-        settled_amount: decimal_from_db(&row.7)?,
-        target_amount: row.8.as_deref().map(decimal_from_db).transpose()?,
-        target_currency: row.9,
-        occurred_at: parse_timestamp(&row.10)?,
-        note: row.11,
-        voided_at: row.12.as_deref().map(parse_timestamp).transpose()?,
-        loan_id: row.13,
-        reimbursable_at: row.14.as_deref().map(parse_timestamp).transpose()?,
-        reimbursed_at: row.15.as_deref().map(parse_timestamp).transpose()?,
-        reimbursed_amount: decimal_from_db(&row.16)?,
-        has_receipt: row.17,
-        tags: split_tags(&row.18),
-        payee_id: row.19,
-        raw_description: row.20,
-        payee_name: row.21,
-    })
-}
-
-/// 把 group_concat 得到的逗号分隔标签串拆成去空白的标签名列表。
-fn split_tags(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-type LoanRow = (
-    i64,
-    String,
-    String,
-    String,
-    String,
-    String,
-    i64,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-);
-
-fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-        row.get(7)?,
-        row.get(8)?,
-        row.get(9)?,
-        row.get(10)?,
-    ))
-}
-
-fn loan_from_row(row: LoanRow) -> Result<Loan> {
-    Ok(Loan {
-        id: row.0,
-        loan_type: LoanType::from_db(&row.1)?,
-        counterparty: row.2,
-        currency: row.3,
-        principal: decimal_from_db(&row.4)?,
-        outstanding: decimal_from_db(&row.5)?,
-        account_id: row.6,
-        opened_at: parse_timestamp(&row.7)?,
-        note: row.8,
-        closed_at: row.9.as_deref().map(parse_timestamp).transpose()?,
-        due_at: row.10.as_deref().map(parse_timestamp).transpose()?,
-    })
-}
-
 fn required_text(value: String, field: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -594,7 +338,10 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{RateQuote, RecurrenceFrequency, DEFAULT_CATEGORIES};
+    use crate::domain::{
+        AccountType, CategoryKind, LoanType, RateQuote, RecurrenceFrequency, TransactionKind,
+        UserRole, DEFAULT_CATEGORIES,
+    };
     use chrono::{Datelike, Duration as ChronoDuration};
 
     fn test_service() -> Result<BookkeepingService> {
