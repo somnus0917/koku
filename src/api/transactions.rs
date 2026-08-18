@@ -156,13 +156,14 @@ async fn api_create_transaction(
     if !request.tag_names.is_empty() {
         service.set_transaction_tags(transaction.id, request.tag_names)?;
     }
-    // 手动记账带 Payee：设置商户并确认 (Payee, Category) 学习样本。
+    // 手动记账带 Payee：设置商户；仅当用户显式提供 Payee 时确认学习样本
+    // （没有 Payee 本就无法形成 Payee → Category 样本）。
     if let Some(payee_name) = request.payee_name {
         if !payee_name.trim().is_empty() {
             service.set_transaction_payee(transaction.id, Some(&payee_name))?;
         }
+        service.confirm_transaction_learning(transaction.id)?;
     }
-    service.confirm_transaction_learning(transaction.id)?;
     let transaction = service.transaction(transaction.id)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
@@ -223,6 +224,9 @@ async fn api_update_transaction(
     Json(request): Json<UpdateTransactionRequest>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
+    // 只有用户显式修改 Payee 或 Category 才视为人工确认（机器自动识别的导入
+    // 交易仅改 note/amount/时间/账户等无关字段不应反向强化学习）。
+    let should_confirm_learning = request.payee_name.is_some() || request.category_id.is_some();
     service.update_transaction(
         transaction_id,
         request.note,
@@ -235,10 +239,12 @@ async fn api_update_transaction(
     if let Some(payee_name) = request.payee_name {
         service.set_transaction_payee(transaction_id, Some(&payee_name))?;
     }
-    // 人工保存统一确认学习样本：撤销旧贡献、加入新贡献（幂等，无变化不累加）。
-    service.confirm_transaction_learning(transaction_id)?;
     if let Some(tag_names) = request.tag_names {
         service.set_transaction_tags(transaction_id, tag_names)?;
+    }
+    // 人工保存确认学习样本：撤销旧贡献、加入新贡献（幂等，无变化不累加）。
+    if should_confirm_learning {
+        service.confirm_transaction_learning(transaction_id)?;
     }
     let transaction = service.transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))

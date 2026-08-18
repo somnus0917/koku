@@ -508,10 +508,8 @@ impl BookkeepingService {
             "DELETE FROM transaction_tags WHERE transaction_id = ?1",
             [transaction_id],
         )?;
-        tx.execute(
-            "DELETE FROM transaction_learning WHERE transaction_id = ?1",
-            [transaction_id],
-        )?;
+        // 永久删除必须同步撤销该交易贡献的学习样本（幽灵样本防护）。
+        Self::revoke_transaction_learning_in_tx(tx, transaction_id)?;
         tx.execute(
             "DELETE FROM reimbursements WHERE expense_id = ?1 OR income_id = ?1",
             [transaction_id],

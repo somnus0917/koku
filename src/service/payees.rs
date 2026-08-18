@@ -240,6 +240,42 @@ impl BookkeepingService {
         }))
     }
 
+    /// 撤销一笔交易此前贡献的学习样本（事务内可复用，幂等）。
+    ///
+    /// 无 `transaction_learning` 记录时直接返回；有则对 (payee, category)
+    /// 对应的 `payee_category_stats.count - 1`（减到 0 删除该统计行），
+    /// 最后删除该交易的 `transaction_learning` 行。用于永久删除交易
+    /// 与人工修改导致的学习撤销。
+    pub(super) fn revoke_transaction_learning_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction_id: i64,
+    ) -> Result<()> {
+        let old: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT payee_id, category_id FROM transaction_learning WHERE transaction_id = ?1",
+                [transaction_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((payee_id, category_id)) = old {
+            tx.execute(
+                "UPDATE payee_category_stats SET count = count - 1
+                 WHERE payee_id = ?1 AND category_id = ?2",
+                params![payee_id, category_id],
+            )?;
+            tx.execute(
+                "DELETE FROM payee_category_stats
+                 WHERE payee_id = ?1 AND category_id = ?2 AND count <= 0",
+                params![payee_id, category_id],
+            )?;
+            tx.execute(
+                "DELETE FROM transaction_learning WHERE transaction_id = ?1",
+                [transaction_id],
+            )?;
+        }
+        Ok(())
+    }
+
     /// 确认一笔交易当前的 (Payee, Category) 为学习样本（幂等）。
     ///
     /// 每一笔「人工确认参与学习的交易」最多贡献一份 Payee → Category 样本：
@@ -268,47 +304,28 @@ impl BookkeepingService {
         if old == current_pair {
             return Ok(());
         }
-        // 撤销旧贡献。
-        if let Some((old_payee, old_category)) = old {
+        // 撤销旧贡献（含 transaction_learning 行删除）。
+        Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
+        // 加入新贡献（清除 Payee 时撤销后不新增）。
+        if let Some((payee_id, category_id)) = current_pair {
+            let now = timestamp(Utc::now());
             tx.execute(
-                "UPDATE payee_category_stats SET count = count - 1
-                 WHERE payee_id = ?1 AND category_id = ?2",
-                params![old_payee, old_category],
+                "INSERT INTO payee_category_stats(payee_id, category_id, count, last_used_at)
+                 VALUES (?1, ?2, 1, ?3)
+                 ON CONFLICT(payee_id, category_id) DO UPDATE SET
+                     count = payee_category_stats.count + 1,
+                     last_used_at = excluded.last_used_at",
+                params![payee_id, category_id, now],
             )?;
             tx.execute(
-                "DELETE FROM payee_category_stats
-                 WHERE payee_id = ?1 AND category_id = ?2 AND count <= 0",
-                params![old_payee, old_category],
+                "INSERT INTO transaction_learning(transaction_id, payee_id, category_id, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(transaction_id) DO UPDATE SET
+                     payee_id = excluded.payee_id,
+                     category_id = excluded.category_id,
+                     updated_at = excluded.updated_at",
+                params![transaction_id, payee_id, category_id, now],
             )?;
-        }
-        // 加入新贡献（或清除 Payee 时撤销后不新增）。
-        match current_pair {
-            Some((payee_id, category_id)) => {
-                let now = timestamp(Utc::now());
-                tx.execute(
-                    "INSERT INTO payee_category_stats(payee_id, category_id, count, last_used_at)
-                     VALUES (?1, ?2, 1, ?3)
-                     ON CONFLICT(payee_id, category_id) DO UPDATE SET
-                         count = payee_category_stats.count + 1,
-                         last_used_at = excluded.last_used_at",
-                    params![payee_id, category_id, now],
-                )?;
-                tx.execute(
-                    "INSERT INTO transaction_learning(transaction_id, payee_id, category_id, updated_at)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(transaction_id) DO UPDATE SET
-                         payee_id = excluded.payee_id,
-                         category_id = excluded.category_id,
-                         updated_at = excluded.updated_at",
-                    params![transaction_id, payee_id, category_id, now],
-                )?;
-            }
-            None => {
-                tx.execute(
-                    "DELETE FROM transaction_learning WHERE transaction_id = ?1",
-                    [transaction_id],
-                )?;
-            }
         }
         tx.commit()?;
         Ok(())
@@ -316,11 +333,15 @@ impl BookkeepingService {
 
     /// 按 Payee 历史分类统计预测分类。
     ///
-    /// 返回 `None` 的三种情况：无统计、总样本数不足 [`AUTO_CATEGORY_MIN_SAMPLES`]、
-    /// 置信度低于 [`SUGGEST_CATEGORY_CONFIDENCE`]。已归档分类不计入统计。
+    /// 返回 `None` 的三种情况：无有效统计、总样本数不足 [`AUTO_CATEGORY_MIN_SAMPLES`]、
+    /// 置信度低于 [`SUGGEST_CATEGORY_CONFIDENCE`]。已归档分类既不参与分母也不参与
+    /// 分子（total 与 top 使用相同的有效分类集合）。
     pub fn predict_category(&self, payee_id: i64) -> Result<Option<CategoryPrediction>> {
         let total: u64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(count), 0) FROM payee_category_stats WHERE payee_id = ?1",
+            "SELECT COALESCE(SUM(s.count), 0)
+             FROM payee_category_stats s
+             JOIN categories c ON c.id = s.category_id AND c.archived_at IS NULL
+             WHERE s.payee_id = ?1",
             [payee_id],
             |row| row.get(0),
         )?;
@@ -906,6 +927,291 @@ mod tests {
         service.set_transaction_payee(tx.id, Some("饿了么"))?;
         service.confirm_transaction_learning(tx.id)?;
         assert_eq!(stats_count(&service, payee.id, food.id)?, 1);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // P0：永久删除交易必须撤销学习贡献
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn deleting_one_contribution_reduces_the_count() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let a = confirm_tx(&mut service, payee.id, food)?;
+        confirm_tx(&mut service, payee.id, food)?;
+        confirm_tx(&mut service, payee.id, food)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 3);
+        // 永久删除其中一笔（先撤销）→ 样本同步撤销。
+        service.void_transaction(a)?;
+        service.delete_transaction(a)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_only_contribution_removes_the_stats_row() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = confirm_tx(&mut service, payee.id, food)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 1);
+        service.void_transaction(tx_id)?;
+        service.delete_transaction(tx_id)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        let rows: i64 = service.conn.query_row(
+            "SELECT COUNT(*) FROM payee_category_stats WHERE payee_id = ?1 AND category_id = ?2",
+            params![payee.id, food],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rows, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_transaction_without_learning_is_a_noop() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        confirm_tx(&mut service, payee.id, food)?;
+        // 一笔从未参与学习的交易：删除不影响统计。
+        let account =
+            service.create_account("无学习", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let plain = service
+            .record_expense(
+                account.id,
+                food,
+                Decimal::from(20_u32),
+                chrono::Utc::now(),
+                "普通",
+            )?
+            .id;
+        service.void_transaction(plain)?;
+        service.delete_transaction(plain)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_same_transaction_never_goes_negative() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = confirm_tx(&mut service, payee.id, food)?;
+        service.void_transaction(tx_id)?;
+        service.delete_transaction(tx_id)?;
+        // 二次删除同一交易：已不存在 → 报错，且统计不为负。
+        assert!(service.delete_transaction(tx_id).is_err());
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // P0：只有用户明确修改 Payee / Category 才学习（API gate 语义）
+    // ------------------------------------------------------------------
+
+    /// 模拟导入交易：机器识别 Payee（写 payee_id）但不产生学习记录。
+    fn imported_tx(
+        service: &mut BookkeepingService,
+        payee_id: i64,
+        category_id: i64,
+    ) -> Result<i64> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let account = service.create_account(
+            format!("导入模拟-{n}"),
+            AccountType::Cash,
+            "CNY",
+            Decimal::from(100000_u32),
+        )?;
+        let tx = service.record_expense(
+            account.id,
+            category_id,
+            Decimal::from(30_u32),
+            chrono::Utc::now(),
+            "星巴克 - 早餐",
+        )?;
+        service.set_import_metadata(tx.id, "星巴克 - 早餐", Some(payee_id))?;
+        Ok(tx.id)
+    }
+
+    fn learning_exists(service: &BookkeepingService, transaction_id: i64) -> Result<bool> {
+        let count: i64 = service.conn.query_row(
+            "SELECT COUNT(*) FROM transaction_learning WHERE transaction_id = ?1",
+            [transaction_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    #[test]
+    fn unrelated_patch_on_imported_transaction_does_not_learn() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = imported_tx(&mut service, payee.id, food)?;
+        assert!(!learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        // API gate：只 PATCH note / amount → 不调 confirm → 不产生学习。
+        service.update_transaction(
+            tx_id,
+            Some("新备注".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        service.update_transaction(
+            tx_id,
+            None,
+            None,
+            None,
+            Some(Decimal::from(35_u32)),
+            None,
+            None,
+        )?;
+        assert!(!learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn category_patch_begins_learning() -> Result<()> {
+        let (mut service, food, shopping) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = imported_tx(&mut service, payee.id, food)?;
+        // 用户 PATCH category（从餐饮改为购物）→ confirm → 学习样本出现。
+        service.update_transaction(tx_id, None, None, Some(shopping), None, None, None)?;
+        service.confirm_transaction_learning(tx_id)?;
+        assert!(learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, shopping)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn payee_patch_begins_learning() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let starbucks = service.get_or_create_payee("星巴克")?;
+        let luckin = service.get_or_create_payee("瑞幸")?;
+        let tx_id = imported_tx(&mut service, starbucks.id, food)?;
+        // 用户 PATCH payee（改为瑞幸）→ confirm → 学习样本出现。
+        service.set_transaction_payee(tx_id, Some("瑞幸"))?;
+        service.confirm_transaction_learning(tx_id)?;
+        assert!(learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, luckin.id, food)?, 1);
+        assert_eq!(stats_count(&service, starbucks.id, food)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn clearing_payee_revokes_imported_learning() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = imported_tx(&mut service, payee.id, food)?;
+        // 用户先确认（补一次学习），再清除 Payee → 撤销。
+        service.confirm_transaction_learning(tx_id)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 1);
+        service.set_transaction_payee(tx_id, Some(""))?;
+        service.confirm_transaction_learning(tx_id)?;
+        assert!(!learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // P1：归档分类不进预测分母（total 与 top 使用相同有效集合）
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn archived_categories_are_excluded_from_prediction_denominator() -> Result<()> {
+        let (mut service, food, shopping) = seeded()?;
+        let payee = service.get_or_create_payee("京东")?;
+        // 购物 90 次后归档；餐饮 10 次保持有效。
+        for _ in 0..90 {
+            confirm_tx(&mut service, payee.id, shopping)?;
+        }
+        for _ in 0..10 {
+            confirm_tx(&mut service, payee.id, food)?;
+        }
+        service.delete_category(shopping)?;
+        // 有效样本 10/10 = 100% → 自动应用餐饮。
+        let prediction = service.predict_category(payee.id)?.unwrap();
+        assert!(prediction.auto_applied);
+        assert_eq!(prediction.category_id, food);
+        assert_eq!(prediction.confidence, Decimal::ONE);
+        Ok(())
+    }
+
+    #[test]
+    fn all_archived_categories_yield_no_prediction() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("饿了么")?;
+        for _ in 0..5 {
+            confirm_tx(&mut service, payee.id, food)?;
+        }
+        service.delete_category(food)?;
+        assert!(service.predict_category(payee.id)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn archiving_former_top_category_allows_new_top() -> Result<()> {
+        let (mut service, food, shopping) = seeded()?;
+        let payee = service.get_or_create_payee("京东")?;
+        for _ in 0..5 {
+            confirm_tx(&mut service, payee.id, food)?;
+        }
+        for _ in 0..3 {
+            confirm_tx(&mut service, payee.id, shopping)?;
+        }
+        service.delete_category(food)?; // 归档曾经的 top
+        let prediction = service.predict_category(payee.id)?.unwrap();
+        assert!(prediction.auto_applied);
+        assert_eq!(prediction.category_id, shopping);
+        assert_eq!(prediction.confidence, Decimal::ONE);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 清除学习数据后的语义（回归）
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn cleared_learning_keeps_data_and_requires_explicit_reconfirmation() -> Result<()> {
+        let (mut service, food, shopping) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        service.learn_alias("星巴克 - 早餐", payee.id)?;
+        let tx_id = confirm_tx(&mut service, payee.id, food)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 1);
+
+        service.clear_payee_learning()?;
+
+        // 1-5：交易 / Payee / Category / payee_id / category_id 全部保留。
+        let transaction = service.transaction(tx_id)?;
+        assert_eq!(transaction.payee_id, Some(payee.id));
+        assert_eq!(transaction.category_id, Some(food));
+        assert_eq!(service.search_payees("", 100)?.len(), 1);
+        assert!(service.categories()?.iter().any(|item| item.id == food));
+        // 6：predict 不再返回旧预测。
+        assert!(service.predict_category(payee.id)?.is_none());
+        // 7：resolve 不再命中旧 alias。
+        assert!(service
+            .resolve_payee_for_description("星巴克 - 早餐")?
+            .is_none());
+        // 8：只改 note 不会重新产生学习记录。
+        service.update_transaction(
+            tx_id,
+            Some("新备注".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        assert!(!learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
+        // 9：人工修改 Category 才重新学习。
+        service.update_transaction(tx_id, None, None, Some(shopping), None, None, None)?;
+        service.confirm_transaction_learning(tx_id)?;
+        assert!(learning_exists(&service, tx_id)?);
+        assert_eq!(stats_count(&service, payee.id, shopping)?, 1);
         Ok(())
     }
 }
