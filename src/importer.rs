@@ -77,6 +77,12 @@ pub struct ImportRow {
     /// Koku 导出格式特有：结算金额（跨币种时直接使用）。
     #[serde(default)]
     pub settled_amount: Option<Decimal>,
+    /// Koku 导出格式特有：商户名称（导入时恢复 Payee，不视为新的人工确认）。
+    #[serde(default)]
+    pub payee_name: Option<String>,
+    /// Koku 导出格式特有：导入时的原始流水描述。
+    #[serde(default)]
+    pub raw_description: Option<String>,
 }
 
 /// 行级解析问题（不中断整份文件）。
@@ -205,6 +211,8 @@ fn parse_koku_export_csv(
     let date_col = col("occurred_at");
     let note_col = col("note");
     let category_col = col("category");
+    let payee_col = col("payee");
+    let raw_col = col("raw_description");
     if kind_col.is_none() || amount_col.is_none() || date_col.is_none() {
         return Err(KokuError::InvalidInput(
             "koku export CSV is missing required columns (kind/amount/occurred_at)".to_owned(),
@@ -260,6 +268,8 @@ fn parse_koku_export_csv(
             currency,
             category_name: non_empty(get(category_col)).map(str::to_owned),
             settled_amount: settled,
+            payee_name: non_empty(get(payee_col)).map(str::to_owned),
+            raw_description: non_empty(get(raw_col)).map(str::to_owned),
         });
     }
     Ok((rows, issues))
@@ -342,6 +352,8 @@ fn parse_generic_csv(mut reader: csv::Reader<&[u8]>, headers: &[String]) -> Resu
             currency: non_empty(get(currency_col)).map(str::to_owned),
             category_name: None,
             settled_amount: None,
+            payee_name: None,
+            raw_description: None,
         });
     }
     Ok((rows, issues))
@@ -391,6 +403,8 @@ pub fn parse_qif(input: &str) -> Result<ParseOutcome> {
                     currency: None,
                     category_name: None,
                     settled_amount: None,
+                    payee_name: None,
+                    raw_description: None,
                 });
             }
         } else {
@@ -534,6 +548,8 @@ pub fn parse_ofx(input: &str) -> Result<ParseOutcome> {
             currency: None,
             category_name: None,
             settled_amount: None,
+            payee_name: None,
+            raw_description: None,
         });
     }
     Ok((rows, issues))
@@ -832,6 +848,38 @@ id,kind,account,target_account,category,amount,currency,settled_amount,occurred_
         assert_eq!(rows[0].category_name.as_deref(), Some("餐饮"));
         assert_eq!(rows[0].amount, Decimal::from(-30_i32));
         assert_eq!(rows[1].amount, Decimal::from(5000_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn koku_export_csv_roundtrips_payee_and_raw_description() -> Result<()> {
+        let input = "\
+id,kind,account,target_account,category,payee,amount,currency,settled_amount,occurred_at,note,raw_description,voided_at
+1,expense,零钱,,餐饮,饿了么,25.50,CNY,25.50,2024-03-01T12:00:00Z,午饭,支付宝-上海拉扎斯信息科技有限公司20260815001,
+";
+        let (rows, issues) = parse_csv(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].payee_name.as_deref(), Some("饿了么"));
+        assert_eq!(
+            rows[0].raw_description.as_deref(),
+            Some("支付宝-上海拉扎斯信息科技有限公司20260815001")
+        );
+        assert_eq!(rows[0].category_name.as_deref(), Some("餐饮"));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_koku_csv_without_payee_columns_still_parses() -> Result<()> {
+        let input = "\
+id,kind,account,target_account,category,amount,currency,settled_amount,occurred_at,note,voided_at
+1,expense,零钱,,餐饮,30.00,CNY,30.00,2024-03-01T12:00:00Z,午餐,
+";
+        let (rows, issues) = parse_csv(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].payee_name.is_none());
+        assert!(rows[0].raw_description.is_none());
         Ok(())
     }
 

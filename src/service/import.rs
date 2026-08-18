@@ -164,13 +164,27 @@ impl BookkeepingService {
             Some(value) => normalize_currency(value.clone())?,
             None => default_currency.to_owned(),
         };
-        let raw_description = row.note.clone();
+        // 原始描述：Koku 导出 CSV 明确给出时优先，否则用备注（通用银行流水）。
+        let raw_description = row
+            .raw_description
+            .clone()
+            .unwrap_or_else(|| row.note.clone());
 
-        // 商户识别：先按归一化描述查 alias；命中后预测分类。
+        // 商户识别：行内 payee_name（Koku 备份恢复，直接关联、不学习）优先；
+        // 否则按归一化描述查 alias；命中后预测分类。
         let mut payee_recognized = false;
         let mut category_auto_applied = false;
         let mut category_suggestion = false;
-        let payee_id = if raw_description.trim().is_empty() {
+        let payee_id = if let Some(name) = row
+            .payee_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // 恢复 Payee：仅创建/复用商户并关联，不写 alias、不产生学习统计。
+            payee_recognized = true;
+            Some(self.get_or_create_payee(name)?.id)
+        } else if raw_description.trim().is_empty() {
             None
         } else {
             match self.resolve_payee_for_description(&raw_description)? {
@@ -324,6 +338,8 @@ mod tests {
             currency: None,
             category_name: None,
             settled_amount: None,
+            payee_name: None,
+            raw_description: None,
         }
     }
 
@@ -592,6 +608,71 @@ mod tests {
         assert_eq!(transaction.payee_id, Some(jd.id));
         // 建议未自动应用：分类保持默认「购物」。
         assert_eq!(transaction.category_id, Some(shopping.id));
+        Ok(())
+    }
+
+    /// Koku 自身备份 CSV round-trip：恢复 Payee 与原始描述，
+    /// 但导入只恢复数据，不写 alias、不产生学习统计。
+    #[test]
+    fn importing_koku_csv_restores_payee_without_learning() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let eleme = service.get_or_create_payee("饿了么")?;
+        let mut imported_row = row(1, date(2026, 3, 1), "-25.50", "午饭");
+        imported_row.category_name = Some("餐饮".to_owned());
+        imported_row.payee_name = Some("饿了么".to_owned());
+        imported_row.raw_description =
+            Some("支付宝-上海拉扎斯信息科技有限公司20260815001".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![imported_row],
+        )?;
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.payees_recognized, 1);
+        assert_eq!(result.unrecognized, 0);
+        let transaction = service.transactions(100, 0)?[0].clone();
+        assert_eq!(transaction.payee_id, Some(eleme.id));
+        assert_eq!(
+            transaction.raw_description.as_deref(),
+            Some("支付宝-上海拉扎斯信息科技有限公司20260815001")
+        );
+        // 导入只恢复数据：不写 alias、不产生学习统计。
+        let aliases: i64 =
+            service
+                .conn
+                .query_row("SELECT COUNT(*) FROM merchant_aliases", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(aliases, 0);
+        let stats: i64 =
+            service
+                .conn
+                .query_row("SELECT COUNT(*) FROM payee_category_stats", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(stats, 0);
+        Ok(())
+    }
+
+    /// Koku 备份 CSV round-trip：payee_name 与 raw_description 缺省时仍正常导入。
+    #[test]
+    fn legacy_koku_csv_without_payee_columns_still_imports() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut imported_row = row(1, date(2026, 3, 1), "-25.50", "午饭");
+        imported_row.category_name = Some("餐饮".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![imported_row],
+        )?;
+        assert_eq!(result.imported, 1);
+        let transaction = service.transactions(100, 0)?[0].clone();
+        assert!(transaction.payee_id.is_none());
+        assert_eq!(transaction.raw_description.as_deref(), Some("午饭"));
         Ok(())
     }
 

@@ -81,7 +81,7 @@ async fn api_export_transactions(
         .collect();
 
     let mut csv = String::from(
-        "id,kind,account,target_account,category,amount,currency,settled_amount,occurred_at,note,voided_at\n",
+        "id,kind,account,target_account,category,payee,amount,currency,settled_amount,occurred_at,note,raw_description,voided_at\n",
     );
     for tx in &all {
         let account = neutralize_formula(
@@ -100,18 +100,22 @@ async fn api_export_transactions(
                 .and_then(|id| category_names.get(&id).cloned())
                 .unwrap_or_default(),
         );
+        let payee = neutralize_formula(tx.payee_name.as_deref().unwrap_or_default());
         let note = neutralize_formula(&tx.note);
+        let raw_description = neutralize_formula(tx.raw_description.as_deref().unwrap_or_default());
         let fields = [
             tx.id.to_string(),
             tx.kind.as_str().to_owned(),
             account,
             target_account,
             category,
+            payee,
             tx.amount.normalize().to_string(),
             tx.currency.clone(),
             tx.settled_amount.normalize().to_string(),
             tx.occurred_at.to_rfc3339(),
             note,
+            raw_description,
             tx.voided_at
                 .map(|value| value.to_rfc3339())
                 .unwrap_or_default(),
