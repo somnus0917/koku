@@ -2,20 +2,22 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CreditCard } from "lucide-react";
-import { EmptyState } from "../../components/EmptyState";
 import { convertedMoney } from "../../components/accountDisplay";
 import { formatDay, formatMoney } from "../../lib";
 import { getCreditCardSummary } from "../../api";
-import type { Account, CreditCardSummary } from "../../types";
+import type { Account, AppData, CreditCardSummary } from "../../types";
 
 export function CreditCardSection({
   accounts,
   display,
-  rates
+  rates,
+  data
 }: {
   accounts: Account[];
   display: string;
   rates: Record<string, number>;
+  /** 账本数据快照：每次 ledger refresh 都会生成新对象，作为摘要刷新信号。 */
+  data: AppData;
 }) {
   const { t } = useTranslation();
   if (accounts.length === 0) return null;
@@ -26,7 +28,7 @@ export function CreditCardSection({
       </div>
       <div className="credit-card-grid">
         {accounts.map((account) => (
-          <CreditCardCard key={account.id} account={account} display={display} rates={rates} />
+          <CreditCardCard key={account.id} account={account} display={display} rates={rates} data={data} />
         ))}
       </div>
     </section>
@@ -36,11 +38,13 @@ export function CreditCardSection({
 function CreditCardCard({
   account,
   display,
-  rates
+  rates,
+  data
 }: {
   account: Account;
   display: string;
   rates: Record<string, number>;
+  data: AppData;
 }) {
   const { t } = useTranslation();
   const [summary, setSummary] = useState<CreditCardSummary | null>(null);
@@ -58,7 +62,9 @@ function CreditCardCard({
     return () => {
       cancelled = true;
     };
-  }, [account.id]);
+    // 消费/还款/void/修改 occurred_at/修改账单日等都会触发 ledger refresh，
+    // data 引用随之变化 → 重新请求摘要（不轮询、不引入全局状态）。
+  }, [account.id, data]);
 
   const money = (value: string | null) => {
     if (value == null) return null;

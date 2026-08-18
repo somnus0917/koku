@@ -80,24 +80,17 @@ async fn api_update_account(
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<Json<ApiResponse<Account>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
-    let account = service.update_account(
+    // 名称/类型/币种/额度/账单日/还款日在同一个 SQLite 事务内原子提交，
+    // 任一步校验失败全部回滚。
+    let account = service.update_account_edit(
         account_id,
         request.name,
         request.account_type,
         request.currency,
+        request.credit_limit,
+        request.statement_day,
+        request.due_day,
     )?;
-    let account = match request.credit_limit {
-        Some(limit) => service.set_credit_limit(account.id, limit)?,
-        None => account,
-    };
-    let account = match request.statement_day {
-        Some(day) => service.set_statement_day(account.id, day)?,
-        None => account,
-    };
-    let account = match request.due_day {
-        Some(day) => service.set_due_day(account.id, day)?,
-        None => account,
-    };
     Ok(Json(ApiResponse::new(account)))
 }
 

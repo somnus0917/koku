@@ -2136,6 +2136,116 @@ mod tests {
         Ok(())
     }
 
+    // ------------------------------------------------------------------
+    // 账户编辑原子性：name/type/currency/credit_limit/statement_day/due_day 一次事务
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn account_edit_with_invalid_due_day_rolls_back_everything() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
+        // 改 name + 非法 due_day（32）→ 校验失败，name 不落库。
+        assert!(service
+            .update_account_edit(
+                credit.id,
+                Some("新名字".to_owned()),
+                None,
+                None,
+                None,
+                None,
+                Some(Some(32)),
+            )
+            .is_err());
+        assert_eq!(service.account(credit.id)?.name, "信用卡");
+        Ok(())
+    }
+
+    #[test]
+    fn non_credit_account_cannot_set_credit_fields() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        assert!(service
+            .update_account_edit(
+                cash.id,
+                None,
+                None,
+                None,
+                Some(Some(Decimal::from(1000_u32))),
+                None,
+                None,
+            )
+            .is_err());
+        assert!(service
+            .update_account_edit(cash.id, None, None, None, None, Some(Some(10)), None)
+            .is_err());
+        assert!(service
+            .update_account_edit(cash.id, None, None, None, None, None, Some(Some(25)))
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn switching_credit_to_savings_clears_credit_fields() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
+        service.update_account_edit(
+            credit.id,
+            None,
+            None,
+            None,
+            Some(Some(Decimal::from(20000_u32))),
+            Some(Some(10)),
+            Some(Some(25)),
+        )?;
+        // Credit → Savings：信用卡字段自动清除。
+        let switched = service.update_account_edit(
+            credit.id,
+            None,
+            Some(AccountType::Savings),
+            None,
+            None,
+            None,
+            None,
+        )?;
+        assert_eq!(switched.account_type, AccountType::Savings);
+        assert_eq!(switched.credit_limit, None);
+        assert_eq!(switched.statement_day, None);
+        assert_eq!(switched.due_day, None);
+        Ok(())
+    }
+
+    #[test]
+    fn credit_to_savings_with_history_is_rejected() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        service.record_expense(
+            credit.id,
+            food.id,
+            Decimal::from(100_u32),
+            Utc::now(),
+            "消费",
+        )?;
+        // 有交易历史：禁止 Credit ↔ 非 Credit 切换（余额语义翻转）。
+        assert!(service
+            .update_account_edit(
+                credit.id,
+                None,
+                Some(AccountType::Savings),
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err());
+        assert_eq!(
+            service.account(credit.id)?.account_type,
+            AccountType::Credit
+        );
+        Ok(())
+    }
+
     #[test]
     fn loans_from_same_counterparty_merge_until_settled() -> Result<()> {
         let mut service = test_service()?;

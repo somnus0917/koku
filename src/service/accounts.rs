@@ -30,6 +30,11 @@ impl BookkeepingService {
     }
 
     /// 更新账户名称/类型/币种；有交易历史的账户不允许改币种（避免历史流水语义混乱）。
+    ///
+    /// 便捷包装：不涉及信用卡字段；生产路径统一走
+    /// [`BookkeepingService::update_account_edit`]（本方法供测试与
+    /// 明确「只改基础字段」的调用方使用，二进制构建中仅测试引用）。
+    #[allow(dead_code)]
     pub fn update_account(
         &mut self,
         id: i64,
@@ -37,17 +42,47 @@ impl BookkeepingService {
         account_type: Option<AccountType>,
         currency: Option<String>,
     ) -> Result<Account> {
-        let current = self.account(id)?;
+        self.update_account_edit(id, name, account_type, currency, None, None, None)
+    }
+
+    /// 一次编辑账户请求的全部字段在同一个事务内原子提交（生产统一入口）。
+    ///
+    /// 覆盖 name / account_type / currency / credit_limit / statement_day / due_day。
+    ///
+    /// 语义：
+    /// - 基础字段 `None` = 不修改；
+    /// - `credit_limit` / `statement_day` / `due_day` 为
+    ///   `Option<Option<...>>`：`None` = 不修改，`Some(Some(值))` = 设置，
+    ///   `Some(None)` = 清除；
+    /// - 这三个字段**设置非空值**时，最终账户类型必须为 Credit，否则报错；
+    /// - Credit → 非 Credit 时自动清除 credit_limit / statement_day / due_day；
+    /// - 有交易历史时禁止 Credit ↔ 非 Credit 类型切换（余额语义会被翻转）；
+    /// - 任一步校验失败整体回滚，绝不出现部分字段落库。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_account_edit(
+        &mut self,
+        id: i64,
+        name: Option<String>,
+        account_type: Option<AccountType>,
+        currency: Option<String>,
+        credit_limit: Option<Option<Decimal>>,
+        statement_day: Option<Option<u32>>,
+        due_day: Option<Option<u32>>,
+    ) -> Result<Account> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = Self::account_in_tx(&tx, id)?;
         let name = match name {
             Some(value) => required_text(value, "account name")?,
             None => current.name,
         };
-        let account_type = account_type.unwrap_or(current.account_type);
+        let final_type = account_type.unwrap_or(current.account_type);
         let currency = match currency {
             Some(value) => {
                 let currency = normalize_currency(value)?;
                 if currency != current.currency {
-                    let count: i64 = self.conn.query_row(
+                    let count: i64 = tx.query_row(
                         "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 OR to_account_id = ?1",
                         [id],
                         |row| row.get(0),
@@ -63,10 +98,84 @@ impl BookkeepingService {
             }
             None => current.currency,
         };
-        self.conn.execute(
-            "UPDATE accounts SET name = ?1, account_type = ?2, currency = ?3 WHERE id = ?4",
-            params![name, account_type.as_str(), currency, id],
+
+        // 信用卡字段：设置非空值时最终类型必须为 Credit。
+        let sets_credit_limit = matches!(credit_limit, Some(Some(_)));
+        let sets_statement_day = matches!(statement_day, Some(Some(_)));
+        let sets_due_day = matches!(due_day, Some(Some(_)));
+        if (sets_credit_limit || sets_statement_day || sets_due_day)
+            && final_type != AccountType::Credit
+        {
+            return Err(KokuError::InvalidInput(
+                "credit limit, statement day, and due day are only available for credit accounts"
+                    .to_owned(),
+            ));
+        }
+        if let Some(Some(day)) = statement_day {
+            validate_credit_day(Some(day), "statement day")?;
+        }
+        if let Some(Some(day)) = due_day {
+            validate_credit_day(Some(day), "due day")?;
+        }
+        // 类型切换：有交易历史时禁止 Credit ↔ 非 Credit（余额语义翻转）。
+        if final_type != current.account_type
+            && current.account_type.is_liability() != final_type.is_liability()
+        {
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 OR to_account_id = ?1",
+                [id],
+                |row| row.get(0),
+            )?;
+            if count > 0 {
+                return Err(KokuError::InvalidInput(
+                    "cannot switch between credit and non-credit for an account with transaction history"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        // 最终信用卡字段：非 Credit 一律清除；Credit 按提供值或原值。
+        let final_credit_limit = if final_type == AccountType::Credit {
+            match credit_limit {
+                Some(value) => value,
+                None => current.credit_limit,
+            }
+        } else {
+            None
+        };
+        let final_statement_day: Option<i64> = if final_type == AccountType::Credit {
+            match statement_day {
+                Some(value) => value.map(i64::from),
+                None => current.statement_day.map(i64::from),
+            }
+        } else {
+            None
+        };
+        let final_due_day: Option<i64> = if final_type == AccountType::Credit {
+            match due_day {
+                Some(value) => value.map(i64::from),
+                None => current.due_day.map(i64::from),
+            }
+        } else {
+            None
+        };
+
+        tx.execute(
+            "UPDATE accounts
+             SET name = ?1, account_type = ?2, currency = ?3,
+                 credit_limit = ?4, statement_day = ?5, due_day = ?6
+             WHERE id = ?7",
+            params![
+                name,
+                final_type.as_str(),
+                currency,
+                final_credit_limit.map(decimal_to_db),
+                final_statement_day,
+                final_due_day,
+                id
+            ],
         )?;
+        tx.commit()?;
         self.account(id)
     }
 
@@ -115,6 +224,10 @@ impl BookkeepingService {
     }
 
     /// 设置或清除账单日（1~31，可空；仅对信用账户有意义）。
+    ///
+    /// 生产路径统一走 [`BookkeepingService::update_account_edit`]；本方法作为
+    /// 便捷设置器供测试使用（二进制构建中仅测试引用）。
+    #[allow(dead_code)]
     pub fn set_statement_day(&mut self, id: i64, statement_day: Option<u32>) -> Result<Account> {
         validate_credit_day(statement_day, "statement day")?;
         self.conn.execute(
@@ -125,6 +238,10 @@ impl BookkeepingService {
     }
 
     /// 设置或清除还款日（1~31，可空；仅对信用账户有意义）。
+    ///
+    /// 生产路径统一走 [`BookkeepingService::update_account_edit`]；本方法作为
+    /// 便捷设置器供测试使用（二进制构建中仅测试引用）。
+    #[allow(dead_code)]
     pub fn set_due_day(&mut self, id: i64, due_day: Option<u32>) -> Result<Account> {
         validate_credit_day(due_day, "due day")?;
         self.conn.execute(

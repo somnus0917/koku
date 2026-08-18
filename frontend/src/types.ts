@@ -393,9 +393,9 @@ export interface Reconciliation {
   note: string;
 }
 
-/** 到期提醒项（存款到期 / 借款到期 / 信用卡还款）。 */
+/** 到期提醒项（存款到期 / 借款到期）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan" | "credit_card";
+  kind: "deposit" | "loan";
   id: number;
   title: string;
   amount: string;

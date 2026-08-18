@@ -3,27 +3,31 @@
 //! # 核心语义
 //! - 消费 = Credit 账户上的 Expense（正常支出）；
 //! - 还款 = 储蓄账户 → Credit 账户的 Transfer（**不是** Expense，避免重复统计）；
-//! - 余额与额度只算一次：账户余额继续由现有 `AccountType` 语义维护
-//!   （Credit 为负债：支出使余额增加、还款使余额减少）。
+//! - 已用额度以**账户余额**为准（Credit 余额 = 未还欠款，由现有 `AccountType`
+//!   语义维护：支出增、还款减；期初余额、余额调整、收入/退款等合法操作一并计入），
+//!   `used_credit = max(0, account.balance)`，溢缴（余额为负）按 0 计。
 //!
 //! # 账单口径（v1，可解释近似，无快照表，按现有交易动态计算）
-//! - 消费：该账户上未撤销的 Expense，按 `settled_amount`（账户币种结算额）计；
-//! - 还款：转入该账户的未撤销 Transfer，按 `target_amount`（账户币种到账额）计；
-//! - 还款按 FIFO 冲抵**最早发生**的消费（先旧后新），
-//!   `used_credit = max(0, 全部消费 − 全部还款)`；
-//! - `current_statement_amount` = 最近一期已出账周期（[上一账单日, 最近账单日)）
-//!   中未被还款冲抵的消费；
-//! - `unbilled_amount` = 最近账单日之后、截至 as_of 的未出账消费
-//!   （还款冲抵完所有已出账消费后才开始冲抵未出账部分）。
+//! - 消费：该账户上未撤销的 Expense，按 `settled_amount`（账户币种结算额）计，
+//!   金额以 TEXT 从 SQLite 原样读出后用 `Decimal` 在 Rust 中精确求和
+//!   （全程不使用 REAL/f64 做账务计算，如 0.10+0.20+0.30 精确等于 0.60）；
+//! - 账单周期：`(上一账单日, 最近账单日]`，即 `[上一账单日次日 00:00,
+//!   最近账单日次日 00:00)`——账单日当天的消费计入本期已出账；
+//! - `current_statement_amount` = 最近一期已出账周期中未被冲抵的消费；
+//! - `unbilled_amount` = 最近账单日次日 00:00 之后、截至 as_of 的未出账消费；
+//! - 冲抵口径：`tracked = old + current + unbilled`，
+//!   `tracked_unpaid = min(used_credit, tracked)`，差额 `tracked − tracked_unpaid`
+//!   视为可归因的还款/贷项，按 FIFO（最早周期 → 最近周期）依次冲抵；
+//!   `used_credit > tracked` 的多出部分视为历史/未分类负债，不伪造进
+//!   current/unbilled（二者之和恒不超过真实 used_credit）。
 //!
-//! 本版不追踪「某次还款具体偿还哪一期」，采用上述 FIFO/总负债近似并在
-//! README 中说明；不做最低还款/分期/利息/罚息等结算引擎。
+//! 本版不追踪「某次还款具体偿还哪一期」，采用上述近似并在 README 中说明；
+//! 不做最低还款/分期/利息/罚息等结算引擎。
 //!
 //! 所有日期 helper 显式接收日期参数，不内嵌 `Utc::now()`，保证可测试。
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc};
 use rusqlite::{params_from_iter, types::Value};
-use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 
 use super::*;
@@ -49,8 +53,30 @@ impl BookkeepingService {
                 account.account_type.as_str()
             )));
         }
-        let (current_statement_amount, unbilled_amount, used_credit) =
-            self.credit_card_amounts(account_id, as_of, account.statement_day)?;
+        // 已用额度以账户实际余额为准（Credit 余额 = 未还欠款；溢缴为负 → 0）。
+        let used_credit = account.balance.max(Decimal::ZERO);
+        let (current_statement_amount, unbilled_amount) = match account.statement_day {
+            Some(day) => {
+                let as_of_date = as_of.date_naive();
+                let recent = recent_statement_date(as_of_date, day);
+                let prev = previous_statement_date(recent, day);
+                // 周期边界：(上一账单日, 最近账单日]；账单日当天消费计入本期已出账。
+                let current_start = midnight_utc(prev + Duration::days(1));
+                let current_end = midnight_utc(recent + Duration::days(1));
+                let old = self.sum_expenses(account_id, &as_of, None, Some(&current_start))?;
+                let current = self.sum_expenses(
+                    account_id,
+                    &as_of,
+                    Some(&current_start),
+                    Some(&current_end),
+                )?;
+                let unbilled = self.sum_expenses(account_id, &as_of, Some(&current_end), None)?;
+                let (current_unpaid, unbilled_unpaid) =
+                    apply_fifo_cap(old, current, unbilled, used_credit);
+                (Some(current_unpaid), Some(unbilled_unpaid))
+            }
+            None => (None, None),
+        };
         let as_of_date = as_of.date_naive();
         let available_credit = account.credit_limit.map(|limit| limit - used_credit);
         Ok(CreditCardSummary {
@@ -70,48 +96,10 @@ impl BookkeepingService {
         })
     }
 
-    /// 计算额度占用与出账/未出账金额（summary 与还款提醒共用）。
-    ///
-    /// 返回 `(current_statement_amount, unbilled_amount, used_credit)`；
-    /// `statement_day` 为 `None` 时前两项为 `None`（无账单周期）。
-    pub(super) fn credit_card_amounts(
-        &self,
-        account_id: i64,
-        as_of: DateTime<Utc>,
-        statement_day: Option<u32>,
-    ) -> Result<(Option<Decimal>, Option<Decimal>, Decimal)> {
-        let Some(statement_day) = statement_day else {
-            let expenses = self.sum_expenses(account_id, &as_of, None, None)?;
-            let repayments = self.sum_repayments(account_id, &as_of)?;
-            let used = (expenses - repayments).max(Decimal::ZERO);
-            return Ok((None, None, used));
-        };
-        let as_of_date = as_of.date_naive();
-        let recent = recent_statement_date(as_of_date, statement_day);
-        let prev = previous_statement_date(recent, statement_day);
-        let prev_midnight = midnight_utc(prev);
-        let recent_midnight = midnight_utc(recent);
-        let before_prev = self.sum_expenses(account_id, &as_of, None, Some(&prev_midnight))?;
-        let current = self.sum_expenses(
-            account_id,
-            &as_of,
-            Some(&prev_midnight),
-            Some(&recent_midnight),
-        )?;
-        let unbilled = self.sum_expenses(account_id, &as_of, Some(&recent_midnight), None)?;
-        let repayments = self.sum_repayments(account_id, &as_of)?;
-        // FIFO：还款先冲抵最早周期的消费。
-        let mut remaining = repayments;
-        let before_prev_unpaid = (before_prev - remaining).max(Decimal::ZERO);
-        remaining = (remaining - before_prev).max(Decimal::ZERO);
-        let current_unpaid = (current - remaining).max(Decimal::ZERO);
-        remaining = (remaining - current).max(Decimal::ZERO);
-        let unbilled_unpaid = (unbilled - remaining).max(Decimal::ZERO);
-        let used = before_prev_unpaid + current_unpaid + unbilled_unpaid;
-        Ok((Some(current_unpaid), Some(unbilled_unpaid), used))
-    }
-
     /// 账户上未撤销 Expense 的 `settled_amount` 之和（可加下/上界过滤）。
+    ///
+    /// 金额以 TEXT 从 SQLite 原样读出，用 `Decimal` 在 Rust 中精确求和——
+    /// 全程不使用 REAL/f64 做账务计算，杜绝浮点误差。
     fn sum_expenses(
         &self,
         account_id: i64,
@@ -119,41 +107,9 @@ impl BookkeepingService {
         lower: Option<&DateTime<Utc>>,
         upper: Option<&DateTime<Utc>>,
     ) -> Result<Decimal> {
-        self.sum_amount(
-            "settled_amount",
-            "account_id = ? AND kind = 'expense' AND voided_at IS NULL AND occurred_at <= ?",
-            account_id,
-            as_of,
-            lower,
-            upper,
-        )
-    }
-
-    /// 转入账户的未撤销 Transfer 的 `target_amount` 之和（还款口径）。
-    fn sum_repayments(&self, account_id: i64, as_of: &DateTime<Utc>) -> Result<Decimal> {
-        self.sum_amount(
-            "target_amount",
-            "to_account_id = ? AND kind = 'transfer' AND voided_at IS NULL AND occurred_at <= ?",
-            account_id,
-            as_of,
-            None,
-            None,
-        )
-    }
-
-    /// 通用金额求和：按账户/时间过滤，SQL 内先求 REAL 和，回 Rust 转 Decimal 并取两位小数
-    /// （与既有统计口径一致；金额最终均为 Decimal）。
-    fn sum_amount(
-        &self,
-        column: &str,
-        base_where: &str,
-        account_id: i64,
-        as_of: &DateTime<Utc>,
-        lower: Option<&DateTime<Utc>>,
-        upper: Option<&DateTime<Utc>>,
-    ) -> Result<Decimal> {
-        let mut sql = format!(
-            "SELECT COALESCE(SUM(CAST({column} AS REAL)), 0) FROM transactions WHERE {base_where}"
+        let mut sql = String::from(
+            "SELECT settled_amount FROM transactions \
+             WHERE account_id = ? AND kind = 'expense' AND voided_at IS NULL AND occurred_at <= ?",
         );
         let mut params: Vec<Value> =
             vec![Value::Integer(account_id), Value::Text(timestamp(*as_of))];
@@ -165,11 +121,45 @@ impl BookkeepingService {
             sql.push_str(" AND occurred_at < ?");
             params.push(Value::Text(timestamp(*upper)));
         }
-        let value: f64 = self
-            .conn
-            .query_row(&sql, params_from_iter(params), |row| row.get(0))?;
-        Ok(Decimal::from_f64(value).unwrap_or_default().round_dp(2))
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(params_from_iter(params), |row| row.get::<_, String>(0))?;
+        let mut total = Decimal::ZERO;
+        for row in rows {
+            total += decimal_from_db(&row?)?;
+        }
+        Ok(total)
     }
+}
+
+/// FIFO + 上限口径：把「可归因的还款/贷项」按 最早桶 → 最近桶 依次冲抵，
+/// 并保证 `current + unbilled` 之和不超过真实 `used_credit`。
+///
+/// - `old`：最近账单周期之前的消费；`current`：最近已出账周期消费；
+///   `unbilled`：最近账单日之后未出账消费；
+/// - `used_credit` = `max(0, 账户余额)`（账户余额的最终真值）；
+/// - `tracked = old + current + unbilled`，`tracked_unpaid = min(used, tracked)`，
+///   `effective = tracked − tracked_unpaid`（还款/收入/退款等已冲抵部分）；
+/// - 若 `used > tracked`，多出的部分视为历史/未分类负债，不进 current/unbilled。
+fn apply_fifo_cap(
+    old: Decimal,
+    current: Decimal,
+    unbilled: Decimal,
+    used_credit: Decimal,
+) -> (Decimal, Decimal) {
+    let tracked = old + current + unbilled;
+    let tracked_unpaid = used_credit.min(tracked);
+    let effective = tracked - tracked_unpaid;
+    let mut remaining = effective;
+    let old_unpaid = (old - remaining).max(Decimal::ZERO);
+    remaining = (remaining - old).max(Decimal::ZERO);
+    let current_unpaid = (current - remaining).max(Decimal::ZERO);
+    remaining = (remaining - current).max(Decimal::ZERO);
+    let unbilled_unpaid = (unbilled - remaining).max(Decimal::ZERO);
+    debug_assert_eq!(
+        old_unpaid + current_unpaid + unbilled_unpaid,
+        tracked_unpaid
+    );
+    (current_unpaid, unbilled_unpaid)
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +239,10 @@ pub(super) fn next_statement_date(as_of: NaiveDate, statement_day: u32) -> Naive
 }
 
 /// 某期账单的还款日：严格晚于账单日的最早 due_day 日期（跨月或月底回退）。
+///
+/// 摘要中的 `next_due_date` 使用 [`next_due_date`]；本 helper 保留作为可测试的
+/// 语义定义（当前仅测试引用，未来恢复还款提醒时使用）。
+#[allow(dead_code)]
 pub(super) fn due_date_for_statement(statement: NaiveDate, due_day: u32) -> NaiveDate {
     let current = day_in_month(statement.year(), statement.month(), due_day);
     if current > statement {
@@ -281,6 +275,14 @@ mod tests {
 
     fn as_of(y: i32, m: u32, d: u32) -> DateTime<Utc> {
         midnight_utc(date(y, m, d))
+    }
+
+    /// 带时刻的时间点（边界测试用）。
+    fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> DateTime<Utc> {
+        date(y, m, d)
+            .and_hms_opt(h, min, 0)
+            .expect("valid clock time")
+            .and_utc()
     }
 
     /// 建一个带默认分类的账本，返回 (service, credit, cash, 餐饮分类 id)。
@@ -694,6 +696,230 @@ mod tests {
                 "错"
             )
             .is_err());
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // 精确小数求和（全程 Decimal，无 REAL/f64）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn decimal_sums_are_exact() -> Result<()> {
+        let (mut service, credit, _, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(10))?;
+        // 0.10 + 0.20 + 0.30 必须精确等于 0.60（浮点求和的 0.30000000000000004
+        // 一类误差绝不允许出现）。
+        expense(&mut service, credit.id, food, "0.10", as_of(2026, 8, 5))?;
+        expense(&mut service, credit.id, food, "0.20", as_of(2026, 8, 6))?;
+        expense(&mut service, credit.id, food, "0.30", as_of(2026, 8, 7))?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        let exact = Decimal::from_str_exact("0.60")?;
+        assert_eq!(summary.used_credit, exact);
+        assert_eq!(summary.current_statement_amount, Some(exact));
+        assert_eq!(summary.unbilled_amount, Some(Decimal::ZERO));
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // 账单日当天的周期归属（(上一账单日, 最近账单日]）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn statement_day_boundary_includes_statement_day() -> Result<()> {
+        let (mut service, credit, _, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(10))?;
+        // 08-09 23:00 / 08-10 00:00 / 08-10 23:30 → 本期已出账（含账单日全天）；
+        // 08-11 00:00 → 未出账。
+        expense(
+            &mut service,
+            credit.id,
+            food,
+            "60.00",
+            at(2026, 8, 9, 23, 0),
+        )?;
+        expense(
+            &mut service,
+            credit.id,
+            food,
+            "70.00",
+            at(2026, 8, 10, 0, 0),
+        )?;
+        expense(
+            &mut service,
+            credit.id,
+            food,
+            "80.00",
+            at(2026, 8, 10, 23, 30),
+        )?;
+        expense(
+            &mut service,
+            credit.id,
+            food,
+            "90.00",
+            at(2026, 8, 11, 0, 0),
+        )?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(
+            summary.current_statement_amount,
+            Some(Decimal::from(210_u32))
+        );
+        assert_eq!(summary.unbilled_amount, Some(Decimal::from(90_u32)));
+        assert_eq!(summary.used_credit, Decimal::from(300_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn statement_day_31_february_boundary() -> Result<()> {
+        let (mut service, credit, _, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(31))?;
+        // 2 月账单日落到 02-28：02-28 23:00 计入本期已出账，03-01 00:00 起未出账。
+        expense(
+            &mut service,
+            credit.id,
+            food,
+            "100.00",
+            at(2026, 2, 28, 23, 0),
+        )?;
+        expense(&mut service, credit.id, food, "50.00", at(2026, 3, 1, 0, 0))?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 3, 10))?;
+        assert_eq!(
+            summary.current_statement_amount,
+            Some(Decimal::from(100_u32))
+        );
+        assert_eq!(summary.unbilled_amount, Some(Decimal::from(50_u32)));
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // used_credit 以账户余额为准（max(0, balance)）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn opening_balance_counts_toward_used_credit() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        service.ensure_default_categories()?;
+        let credit = service.create_account(
+            "招商 Visa",
+            AccountType::Credit,
+            "CNY",
+            Decimal::from(500_u32),
+        )?;
+        service.set_statement_day(credit.id, Some(10))?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        // 期初余额 500 直接计入已用额度；无交易 → 出账/未出账为 0。
+        assert_eq!(summary.used_credit, Decimal::from(500_u32));
+        assert_eq!(summary.current_statement_amount, Some(Decimal::ZERO));
+        assert_eq!(summary.unbilled_amount, Some(Decimal::ZERO));
+        Ok(())
+    }
+
+    #[test]
+    fn balance_adjustment_follows_used_credit() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        service.ensure_default_categories()?;
+        let credit = service.create_account(
+            "招商 Visa",
+            AccountType::Credit,
+            "CNY",
+            Decimal::from(500_u32),
+        )?;
+        service.adjust_balance(credit.id, Decimal::from(200_u32), "额度修正")?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(summary.used_credit, Decimal::from(700_u32));
+        // 反向调整回零。
+        service.adjust_balance(credit.id, Decimal::from(-700), "修正")?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(summary.used_credit, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn income_refund_reduces_used_credit() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        service.ensure_default_categories()?;
+        let credit = service.create_account(
+            "招商 Visa",
+            AccountType::Credit,
+            "CNY",
+            Decimal::from(500_u32),
+        )?;
+        let refund = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "退款")
+            .unwrap()
+            .id;
+        // 退款收入入信用卡账户 → 负债减少 → 已用额度同步下降。
+        service.record_income(
+            credit.id,
+            refund,
+            Decimal::from(100_u32),
+            as_of(2026, 8, 5),
+            "退款",
+        )?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(summary.used_credit, Decimal::from(400_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn overpayment_yields_zero_used_credit() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        service.ensure_default_categories()?;
+        let credit = service.create_account(
+            "招商 Visa",
+            AccountType::Credit,
+            "CNY",
+            Decimal::from(500_u32),
+        )?;
+        service.set_credit_limit(credit.id, Some(Decimal::from(20000_u32)))?;
+        let refund = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "退款")
+            .unwrap()
+            .id;
+        service.record_income(
+            credit.id,
+            refund,
+            Decimal::from(600_u32),
+            as_of(2026, 8, 5),
+            "退款",
+        )?;
+        // 溢缴：余额 -100 → used_credit = 0，可用额度 = 全额。
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(service.account(credit.id)?.balance, Decimal::from(-100));
+        assert_eq!(summary.used_credit, Decimal::ZERO);
+        assert_eq!(summary.available_credit, Some(Decimal::from(20000_u32)));
+        Ok(())
+    }
+
+    #[test]
+    fn statement_buckets_never_exceed_used_credit() -> Result<()> {
+        let (mut service, credit, _, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(10))?;
+        let refund = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "退款")
+            .unwrap()
+            .id;
+        // 消费 300 + 退款 200 → 余额 100；出账/未出账之和不得超过 used_credit=100。
+        expense(&mut service, credit.id, food, "300.00", as_of(2026, 8, 5))?;
+        service.record_income(
+            credit.id,
+            refund,
+            Decimal::from(200_u32),
+            as_of(2026, 8, 8),
+            "退款",
+        )?;
+        let summary = service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(summary.used_credit, Decimal::from(100_u32));
+        assert_eq!(
+            summary.current_statement_amount,
+            Some(Decimal::from(100_u32))
+        );
+        assert_eq!(summary.unbilled_amount, Some(Decimal::ZERO));
         Ok(())
     }
 }

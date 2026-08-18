@@ -91,7 +91,7 @@ export function AccountsPage({
       />
       <AccountGroup title={t("accounts.type.stock")} subtitle={t("accounts.accountCount", { count: stock.length })} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <AccountGroup title={t("accounts.type.credit")} subtitle={t("accounts.accountCount", { count: credit.length })} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
-      <CreditCardSection accounts={credit} display={display} rates={rates} />
+      <CreditCardSection accounts={credit} display={display} rates={rates} data={data} />
       <LoansSection
         loans={data.loans}
         accounts={data.accounts}
