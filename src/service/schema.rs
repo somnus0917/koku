@@ -160,6 +160,8 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             reimbursable_at TEXT,
             reimbursed_at   TEXT,
             reimbursed_amount TEXT NOT NULL DEFAULT '0',
+            payee_id      INTEGER REFERENCES payees(id),
+            raw_description TEXT,
             CHECK (
                 (kind IN ('expense', 'income') AND category_id IS NOT NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
@@ -176,6 +178,29 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             ON transactions(occurred_at, voided_at);
         CREATE INDEX IF NOT EXISTS idx_transactions_account
             ON transactions(account_id, to_account_id);
+
+        CREATE TABLE IF NOT EXISTS payees (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS merchant_aliases (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            normalized_description TEXT NOT NULL UNIQUE,
+            payee_id               INTEGER NOT NULL REFERENCES payees(id),
+            confirmed_count        INTEGER NOT NULL DEFAULT 1,
+            last_used_at           TEXT NOT NULL,
+            created_at             TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS payee_category_stats (
+            payee_id     INTEGER NOT NULL REFERENCES payees(id),
+            category_id  INTEGER NOT NULL REFERENCES categories(id),
+            count        INTEGER NOT NULL DEFAULT 0,
+            last_used_at TEXT NOT NULL,
+            PRIMARY KEY (payee_id, category_id)
+        );
 
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,

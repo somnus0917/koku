@@ -28,6 +28,7 @@ mod holdings;
 mod import;
 mod loans;
 mod migrations;
+mod payees;
 mod rates;
 mod receipts;
 mod reconciliations;
@@ -189,7 +190,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -330,6 +331,9 @@ type TransactionRow = (
     String,
     bool,
     String,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
 );
 
 fn account_from_row(row: AccountRow) -> Result<Account> {
@@ -396,6 +400,9 @@ fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TransactionRow> 
         row.get(16)?,
         row.get(17)?,
         row.get(18)?,
+        row.get(19)?,
+        row.get(20)?,
+        row.get(21)?,
     ))
 }
 
@@ -420,6 +427,9 @@ fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         reimbursed_amount: decimal_from_db(&row.16)?,
         has_receipt: row.17,
         tags: split_tags(&row.18),
+        payee_id: row.19,
+        raw_description: row.20,
+        payee_name: row.21,
     })
 }
 

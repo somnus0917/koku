@@ -29,6 +29,7 @@ mod deposits;
 mod holdings;
 mod import_export;
 mod loans;
+mod payees;
 mod rates;
 mod reconciliations;
 mod recurring;
@@ -78,6 +79,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .merge(import_export::router())
         .merge(deposits::router())
         .merge(loans::router())
+        .merge(payees::router())
         .merge(reimbursements::router())
         .merge(budgets::router())
         .merge(recurring::router())

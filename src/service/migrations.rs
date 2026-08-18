@@ -113,6 +113,19 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
         "#,
     )?;
     migrate_deposit_accounts(conn)?;
+    // —— Payee 自动学习：交易关联商户与原始描述（放在整表重建之后，避免重建丢失新列）——
+    if !table_has_column(conn, "transactions", "payee_id")? {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN payee_id INTEGER REFERENCES payees(id)",
+            [],
+        )?;
+    }
+    if !table_has_column(conn, "transactions", "raw_description")? {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN raw_description TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 

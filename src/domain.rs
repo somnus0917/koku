@@ -275,6 +275,14 @@ pub struct Transaction {
     /// 关联标签（标签名，按创建顺序）
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 关联的商户/收款方；导入自动识别或用户手动设置
+    pub payee_id: Option<i64>,
+    /// 商户名称（由 payee_id 关联出的展示字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payee_name: Option<String>,
+    /// 导入时的原始流水描述（机器识别用，与用户备注区分）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -406,6 +414,27 @@ impl RecurrenceFrequency {
 pub struct Tag {
     pub id: i64,
     pub name: String,
+}
+
+/// 商户/收款方：从流水描述中识别出的业务实体，属于单个用户账本。
+/// 每个 Payee 可关联多条 `merchant_aliases`（原始描述 → Payee）与
+/// 历史分类统计（`payee_category_stats`），用于自动分类学习。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Payee {
+    pub id: i64,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// 某 Payee 的历史分类预测结果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategoryPrediction {
+    pub category_id: i64,
+    pub category_name: String,
+    /// 置信度（0..=1 的小数，如 0.974）。
+    pub confidence: Decimal,
+    /// 是否达到自动应用阈值（否则为「建议」）。
+    pub auto_applied: bool,
 }
 
 /// 股票账户的一只持仓：股数、总成本、可选市价与摊薄成本。
