@@ -562,8 +562,12 @@ button:disabled {
 
 .profile-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+.profile-actions .profile-chip {
+  flex-basis: 100%;
 }
 
 .profile-actions .profile-chip {
@@ -3083,7 +3087,7 @@ button:disabled {
   font-size: 11px;
 }
 
-.cashflow-item > span {
+.cashflow-item > span:not(.category-avatar) {
   display: flex;
   min-width: 0;
   align-items: baseline;
