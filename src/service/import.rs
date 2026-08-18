@@ -233,19 +233,22 @@ impl BookkeepingService {
                 prediction.category_id
             } else {
                 // 中置信度：真实分类保持默认，同时返回建议供用户确认。
+                // 默认分类与预测分类相同 → 建议无意义，不生成（也不算自动应用）。
                 let default_id =
                     self.default_category_for_import(default_category_id, expected_kind)?;
-                let default_name = self.category(default_id)?.name;
-                suggestion = Some(CategorySuggestion {
-                    transaction_id: 0, // 交易创建后填充
-                    payee_id: payee_id.unwrap_or_default(),
-                    payee_name: payee_name.clone().unwrap_or_default(),
-                    current_category_id: default_id,
-                    current_category_name: default_name,
-                    suggested_category_id: prediction.category_id,
-                    suggested_category_name: prediction.category_name,
-                    confidence: prediction.confidence,
-                });
+                if default_id != prediction.category_id {
+                    let default_name = self.category(default_id)?.name;
+                    suggestion = Some(CategorySuggestion {
+                        transaction_id: 0, // 交易创建后填充
+                        payee_id: payee_id.unwrap_or_default(),
+                        payee_name: payee_name.clone().unwrap_or_default(),
+                        current_category_id: default_id,
+                        current_category_name: default_name,
+                        suggested_category_id: prediction.category_id,
+                        suggested_category_name: prediction.category_name,
+                        confidence: prediction.confidence,
+                    });
+                }
                 default_id
             }
         } else {
