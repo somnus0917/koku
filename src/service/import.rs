@@ -7,7 +7,7 @@ use rusqlite::params;
 use serde::Serialize;
 
 use super::*;
-use crate::domain::{CategoryKind, TransactionKind};
+use crate::domain::{CategoryKind, CategorySuggestion, TransactionKind};
 use crate::error::{KokuError, Result};
 use crate::importer::{ImportFormat, ImportRow, ParseIssue};
 use crate::service::BookkeepingService;
@@ -29,7 +29,9 @@ pub struct ImportResult {
     /// 成功导入且按历史统计高置信度自动应用分类的条数。
     pub categories_auto_applied: usize,
     /// 成功导入且产生中等置信度分类建议（未自动应用）的条数。
-    pub category_suggestions: usize,
+    pub category_suggestion_count: usize,
+    /// 中等置信度分类建议明细（每条对应一笔已导入交易，等待人工确认）。
+    pub category_suggestions: Vec<CategorySuggestion>,
     /// 成功导入但未能识别商户的条数。
     pub unrecognized: usize,
 }
@@ -39,7 +41,7 @@ struct ImportRowOutcome {
     imported: bool,
     payee_recognized: bool,
     category_auto_applied: bool,
-    category_suggestion: bool,
+    suggestion: Option<CategorySuggestion>,
 }
 
 impl BookkeepingService {
@@ -62,7 +64,8 @@ impl BookkeepingService {
         let mut issues = Vec::new();
         let mut payees_recognized = 0_usize;
         let mut categories_auto_applied = 0_usize;
-        let mut category_suggestions = 0_usize;
+        let mut category_suggestion_count = 0_usize;
+        let mut category_suggestions = Vec::new();
         let mut unrecognized = 0_usize;
         for row in rows {
             match self.import_row(
@@ -83,8 +86,9 @@ impl BookkeepingService {
                         if outcome.category_auto_applied {
                             categories_auto_applied += 1;
                         }
-                        if outcome.category_suggestion {
-                            category_suggestions += 1;
+                        if let Some(suggestion) = outcome.suggestion {
+                            category_suggestion_count += 1;
+                            category_suggestions.push(suggestion);
                         }
                     } else {
                         skipped_duplicates += 1;
@@ -108,6 +112,7 @@ impl BookkeepingService {
             issues,
             payees_recognized,
             categories_auto_applied,
+            category_suggestion_count,
             category_suggestions,
             unrecognized,
         })
@@ -174,8 +179,8 @@ impl BookkeepingService {
         // 否则按归一化描述查 alias；命中后预测分类。
         let mut payee_recognized = false;
         let mut category_auto_applied = false;
-        let mut category_suggestion = false;
-        let payee_id = if let Some(name) = row
+        let mut suggestion: Option<CategorySuggestion> = None;
+        let (payee_id, payee_name) = if let Some(name) = row
             .payee_name
             .as_deref()
             .map(str::trim)
@@ -183,16 +188,17 @@ impl BookkeepingService {
         {
             // 恢复 Payee：仅创建/复用商户并关联，不写 alias、不产生学习统计。
             payee_recognized = true;
-            Some(self.get_or_create_payee(name)?.id)
+            let payee = self.get_or_create_payee(name)?;
+            (Some(payee.id), Some(payee.name.clone()))
         } else if raw_description.trim().is_empty() {
-            None
+            (None, None)
         } else {
             match self.resolve_payee_for_description(&raw_description)? {
                 Some(payee) => {
                     payee_recognized = true;
-                    Some(payee.id)
+                    (Some(payee.id), Some(payee.name.clone()))
                 }
-                None => None,
+                None => (None, None),
             }
         };
         let prediction = match payee_id {
@@ -226,8 +232,21 @@ impl BookkeepingService {
                 category_auto_applied = true;
                 prediction.category_id
             } else {
-                category_suggestion = true;
-                self.default_category_for_import(default_category_id, expected_kind)?
+                // 中置信度：真实分类保持默认，同时返回建议供用户确认。
+                let default_id =
+                    self.default_category_for_import(default_category_id, expected_kind)?;
+                let default_name = self.category(default_id)?.name;
+                suggestion = Some(CategorySuggestion {
+                    transaction_id: 0, // 交易创建后填充
+                    payee_id: payee_id.unwrap_or_default(),
+                    payee_name: payee_name.clone().unwrap_or_default(),
+                    current_category_id: default_id,
+                    current_category_name: default_name,
+                    suggested_category_id: prediction.category_id,
+                    suggested_category_name: prediction.category_name,
+                    confidence: prediction.confidence,
+                });
+                default_id
             }
         } else {
             self.default_category_for_import(default_category_id, expected_kind)?
@@ -278,7 +297,7 @@ impl BookkeepingService {
                 imported: false,
                 payee_recognized: false,
                 category_auto_applied: false,
-                category_suggestion: false,
+                suggestion: None,
             });
         }
 
@@ -295,6 +314,9 @@ impl BookkeepingService {
                 )?;
                 // 保存原始描述与识别出的商户（学习数据只由人工操作产生，导入不学习）。
                 self.set_import_metadata(tx.id, &raw_description, payee_id)?;
+                if let Some(s) = suggestion.as_mut() {
+                    s.transaction_id = tx.id;
+                }
             }
             TransactionKind::Income => {
                 let tx = self.record_income_in_currency(
@@ -307,6 +329,9 @@ impl BookkeepingService {
                     row.note.clone(),
                 )?;
                 self.set_import_metadata(tx.id, &raw_description, payee_id)?;
+                if let Some(s) = suggestion.as_mut() {
+                    s.transaction_id = tx.id;
+                }
             }
             _ => unreachable!("import only produces income/expense"),
         }
@@ -314,7 +339,7 @@ impl BookkeepingService {
             imported: true,
             payee_recognized,
             category_auto_applied,
-            category_suggestion,
+            suggestion,
         })
     }
 }
@@ -323,6 +348,7 @@ impl BookkeepingService {
 mod tests {
     use super::*;
     use crate::domain::AccountType;
+    use crate::service::payees::{AUTO_CATEGORY_CONFIDENCE, SUGGEST_CATEGORY_CONFIDENCE};
     use chrono::NaiveDate;
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -547,7 +573,8 @@ mod tests {
         assert_eq!(result.imported, 1);
         assert_eq!(result.payees_recognized, 1);
         assert_eq!(result.categories_auto_applied, 1);
-        assert_eq!(result.category_suggestions, 0);
+        assert_eq!(result.category_suggestion_count, 0);
+        assert!(result.category_suggestions.is_empty());
         assert_eq!(result.unrecognized, 0);
         // 预置学习也创建了交易，按导入备注定位导入的那条。
         let transaction = service
@@ -598,7 +625,14 @@ mod tests {
         assert_eq!(result.imported, 1);
         assert_eq!(result.payees_recognized, 1);
         assert_eq!(result.categories_auto_applied, 0);
-        assert_eq!(result.category_suggestions, 1);
+        assert_eq!(result.category_suggestion_count, 1);
+        assert_eq!(result.category_suggestions.len(), 1);
+        let suggestion = &result.category_suggestions[0];
+        assert_eq!(suggestion.payee_name, "京东");
+        assert_eq!(suggestion.current_category_id, shopping.id);
+        assert_eq!(suggestion.suggested_category_id, food.id);
+        assert!(suggestion.confidence >= SUGGEST_CATEGORY_CONFIDENCE);
+        assert!(suggestion.confidence < AUTO_CATEGORY_CONFIDENCE);
         assert_eq!(result.unrecognized, 0);
         let transaction = service
             .transactions(100, 0)?
@@ -694,7 +728,8 @@ mod tests {
         assert_eq!(result.payees_recognized, 0);
         assert_eq!(result.unrecognized, 2);
         assert_eq!(result.categories_auto_applied, 0);
-        assert_eq!(result.category_suggestions, 0);
+        assert_eq!(result.category_suggestion_count, 0);
+        assert!(result.category_suggestions.is_empty());
         Ok(())
     }
 }

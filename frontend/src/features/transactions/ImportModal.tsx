@@ -3,8 +3,8 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle, Upload } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
-import { importTransactions } from "../../api";
-import type { Account, Category, ImportResult } from "../../types";
+import { importTransactions, updateTransaction } from "../../api";
+import type { Account, Category, CategorySuggestion, ImportResult } from "../../types";
 
 /** 批量导入交易：选择账单文件与目标账户，导入后展示结果摘要（成功/重复/失败 + 问题行）。
  *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onComplete
@@ -55,6 +55,26 @@ export function ImportModal({
     onClose();
   };
 
+  /** 采纳一条分类建议：PATCH 该交易分类（属于人工确认，会触发学习）。 */
+  const applySuggestion = async (suggestion: CategorySuggestion) => {
+    setError(null);
+    try {
+      await updateTransaction(suggestion.transaction_id, { category_id: suggestion.suggested_category_id });
+      setResult((current) =>
+        current
+          ? {
+              ...current,
+              category_suggestions: current.category_suggestions.filter(
+                (item) => item.transaction_id !== suggestion.transaction_id
+              )
+            }
+          : current
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("modals.import.applyFailed"));
+    }
+  };
+
   return (
     <ModalShell eyebrow="IMPORT" title={t("modals.import.title")} onClose={onClose}>
       {result ? (
@@ -64,12 +84,34 @@ export function ImportModal({
             <span className="import-count skip"><strong>{result.skipped_duplicates}</strong>{t("modals.import.skipped", { count: result.skipped_duplicates })}</span>
             <span className={`import-count ${result.failed > 0 ? "bad" : ""}`}><strong>{result.failed}</strong>{t("modals.import.failed", { count: result.failed })}</span>
           </div>
-          {(result.payees_recognized > 0 || result.categories_auto_applied > 0 || result.category_suggestions > 0 || result.unrecognized > 0) && (
+          {(result.payees_recognized > 0 || result.categories_auto_applied > 0 || result.category_suggestion_count > 0 || result.unrecognized > 0) && (
             <div className="import-summary learn-summary" aria-label={t("modals.import.learningAria")}>
               <span className="import-count ok"><strong>{result.payees_recognized}</strong>{t("modals.import.payeesRecognized", { count: result.payees_recognized })}</span>
               <span className="import-count ok"><strong>{result.categories_auto_applied}</strong>{t("modals.import.autoApplied", { count: result.categories_auto_applied })}</span>
-              <span className={`import-count ${result.category_suggestions > 0 ? "" : "skip"}`}><strong>{result.category_suggestions}</strong>{t("modals.import.suggestions", { count: result.category_suggestions })}</span>
+              <span className={`import-count ${result.category_suggestion_count > 0 ? "" : "skip"}`}><strong>{result.category_suggestion_count}</strong>{t("modals.import.suggestions", { count: result.category_suggestion_count })}</span>
               <span className={`import-count ${result.unrecognized > 0 ? "" : "skip"}`}><strong>{result.unrecognized}</strong>{t("modals.import.unrecognized", { count: result.unrecognized })}</span>
+            </div>
+          )}
+          {result.category_suggestions.length > 0 && (
+            <div className="import-suggestions" aria-label={t("modals.import.suggestionsAria")}>
+              <div className="import-issues-head">{t("modals.import.suggestionsHead", { count: result.category_suggestions.length })}</div>
+              {result.category_suggestions.map((suggestion) => (
+                <div className="import-suggestion" key={suggestion.transaction_id}>
+                  <span className="import-suggestion-payee">{suggestion.payee_name}</span>
+                  <span className="import-suggestion-meta">
+                    {t("modals.import.suggestionFrom")}{suggestion.current_category_name}
+                    {t("modals.import.suggestionTo")}{suggestion.suggested_category_name}
+                  </span>
+                  <span className="import-suggestion-confidence">{t("modals.import.suggestionConfidence", { percent: (Number(suggestion.confidence) * 100).toFixed(0) })}</span>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => void applySuggestion(suggestion)}
+                  >
+                    {t("modals.import.applySuggestion")}
+                  </button>
+                </div>
+              ))}
             </div>
           )}
           {result.issues.length > 0 && (

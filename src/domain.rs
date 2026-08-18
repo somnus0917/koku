@@ -437,6 +437,22 @@ pub struct CategoryPrediction {
     pub auto_applied: bool,
 }
 
+/// 导入时的中置信度分类建议：对应一笔已导入交易，等待用户人工确认。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CategorySuggestion {
+    pub transaction_id: i64,
+    pub payee_id: i64,
+    pub payee_name: String,
+    /// 该交易当前真实分类（行内分类或默认分类）。
+    pub current_category_id: i64,
+    pub current_category_name: String,
+    /// 建议采纳的分类。
+    pub suggested_category_id: i64,
+    pub suggested_category_name: String,
+    /// 置信度（0..=1 的小数，如 0.83）。
+    pub confidence: Decimal,
+}
+
 /// 股票账户的一只持仓：股数、总成本、可选市价与摊薄成本。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Holding {

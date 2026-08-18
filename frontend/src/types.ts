@@ -311,6 +311,19 @@ export interface ImportIssue {
   message: string;
 }
 
+/** 导入时的中置信度分类建议：对应一笔已导入交易，等待用户人工确认。 */
+export interface CategorySuggestion {
+  transaction_id: number;
+  payee_id: number;
+  payee_name: string;
+  current_category_id: number;
+  current_category_name: string;
+  suggested_category_id: number;
+  suggested_category_name: string;
+  /** 置信度（0..=1 的小数，如 0.83）。 */
+  confidence: string;
+}
+
 /** 一次批量导入的统计结果。 */
 export interface ImportResult {
   format: string;
@@ -324,7 +337,9 @@ export interface ImportResult {
   /** 成功导入且高置信度自动应用分类的条数。 */
   categories_auto_applied: number;
   /** 成功导入且产生中等置信度分类建议（未自动应用）的条数。 */
-  category_suggestions: number;
+  category_suggestion_count: number;
+  /** 中等置信度分类建议明细（每条对应一笔已导入交易）。 */
+  category_suggestions: CategorySuggestion[];
   /** 成功导入但未能识别商户的条数。 */
   unrecognized: number;
 }
