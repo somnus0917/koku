@@ -24,6 +24,22 @@ pub struct ImportResult {
     pub failed: usize,
     /// 被跳过的行（重复、零金额、缺字段、缺分类等）。
     pub issues: Vec<ParseIssue>,
+    /// 成功导入且识别出商户（Payee）的条数。
+    pub payees_recognized: usize,
+    /// 成功导入且按历史统计高置信度自动应用分类的条数。
+    pub categories_auto_applied: usize,
+    /// 成功导入且产生中等置信度分类建议（未自动应用）的条数。
+    pub category_suggestions: usize,
+    /// 成功导入但未能识别商户的条数。
+    pub unrecognized: usize,
+}
+
+/// 单行导入结果（统计用）。
+struct ImportRowOutcome {
+    imported: bool,
+    payee_recognized: bool,
+    category_auto_applied: bool,
+    category_suggestion: bool,
 }
 
 impl BookkeepingService {
@@ -44,6 +60,10 @@ impl BookkeepingService {
         let mut skipped_duplicates = 0_usize;
         let mut failed = 0_usize;
         let mut issues = Vec::new();
+        let mut payees_recognized = 0_usize;
+        let mut categories_auto_applied = 0_usize;
+        let mut category_suggestions = 0_usize;
+        let mut unrecognized = 0_usize;
         for row in rows {
             match self.import_row(
                 account_id,
@@ -52,8 +72,24 @@ impl BookkeepingService {
                 default_category_id,
                 &row,
             ) {
-                Ok(true) => imported += 1,
-                Ok(false) => skipped_duplicates += 1,
+                Ok(outcome) => {
+                    if outcome.imported {
+                        imported += 1;
+                        if outcome.payee_recognized {
+                            payees_recognized += 1;
+                        } else {
+                            unrecognized += 1;
+                        }
+                        if outcome.category_auto_applied {
+                            categories_auto_applied += 1;
+                        }
+                        if outcome.category_suggestion {
+                            category_suggestions += 1;
+                        }
+                    } else {
+                        skipped_duplicates += 1;
+                    }
+                }
                 Err(error) => {
                     failed += 1;
                     issues.push(ParseIssue {
@@ -70,10 +106,37 @@ impl BookkeepingService {
             skipped_duplicates,
             failed,
             issues,
+            payees_recognized,
+            categories_auto_applied,
+            category_suggestions,
+            unrecognized,
         })
     }
 
-    /// 写入单行：返回 `true` 已导入、`false` 判定为重复跳过。
+    /// 校验并返回导入默认分类；未提供时报错（与既有行为一致）。
+    fn default_category_for_import(
+        &self,
+        default_category_id: Option<i64>,
+        expected_kind: CategoryKind,
+    ) -> Result<i64> {
+        match default_category_id {
+            Some(id) => {
+                let category = self.category(id)?;
+                if category.kind != expected_kind {
+                    return Err(KokuError::CategoryKindMismatch {
+                        expected: expected_kind.as_str(),
+                        actual: category.kind.as_str(),
+                    });
+                }
+                Ok(id)
+            }
+            None => Err(KokuError::InvalidInput(
+                "缺少分类：请在导入时选择默认分类，或使用带分类列的 Koku 导出 CSV".to_owned(),
+            )),
+        }
+    }
+
+    /// 写入单行：返回 `true` 已导入、`false` 判定为重复跳过（含统计信息）。
     #[allow(clippy::too_many_arguments)]
     fn import_row(
         &mut self,
@@ -82,7 +145,7 @@ impl BookkeepingService {
         default_currency: &str,
         default_category_id: Option<i64>,
         row: &ImportRow,
-    ) -> Result<bool> {
+    ) -> Result<ImportRowOutcome> {
         if row.amount.is_zero() {
             return Err(KokuError::InvalidInput("金额为零的流水无法导入".to_owned()));
         }
@@ -101,8 +164,30 @@ impl BookkeepingService {
             Some(value) => normalize_currency(value.clone())?,
             None => default_currency.to_owned(),
         };
+        let raw_description = row.note.clone();
 
-        // 分类解析：行内分类名 > 默认分类；都不满足则整行失败。
+        // 商户识别：先按归一化描述查 alias；命中后预测分类。
+        let mut payee_recognized = false;
+        let mut category_auto_applied = false;
+        let mut category_suggestion = false;
+        let payee_id = if raw_description.trim().is_empty() {
+            None
+        } else {
+            match self.resolve_payee_for_description(&raw_description)? {
+                Some(payee) => {
+                    payee_recognized = true;
+                    Some(payee.id)
+                }
+                None => None,
+            }
+        };
+        let prediction = match payee_id {
+            Some(pid) => self.predict_category(pid)?,
+            None => None,
+        };
+
+        // 分类解析：行内分类名 > 高置信度预测（自动应用）> 默认分类；
+        // 中等置信度预测只记录建议，不自动应用。
         let category_id = if let Some(name) = &row.category_name {
             let trimmed = name.trim();
             if trimmed.is_empty() {
@@ -122,19 +207,16 @@ impl BookkeepingService {
                         expected_kind.as_str()
                     ))
                 })?
-        } else if let Some(id) = default_category_id {
-            let category = self.category(id)?;
-            if category.kind != expected_kind {
-                return Err(KokuError::CategoryKindMismatch {
-                    expected: expected_kind.as_str(),
-                    actual: category.kind.as_str(),
-                });
+        } else if let Some(prediction) = prediction {
+            if prediction.auto_applied {
+                category_auto_applied = true;
+                prediction.category_id
+            } else {
+                category_suggestion = true;
+                self.default_category_for_import(default_category_id, expected_kind)?
             }
-            id
         } else {
-            return Err(KokuError::InvalidInput(
-                "缺少分类：请在导入时选择默认分类，或使用带分类列的 Koku 导出 CSV".to_owned(),
-            ));
+            self.default_category_for_import(default_category_id, expected_kind)?
         };
 
         let occurred_at = row
@@ -178,12 +260,17 @@ impl BookkeepingService {
             )
             .optional()?;
         if duplicate.is_some() {
-            return Ok(false);
+            return Ok(ImportRowOutcome {
+                imported: false,
+                payee_recognized: false,
+                category_auto_applied: false,
+                category_suggestion: false,
+            });
         }
 
         match kind {
             TransactionKind::Expense => {
-                self.record_expense_in_currency(
+                let tx = self.record_expense_in_currency(
                     account_id,
                     category_id,
                     amount,
@@ -192,9 +279,11 @@ impl BookkeepingService {
                     occurred_at,
                     row.note.clone(),
                 )?;
+                // 保存原始描述与识别出的商户（学习数据只由人工操作产生，导入不学习）。
+                self.set_import_metadata(tx.id, &raw_description, payee_id)?;
             }
             TransactionKind::Income => {
-                self.record_income_in_currency(
+                let tx = self.record_income_in_currency(
                     account_id,
                     category_id,
                     amount,
@@ -203,10 +292,16 @@ impl BookkeepingService {
                     occurred_at,
                     row.note.clone(),
                 )?;
+                self.set_import_metadata(tx.id, &raw_description, payee_id)?;
             }
             _ => unreachable!("import only produces income/expense"),
         }
-        Ok(true)
+        Ok(ImportRowOutcome {
+            imported: true,
+            payee_recognized,
+            category_auto_applied,
+            category_suggestion,
+        })
     }
 }
 
@@ -371,6 +466,120 @@ mod tests {
             transaction.settled_amount,
             Decimal::from_str_exact("72.00").unwrap()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn import_recognizes_payee_and_auto_applies_high_confidence_category() -> Result<()> {
+        let (mut service, account_id, _) = seeded_service()?;
+        let shopping = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "购物")
+            .unwrap();
+        let food = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "餐饮")
+            .unwrap();
+        // 预置学习数据：描述 → 饿了么；饿了么 → 餐饮（5 次，高置信度）。
+        let eleme = service.get_or_create_payee("饿了么")?;
+        service.learn_alias("支付宝-上海拉扎斯信息科技有限公司", eleme.id)?;
+        for _ in 0..5 {
+            service.learn_payee_category(eleme.id, food.id)?;
+        }
+        let mut imported_row = row(
+            1,
+            date(2026, 3, 1),
+            "-25.50",
+            "支付宝-上海拉扎斯信息科技有限公司",
+        );
+        imported_row.note = "支付宝-上海拉扎斯信息科技有限公司20260815001".to_owned();
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            // 默认分类故意设为购物：高置信度预测应覆盖默认分类。
+            Some(shopping.id),
+            None,
+            vec![imported_row],
+        )?;
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.payees_recognized, 1);
+        assert_eq!(result.categories_auto_applied, 1);
+        assert_eq!(result.category_suggestions, 0);
+        assert_eq!(result.unrecognized, 0);
+        let transaction = service.transactions(100, 0)?[0].clone();
+        assert_eq!(transaction.payee_id, Some(eleme.id));
+        assert_eq!(transaction.category_id, Some(food.id));
+        assert_eq!(
+            transaction.raw_description.as_deref(),
+            Some("支付宝-上海拉扎斯信息科技有限公司20260815001")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn import_records_suggestion_without_auto_apply() -> Result<()> {
+        let (mut service, account_id, _) = seeded_service()?;
+        let shopping = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "购物")
+            .unwrap();
+        let food = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "餐饮")
+            .unwrap();
+        // 京东分类分布较散（7 餐饮 / 3 购物）→ 只出建议，不自动应用。
+        let jd = service.get_or_create_payee("京东")?;
+        service.learn_alias("京东商城", jd.id)?;
+        for _ in 0..7 {
+            service.learn_payee_category(jd.id, food.id)?;
+        }
+        for _ in 0..3 {
+            service.learn_payee_category(jd.id, shopping.id)?;
+        }
+        let mut imported_row = row(1, date(2026, 3, 2), "-99.00", "京东商城");
+        imported_row.note = "支付宝-京东商城".to_owned();
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(shopping.id),
+            None,
+            vec![imported_row],
+        )?;
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.payees_recognized, 1);
+        assert_eq!(result.categories_auto_applied, 0);
+        assert_eq!(result.category_suggestions, 1);
+        assert_eq!(result.unrecognized, 0);
+        let transaction = service.transactions(100, 0)?[0].clone();
+        assert_eq!(transaction.payee_id, Some(jd.id));
+        // 建议未自动应用：分类保持默认「购物」。
+        assert_eq!(transaction.category_id, Some(shopping.id));
+        Ok(())
+    }
+
+    #[test]
+    fn import_without_learning_data_counts_unrecognized() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let rows = vec![
+            row(1, date(2026, 3, 1), "-10.00", "全新商户描述"),
+            row(2, date(2026, 3, 2), "-20.00", "另一个新商户"),
+        ];
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            rows,
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.payees_recognized, 0);
+        assert_eq!(result.unrecognized, 2);
+        assert_eq!(result.categories_auto_applied, 0);
+        assert_eq!(result.category_suggestions, 0);
         Ok(())
     }
 }
