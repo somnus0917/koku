@@ -151,14 +151,25 @@ const NOTE_ALIASES: &[&str] = &[
     "desc",
     "备注",
     "摘要",
-    "payee",
     "memo",
     "name",
-    "对方户名",
     "交易备注",
     "用途",
     "交易摘要",
     "商品说明",
+];
+
+/// 通用银行 CSV 中的「商户」列名（作为商户识别原始文本，区别于用户备注）。
+const PAYEE_ALIASES: &[&str] = &[
+    "payee",
+    "merchant",
+    "counterparty",
+    "商户",
+    "商户名称",
+    "交易对方",
+    "对方户名",
+    "收款方",
+    "付款方",
 ];
 const CURRENCY_ALIASES: &[&str] = &["currency", "币种", "货币", "交易币种"];
 const TYPE_ALIASES: &[&str] = &[
@@ -280,6 +291,7 @@ fn parse_generic_csv(mut reader: csv::Reader<&[u8]>, headers: &[String]) -> Resu
     let date_col = alias_index(headers, DATE_ALIASES);
     let amount_col = alias_index(headers, AMOUNT_ALIASES);
     let note_col = alias_index(headers, NOTE_ALIASES);
+    let payee_col = alias_index(headers, PAYEE_ALIASES);
     let currency_col = alias_index(headers, CURRENCY_ALIASES);
     let type_col = alias_index(headers, TYPE_ALIASES);
     if date_col.is_none() || amount_col.is_none() {
@@ -344,16 +356,25 @@ fn parse_generic_csv(mut reader: csv::Reader<&[u8]>, headers: &[String]) -> Resu
             });
             continue;
         }
+        let note = non_empty(get(note_col)).unwrap_or("").to_owned();
+        // 独立「商户」列作为商户识别原始文本；无独立列时回退备注（保持兼容）。
+        let raw_description = non_empty(get(payee_col)).map(str::to_owned).or_else(|| {
+            if note.is_empty() {
+                None
+            } else {
+                Some(note.clone())
+            }
+        });
         rows.push(ImportRow {
             line,
             date,
             amount,
-            note: non_empty(get(note_col)).unwrap_or("").to_owned(),
+            note,
             currency: non_empty(get(currency_col)).map(str::to_owned),
             category_name: None,
             settled_amount: None,
             payee_name: None,
-            raw_description: None,
+            raw_description,
         });
     }
     Ok((rows, issues))
@@ -388,12 +409,12 @@ pub fn parse_qif(input: &str) -> Result<ParseOutcome> {
                     message: "跳过金额为零的流水".to_owned(),
                 });
             } else {
-                let note = if memo.is_empty() {
-                    payee.trim().to_owned()
-                } else if payee.is_empty() {
-                    memo.trim().to_owned()
+                // P（收款方）作为商户识别原始文本，M（备注）作为用户备注。
+                let note = memo.trim().to_owned();
+                let raw_description = if payee.trim().is_empty() {
+                    None
                 } else {
-                    format!("{} - {}", payee.trim(), memo.trim())
+                    Some(payee.trim().to_owned())
                 };
                 rows.push(ImportRow {
                     line: record_no,
@@ -404,7 +425,7 @@ pub fn parse_qif(input: &str) -> Result<ParseOutcome> {
                     category_name: None,
                     settled_amount: None,
                     payee_name: None,
-                    raw_description: None,
+                    raw_description,
                 });
             }
         } else {
@@ -533,12 +554,17 @@ pub fn parse_ofx(input: &str) -> Result<ParseOutcome> {
         }
         let name = extract_tag(block, original, "NAME").unwrap_or_default();
         let memo = extract_tag(block, original, "MEMO").unwrap_or_default();
-        let note = if memo.is_empty() {
-            name.trim().to_owned()
-        } else if name.is_empty() {
-            memo.trim().to_owned()
+        // NAME 优先作为商户识别原始文本，MEMO 作为用户备注；
+        // NAME 为空时回退 MEMO（保持简单规则）。
+        let note = memo.trim().to_owned();
+        let raw_description = if name.trim().is_empty() {
+            if memo.trim().is_empty() {
+                None
+            } else {
+                Some(memo.trim().to_owned())
+            }
         } else {
-            format!("{} - {}", name.trim(), memo.trim())
+            Some(name.trim().to_owned())
         };
         rows.push(ImportRow {
             line: block_no,
@@ -549,7 +575,7 @@ pub fn parse_ofx(input: &str) -> Result<ParseOutcome> {
             category_name: None,
             settled_amount: None,
             payee_name: None,
-            raw_description: None,
+            raw_description,
         });
     }
     Ok((rows, issues))
@@ -884,6 +910,40 @@ id,kind,account,target_account,category,amount,currency,settled_amount,occurred_
     }
 
     #[test]
+    fn generic_csv_uses_payee_column_as_raw_description() -> Result<()> {
+        let input = "\
+日期,金额,交易对方,备注
+2024-03-01,-25.50,麦当劳,午餐
+2024-03-02,3000.00,雇主,工资
+";
+        let (rows, issues) = parse_csv(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 2);
+        // 独立商户列 → raw_description；备注列 → note。
+        assert_eq!(rows[0].raw_description.as_deref(), Some("麦当劳"));
+        assert_eq!(rows[0].note, "午餐");
+        assert_eq!(rows[0].amount, Decimal::from_str_exact("-25.50").unwrap());
+        assert_eq!(rows[1].raw_description.as_deref(), Some("雇主"));
+        assert_eq!(rows[1].note, "工资");
+        Ok(())
+    }
+
+    #[test]
+    fn generic_csv_without_payee_column_falls_back_to_note() -> Result<()> {
+        let input = "\
+日期,金额,备注
+2024-03-01,-25.50,星巴克 - 早餐
+";
+        let (rows, issues) = parse_csv(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 1);
+        // 无独立商户列：raw_description 回退备注，保持兼容。
+        assert_eq!(rows[0].raw_description.as_deref(), Some("星巴克 - 早餐"));
+        assert_eq!(rows[0].note, "星巴克 - 早餐");
+        Ok(())
+    }
+
+    #[test]
     fn qif_parses_bank_records() -> Result<()> {
         let input = "\
 !Type:Bank
@@ -901,8 +961,13 @@ P工资
         assert_eq!(rows.len(), 2);
         assert!(issues.is_empty());
         assert_eq!(rows[0].amount, Decimal::from(-100_i32));
-        assert_eq!(rows[0].note, "星巴克 - 早餐");
+        // P（收款方）→ raw_description；M（备注）→ note，不再拼接。
+        assert_eq!(rows[0].raw_description.as_deref(), Some("星巴克"));
+        assert_eq!(rows[0].note, "早餐");
         assert_eq!(rows[0].date, NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        // 只有 P 没有 M：raw_description 保留，note 为空。
+        assert_eq!(rows[1].raw_description.as_deref(), Some("工资"));
+        assert_eq!(rows[1].note, "");
         assert_eq!(rows[1].amount, Decimal::from(2000_u32));
         Ok(())
     }
@@ -932,8 +997,13 @@ OFXHEADER:100
         assert_eq!(rows.len(), 2);
         assert!(issues.is_empty());
         assert_eq!(rows[0].amount, Decimal::from_str_exact("-45.50").unwrap());
-        assert_eq!(rows[0].note, "Whole Foods - Groceries");
+        // NAME → raw_description；MEMO → note，不再拼接。
+        assert_eq!(rows[0].raw_description.as_deref(), Some("Whole Foods"));
+        assert_eq!(rows[0].note, "Groceries");
         assert_eq!(rows[0].date, NaiveDate::from_ymd_opt(2024, 3, 15).unwrap());
+        // 只有 NAME 没有 MEMO：raw_description 保留，note 为空。
+        assert_eq!(rows[1].raw_description.as_deref(), Some("Employer"));
+        assert_eq!(rows[1].note, "");
         assert_eq!(rows[1].amount, Decimal::from(2500_u32));
         Ok(())
     }
