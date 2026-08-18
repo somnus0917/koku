@@ -12,6 +12,9 @@ use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
 impl BookkeepingService {
+    /// 创建账户（不涉及信用卡字段；便捷包装，供既有调用方与测试使用）。
+    ///
+    /// 生产路径统一走 [`BookkeepingService::create_account_edit`]。
     pub fn create_account(
         &mut self,
         name: impl Into<String>,
@@ -19,14 +22,79 @@ impl BookkeepingService {
         currency: impl Into<String>,
         opening_balance: Decimal,
     ) -> Result<Account> {
-        let name = required_text(name.into(), "account name")?;
-        let currency = normalize_currency(currency.into())?;
-        let now = timestamp(Utc::now());
-        self.conn.execute(
-            "INSERT INTO accounts(name, account_type, currency, balance, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![name, account_type.as_str(), currency, decimal_to_db(opening_balance), now],
+        self.create_account_edit(
+            name.into(),
+            account_type,
+            currency.into(),
+            opening_balance,
+            None,
+            None,
+            None,
+        )
+    }
+
+    /// 一次创建账户请求的全部字段在同一个事务内原子写入（生产统一入口）。
+    ///
+    /// 覆盖 name / account_type / currency / opening_balance / credit_limit /
+    /// statement_day / due_day。
+    ///
+    /// 语义：
+    /// - `credit_limit` / `statement_day` / `due_day` 提供非空值时，
+    ///   最终账户类型必须为 Credit，否则报错；
+    /// - `credit_limit` 必须 >= 0；`statement_day` / `due_day` 必须为 1..=31；
+    /// - 任一步校验失败整体回滚，账户不落库。
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_account_edit(
+        &mut self,
+        name: String,
+        account_type: AccountType,
+        currency: String,
+        opening_balance: Decimal,
+        credit_limit: Option<Decimal>,
+        statement_day: Option<u32>,
+        due_day: Option<u32>,
+    ) -> Result<Account> {
+        let name = required_text(name, "account name")?;
+        let currency = normalize_currency(currency)?;
+        // 信用字段校验：非空值仅允许 Credit 账户；额度 >= 0；账单/还款日 1..=31。
+        if (credit_limit.is_some() || statement_day.is_some() || due_day.is_some())
+            && account_type != AccountType::Credit
+        {
+            return Err(KokuError::InvalidInput(
+                "credit limit, statement day, and due day are only available for credit accounts"
+                    .to_owned(),
+            ));
+        }
+        if let Some(limit) = credit_limit {
+            if limit < Decimal::ZERO {
+                return Err(KokuError::InvalidInput(
+                    "credit limit cannot be negative".to_owned(),
+                ));
+            }
+        }
+        validate_credit_day(statement_day, "statement day")?;
+        validate_credit_day(due_day, "due day")?;
+
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO accounts(name, account_type, currency, balance, created_at, credit_limit, statement_day, due_day)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                name,
+                account_type.as_str(),
+                currency,
+                decimal_to_db(opening_balance),
+                timestamp(Utc::now()),
+                credit_limit.map(decimal_to_db),
+                statement_day.map(i64::from),
+                due_day.map(i64::from),
+            ],
         )?;
-        self.account(self.conn.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        self.account(id)
     }
 
     /// 更新账户名称/类型/币种；有交易历史的账户不允许改币种（避免历史流水语义混乱）。
@@ -215,7 +283,25 @@ impl BookkeepingService {
     }
 
     /// 设置或清除信用额度（仅对信用账户有意义）。
+    ///
+    /// 设置非空额度要求账户为 Credit，且额度 >= 0；生产路径统一走
+    /// [`BookkeepingService::create_account_edit`] / [`BookkeepingService::update_account_edit`]，
+    /// 本方法作为便捷设置器供测试使用（二进制构建中仅测试引用）。
+    #[allow(dead_code)]
     pub fn set_credit_limit(&mut self, id: i64, credit_limit: Option<Decimal>) -> Result<Account> {
+        let account = self.account(id)?;
+        if let Some(limit) = credit_limit {
+            if account.account_type != AccountType::Credit {
+                return Err(KokuError::InvalidInput(
+                    "credit limit is only available for credit accounts".to_owned(),
+                ));
+            }
+            if limit < Decimal::ZERO {
+                return Err(KokuError::InvalidInput(
+                    "credit limit cannot be negative".to_owned(),
+                ));
+            }
+        }
         self.conn.execute(
             "UPDATE accounts SET credit_limit = ?1 WHERE id = ?2",
             params![credit_limit.map(decimal_to_db), id],
@@ -225,11 +311,18 @@ impl BookkeepingService {
 
     /// 设置或清除账单日（1~31，可空；仅对信用账户有意义）。
     ///
-    /// 生产路径统一走 [`BookkeepingService::update_account_edit`]；本方法作为
-    /// 便捷设置器供测试使用（二进制构建中仅测试引用）。
+    /// 设置非空账单日要求账户为 Credit；生产路径统一走
+    /// [`BookkeepingService::update_account_edit`]；本方法作为便捷设置器供测试使用
+    /// （二进制构建中仅测试引用）。
     #[allow(dead_code)]
     pub fn set_statement_day(&mut self, id: i64, statement_day: Option<u32>) -> Result<Account> {
         validate_credit_day(statement_day, "statement day")?;
+        let account = self.account(id)?;
+        if statement_day.is_some() && account.account_type != AccountType::Credit {
+            return Err(KokuError::InvalidInput(
+                "statement day is only available for credit accounts".to_owned(),
+            ));
+        }
         self.conn.execute(
             "UPDATE accounts SET statement_day = ?1 WHERE id = ?2",
             params![statement_day.map(i64::from), id],
@@ -239,11 +332,18 @@ impl BookkeepingService {
 
     /// 设置或清除还款日（1~31，可空；仅对信用账户有意义）。
     ///
-    /// 生产路径统一走 [`BookkeepingService::update_account_edit`]；本方法作为
-    /// 便捷设置器供测试使用（二进制构建中仅测试引用）。
+    /// 设置非空还款日要求账户为 Credit；生产路径统一走
+    /// [`BookkeepingService::update_account_edit`]；本方法作为便捷设置器供测试使用
+    /// （二进制构建中仅测试引用）。
     #[allow(dead_code)]
     pub fn set_due_day(&mut self, id: i64, due_day: Option<u32>) -> Result<Account> {
         validate_credit_day(due_day, "due day")?;
+        let account = self.account(id)?;
+        if due_day.is_some() && account.account_type != AccountType::Credit {
+            return Err(KokuError::InvalidInput(
+                "due day is only available for credit accounts".to_owned(),
+            ));
+        }
         self.conn.execute(
             "UPDATE accounts SET due_day = ?1 WHERE id = ?2",
             params![due_day.map(i64::from), id],

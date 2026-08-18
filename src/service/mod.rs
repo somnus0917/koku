@@ -2246,6 +2246,138 @@ mod tests {
         Ok(())
     }
 
+    // ------------------------------------------------------------------
+    // 账户创建原子性：name/type/currency/opening_balance/credit 字段一次事务
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn create_savings_with_credit_limit_fails_and_does_not_persist() -> Result<()> {
+        let mut service = test_service()?;
+        let before = service.accounts()?.len();
+        // Savings + credit_limit → 校验失败，账户不落库。
+        assert!(service
+            .create_account_edit(
+                "储蓄".to_owned(),
+                AccountType::Savings,
+                "CNY".to_owned(),
+                Decimal::ZERO,
+                Some(Decimal::from(10000_u32)),
+                None,
+                None,
+            )
+            .is_err());
+        assert_eq!(service.accounts()?.len(), before);
+        // 非 Credit 设置 statement_day / due_day 同样拒绝。
+        assert!(service
+            .create_account_edit(
+                "零钱".to_owned(),
+                AccountType::Cash,
+                "CNY".to_owned(),
+                Decimal::ZERO,
+                None,
+                Some(10),
+                None,
+            )
+            .is_err());
+        assert_eq!(service.accounts()?.len(), before);
+        Ok(())
+    }
+
+    #[test]
+    fn create_credit_with_all_credit_settings_succeeds() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account_edit(
+            "招商 Visa".to_owned(),
+            AccountType::Credit,
+            "CNY".to_owned(),
+            Decimal::from(500_u32),
+            Some(Decimal::from(20000_u32)),
+            Some(10),
+            Some(25),
+        )?;
+        assert_eq!(credit.account_type, AccountType::Credit);
+        assert_eq!(credit.balance, Decimal::from(500_u32));
+        assert_eq!(credit.credit_limit, Some(Decimal::from(20000_u32)));
+        assert_eq!(credit.statement_day, Some(10));
+        assert_eq!(credit.due_day, Some(25));
+        Ok(())
+    }
+
+    #[test]
+    fn create_credit_with_invalid_due_day_fails_and_does_not_persist() -> Result<()> {
+        let mut service = test_service()?;
+        let before = service.accounts()?.len();
+        // due_day=32 → 校验失败，账户不落库。
+        assert!(service
+            .create_account_edit(
+                "信用卡".to_owned(),
+                AccountType::Credit,
+                "CNY".to_owned(),
+                Decimal::ZERO,
+                None,
+                None,
+                Some(32),
+            )
+            .is_err());
+        assert_eq!(service.accounts()?.len(), before);
+        // statement_day=0 同样拒绝。
+        assert!(service
+            .create_account_edit(
+                "信用卡2".to_owned(),
+                AccountType::Credit,
+                "CNY".to_owned(),
+                Decimal::ZERO,
+                None,
+                Some(0),
+                None,
+            )
+            .is_err());
+        assert_eq!(service.accounts()?.len(), before);
+        Ok(())
+    }
+
+    #[test]
+    fn create_credit_with_negative_limit_is_rejected() -> Result<()> {
+        let mut service = test_service()?;
+        let before = service.accounts()?.len();
+        assert!(service
+            .create_account_edit(
+                "信用卡".to_owned(),
+                AccountType::Credit,
+                "CNY".to_owned(),
+                Decimal::ZERO,
+                Some(Decimal::from(-1)),
+                None,
+                None,
+            )
+            .is_err());
+        assert_eq!(service.accounts()?.len(), before);
+        Ok(())
+    }
+
+    #[test]
+    fn plain_cash_and_savings_creation_unaffected() -> Result<()> {
+        let mut service = test_service()?;
+        // 不带信用字段的普通创建照常工作。
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        assert_eq!(cash.balance, Decimal::from(100_u32));
+        assert_eq!(cash.credit_limit, None);
+        let savings = service.create_account_edit(
+            "储蓄".to_owned(),
+            AccountType::Savings,
+            "CNY".to_owned(),
+            Decimal::from(1000_u32),
+            None,
+            None,
+            None,
+        )?;
+        assert_eq!(savings.account_type, AccountType::Savings);
+        assert_eq!(savings.statement_day, None);
+        assert_eq!(savings.due_day, None);
+        Ok(())
+    }
+
     #[test]
     fn loans_from_same_counterparty_merge_until_settled() -> Result<()> {
         let mut service = test_service()?;

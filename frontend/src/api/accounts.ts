@@ -8,6 +8,8 @@ export function createAccount(input: {
   currency: string;
   opening_balance: string;
   credit_limit?: string;
+  statement_day?: number;
+  due_day?: number;
 }): Promise<Account> {
   return request("/api/accounts", {
     method: "POST",

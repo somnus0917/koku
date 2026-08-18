@@ -19,8 +19,15 @@ struct CreateAccountRequest {
     account_type: AccountType,
     currency: String,
     opening_balance: Decimal,
-    /// 信用额度（仅信用账户）
+    /// 信用额度（仅信用账户；必须 >= 0）
+    #[serde(default)]
     credit_limit: Option<Decimal>,
+    /// 账单日（1~31；仅信用账户）
+    #[serde(default)]
+    statement_day: Option<u32>,
+    /// 还款日（1~31；仅信用账户）
+    #[serde(default)]
+    due_day: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,16 +67,17 @@ async fn api_create_account(
     Json(request): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Account>>)> {
     let mut service = lock_ledger(&state, user.user_id).await?;
-    let account = service.create_account(
+    // 名称/类型/币种/期初余额/额度/账单日/还款日在同一个 SQLite 事务内原子写入，
+    // 任一步校验失败全部回滚、账户不落库。
+    let account = service.create_account_edit(
         request.name,
         request.account_type,
         request.currency,
         request.opening_balance,
+        request.credit_limit,
+        request.statement_day,
+        request.due_day,
     )?;
-    let account = match request.credit_limit {
-        Some(limit) => service.set_credit_limit(account.id, Some(limit))?,
-        None => account,
-    };
     Ok((StatusCode::CREATED, Json(ApiResponse::new(account))))
 }
 
