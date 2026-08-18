@@ -277,19 +277,26 @@ impl BookkeepingService {
             (amount * rate).round_dp(2)
         };
 
-        // 去重指纹：(账户, 类型, 时间, 结算金额, 备注)。
+        // 去重指纹：(账户, 类型, 时间, 金额, 币种, 结算金额, 原始描述, 备注)。
+        // 原始描述必须参与指纹：QIF/OFX 拆分后，同日同金额但商户不同的两笔流水
+        // 不能因 note 为空而被误判为重复（宁可保守，不误删合法交易）。
         let duplicate: Option<i64> = self
             .conn
             .query_row(
                 "SELECT 1 FROM transactions
                  WHERE account_id = ?1 AND kind = ?2 AND occurred_at = ?3
-                   AND settled_amount = ?4 AND note = ?5 AND voided_at IS NULL
+                   AND amount = ?4 AND currency = ?5 AND settled_amount = ?6
+                   AND COALESCE(raw_description, '') = ?7 AND note = ?8
+                   AND voided_at IS NULL
                  LIMIT 1",
                 params![
                     account_id,
                     kind.as_str(),
                     timestamp(occurred_at),
+                    decimal_to_db(amount),
+                    currency,
                     decimal_to_db(settled_amount),
+                    raw_description,
                     row.note
                 ],
                 |row| row.get(0),
@@ -351,6 +358,7 @@ impl BookkeepingService {
 mod tests {
     use super::*;
     use crate::domain::AccountType;
+    use crate::importer::parse_qif;
     use crate::service::payees::{AUTO_CATEGORY_CONFIDENCE, SUGGEST_CATEGORY_CONFIDENCE};
     use chrono::NaiveDate;
 
@@ -710,6 +718,140 @@ mod tests {
         let transaction = service.transactions(100, 0)?[0].clone();
         assert!(transaction.payee_id.is_none());
         assert_eq!(transaction.raw_description.as_deref(), Some("午饭"));
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 去重指纹包含原始商户描述：同商户才是重复，不同商户不被误判
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn same_day_same_amount_different_payees_both_import() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut mcd = row(1, date(2026, 3, 1), "-30.00", "");
+        mcd.raw_description = Some("麦当劳".to_owned());
+        let mut sbux = row(2, date(2026, 3, 1), "-30.00", "");
+        sbux.raw_description = Some("星巴克".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![mcd, sbux],
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn qif_payees_without_memo_are_not_deduplicated() -> Result<()> {
+        let input = "\
+!Type:Bank
+D03/15/2024
+T-30.00
+P麦当劳
+^
+D03/15/2024
+T-30.00
+P星巴克
+^
+";
+        let (rows, issues) = parse_qif(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 2);
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let result = service.import_transactions(
+            ImportFormat::Qif,
+            account_id,
+            Some(food_id),
+            None,
+            rows,
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn identical_rows_are_still_deduplicated() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.raw_description = Some("麦当劳".to_owned());
+        let mut b = row(2, date(2026, 3, 1), "-30.00", "午餐");
+        b.raw_description = Some("麦当劳".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a, b],
+        )?;
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.skipped_duplicates, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn same_payee_amount_day_but_different_note_imports_both() -> Result<()> {
+        // 保守原则：note 不同 → 视为不同交易，不误删。
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.raw_description = Some("麦当劳".to_owned());
+        let mut b = row(2, date(2026, 3, 1), "-30.00", "晚餐");
+        b.raw_description = Some("麦当劳".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a, b],
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 0);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 无意义建议抑制：默认分类 == 预测分类时不生成建议
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn suggestion_matching_default_category_is_suppressed() -> Result<()> {
+        let (mut service, account_id, _) = seeded_service()?;
+        let food = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "餐饮")
+            .unwrap();
+        let shopping = service
+            .categories()?
+            .into_iter()
+            .find(|item| item.name == "购物")
+            .unwrap();
+        // 京东：7 餐饮 / 3 购物 → 80% 属于建议区间。
+        let jd = service.get_or_create_payee("京东")?;
+        service.learn_alias("京东商城", jd.id)?;
+        for _ in 0..7 {
+            learn(&mut service, jd.id, food.id)?;
+        }
+        for _ in 0..3 {
+            learn(&mut service, jd.id, shopping.id)?;
+        }
+        let mut imported_row = row(1, date(2026, 3, 2), "-99.00", "京东商城");
+        imported_row.note = "支付宝-京东商城".to_owned();
+        // 默认分类 = 餐饮（= 预测分类）→ 建议被抑制，普通成功导入。
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food.id),
+            None,
+            vec![imported_row],
+        )?;
+        assert_eq!(result.imported, 1);
+        assert_eq!(result.category_suggestion_count, 0);
+        assert!(result.category_suggestions.is_empty());
+        assert_eq!(result.categories_auto_applied, 0);
         Ok(())
     }
 
