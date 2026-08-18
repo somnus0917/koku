@@ -2379,6 +2379,52 @@ mod tests {
     }
 
     #[test]
+    fn update_with_negative_credit_limit_rolls_back_everything() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account_edit(
+            "招商 Visa".to_owned(),
+            AccountType::Credit,
+            "CNY".to_owned(),
+            Decimal::ZERO,
+            Some(Decimal::from(20000_u32)),
+            None,
+            None,
+        )?;
+        assert_eq!(credit.credit_limit, Some(Decimal::from(20000_u32)));
+        // 同一次请求：改 name + credit_limit=-100 → 负额度校验失败，整体回滚。
+        assert!(service
+            .update_account_edit(
+                credit.id,
+                Some("新名字".to_owned()),
+                None,
+                None,
+                Some(Some(Decimal::from(-100))),
+                None,
+                None,
+            )
+            .is_err());
+        let after = service.account(credit.id)?;
+        // 原 credit_limit 仍是 20000，name 也未被修改。
+        assert_eq!(after.credit_limit, Some(Decimal::from(20000_u32)));
+        assert_eq!(after.name, "招商 Visa");
+        // 清除（null）与合法值仍允许。
+        let cleared =
+            service.update_account_edit(credit.id, None, None, None, Some(None), None, None)?;
+        assert_eq!(cleared.credit_limit, None);
+        let reset = service.update_account_edit(
+            credit.id,
+            None,
+            None,
+            None,
+            Some(Some(Decimal::from(30000_u32))),
+            None,
+            None,
+        )?;
+        assert_eq!(reset.credit_limit, Some(Decimal::from(30000_u32)));
+        Ok(())
+    }
+
+    #[test]
     fn loans_from_same_counterparty_merge_until_settled() -> Result<()> {
         let mut service = test_service()?;
         let savings = service.create_account(

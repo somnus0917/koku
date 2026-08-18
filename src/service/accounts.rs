@@ -185,6 +185,13 @@ impl BookkeepingService {
         if let Some(Some(day)) = due_day {
             validate_credit_day(Some(day), "due day")?;
         }
+        if let Some(Some(limit)) = credit_limit {
+            if limit < Decimal::ZERO {
+                return Err(KokuError::InvalidInput(
+                    "credit limit cannot be negative".to_owned(),
+                ));
+            }
+        }
         // 类型切换：有交易历史时禁止 Credit ↔ 非 Credit（余额语义翻转）。
         if final_type != current.account_type
             && current.account_type.is_liability() != final_type.is_liability()
