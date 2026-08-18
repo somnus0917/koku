@@ -1,0 +1,17 @@
+//! API 模块出口：保持原有 `import ... from "../api"` 用法不变。
+export { ApiError } from "./client";
+export * from "./auth";
+export * from "./accounts";
+export * from "./categories";
+export * from "./transactions";
+export * from "./deposits";
+export * from "./loans";
+export * from "./holdings";
+export * from "./budgets";
+export * from "./recurring";
+export * from "./reconciliations";
+export * from "./reimbursements";
+export * from "./summaries";
+export * from "./rates";
+export * from "./reminders";
+export * from "./admin";
