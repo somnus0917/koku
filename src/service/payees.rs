@@ -246,6 +246,10 @@ impl BookkeepingService {
     /// 对应的 `payee_category_stats.count - 1`（减到 0 删除该统计行），
     /// 最后删除该交易的 `transaction_learning` 行。用于永久删除交易
     /// 与人工修改导致的学习撤销。
+    ///
+    /// 注意：`void_transaction`（账务撤销）**不**调用本函数——交易被撤销
+    /// 不代表「Payee → Category」知识错误，学习样本保留；只有永久删除
+    /// 交易时才同步撤销其学习贡献（见 `delete_transaction_in_tx`）。
     pub(super) fn revoke_transaction_learning_in_tx(
         tx: &SqlTransaction<'_>,
         transaction_id: i64,
@@ -384,13 +388,17 @@ impl BookkeepingService {
     }
 
     /// 清除全部自动分类学习数据（merchant_aliases / payee_category_stats /
-    /// transaction_learning）。
+    /// transaction_learning），原子执行：要么全部成功，要么全部回滚。
     ///
     /// 不删除 Payee、不删除交易、不修改已有交易分类——仅让后续不再复用旧知识。
     pub fn clear_payee_learning(&mut self) -> Result<()> {
-        self.conn.execute("DELETE FROM merchant_aliases", [])?;
-        self.conn.execute("DELETE FROM payee_category_stats", [])?;
-        self.conn.execute("DELETE FROM transaction_learning", [])?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM merchant_aliases", [])?;
+        tx.execute("DELETE FROM payee_category_stats", [])?;
+        tx.execute("DELETE FROM transaction_learning", [])?;
+        tx.commit()?;
         Ok(())
     }
 }
@@ -987,6 +995,22 @@ mod tests {
         service.void_transaction(plain)?;
         service.delete_transaction(plain)?;
         assert_eq!(stats_count(&service, payee.id, food)?, 1);
+        Ok(())
+    }
+
+    /// void（账务撤销）不撤销学习样本；永久 delete 才撤销（明确语义，防止
+    /// 未来误以为遗漏）。
+    #[test]
+    fn void_keeps_learning_until_permanent_delete() -> Result<()> {
+        let (mut service, food, _) = seeded()?;
+        let payee = service.get_or_create_payee("星巴克")?;
+        let tx_id = confirm_tx(&mut service, payee.id, food)?;
+        // void 后：学习样本与统计保持不变。
+        service.void_transaction(tx_id)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 1);
+        // 永久删除后：学习贡献撤销。
+        service.delete_transaction(tx_id)?;
+        assert_eq!(stats_count(&service, payee.id, food)?, 0);
         Ok(())
     }
 
