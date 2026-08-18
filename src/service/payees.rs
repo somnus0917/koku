@@ -291,11 +291,20 @@ impl BookkeepingService {
     ///    （`payee_category_stats.count - 1`，减到 0 删除该行）；
     /// 3. 若当前 Payee + Category 都存在，给新组合 +1；
     /// 4. 更新 `transaction_learning`（当前组合与已记录一致时直接返回，不重复累加）。
+    ///
+    /// 有拆分的交易不参与单一 Payee → Category 学习（分类归属以拆分为准，
+    /// 父分类不能代表整笔交易）：先撤销旧贡献、不新增样本，直接返回。
+    /// 判断使用提交后最终状态：任何带 splits 的请求都不会产生学习样本。
     pub fn confirm_transaction_learning(&mut self, transaction_id: i64) -> Result<()> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+        if Self::transaction_has_splits_in_tx(&tx, transaction_id)? {
+            Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
+            tx.commit()?;
+            return Ok(());
+        }
         let current_pair = match (transaction.payee_id, transaction.category_id) {
             (Some(payee_id), Some(category_id)) => Some((payee_id, category_id)),
             _ => None,

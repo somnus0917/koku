@@ -46,6 +46,8 @@ impl BookkeepingService {
     ///
     /// 校验顺序：交易存在 → 类型支持拆分 → 各拆分分类存在且类型匹配 →
     /// 金额 > 0 → 总和等于父交易金额 → 整体替换；任一步失败全部回滚。
+    /// 拆分一旦存在，该交易此前的单分类学习样本在同一事务内撤销
+    /// （有拆分的交易不参与 Payee → Category 学习，见 `confirm_transaction_learning`）。
     pub fn set_transaction_splits(
         &mut self,
         transaction_id: i64,
@@ -55,18 +57,44 @@ impl BookkeepingService {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
-        if !matches!(
-            transaction.kind,
-            TransactionKind::Expense | TransactionKind::Income
-        ) {
-            return Err(KokuError::InvalidInput(
-                "only expense and income transactions can be split".to_owned(),
-            ));
+        Self::validate_splits_in_tx(&tx, transaction.kind, splits, transaction.amount)?;
+        Self::replace_transaction_splits_in_tx(&tx, transaction_id, splits)?;
+        if !splits.is_empty() {
+            Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
         }
-        let expected_kind = match transaction.kind {
+        tx.commit()?;
+        self.list_transaction_splits(transaction_id)
+    }
+
+    /// 事务内：交易是否存在 ≥1 条拆分。
+    pub(super) fn transaction_has_splits_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction_id: i64,
+    ) -> Result<bool> {
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM transaction_splits WHERE transaction_id = ?1",
+            [transaction_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// 事务内：校验拆分（仅 expense/income、分类存在且类型匹配、金额 > 0、
+    /// 总和等于期望值）。任一步失败即返回错误，调用方负责回滚。
+    pub(super) fn validate_splits_in_tx(
+        tx: &SqlTransaction<'_>,
+        kind: TransactionKind,
+        splits: &[SplitInput],
+        expected_total: Decimal,
+    ) -> Result<()> {
+        let expected_kind = match kind {
             TransactionKind::Expense => CategoryKind::Expense,
             TransactionKind::Income => CategoryKind::Income,
-            _ => unreachable!("validated above"),
+            _ => {
+                return Err(KokuError::InvalidInput(
+                    "only expense and income transactions can be split".to_owned(),
+                ))
+            }
         };
         let mut total = Decimal::ZERO;
         for split in splits {
@@ -75,7 +103,7 @@ impl BookkeepingService {
                     "split amount must be greater than zero".to_owned(),
                 ));
             }
-            let category = Self::category_in_tx(&tx, split.category_id)?;
+            let category = Self::category_in_tx(tx, split.category_id)?;
             if category.kind != expected_kind {
                 return Err(KokuError::CategoryKindMismatch {
                     expected: expected_kind.as_str(),
@@ -84,13 +112,20 @@ impl BookkeepingService {
             }
             total += split.amount;
         }
-        if total != transaction.amount {
+        if total != expected_total {
             return Err(KokuError::InvalidInput(format!(
-                "split amounts must sum to the transaction amount ({})",
-                transaction.amount
+                "split amounts must sum to the transaction amount ({expected_total})"
             )));
         }
-        // 原子替换旧拆分。
+        Ok(())
+    }
+
+    /// 事务内：整体替换交易拆分（DELETE + INSERT，同一事务）。
+    pub(super) fn replace_transaction_splits_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction_id: i64,
+        splits: &[SplitInput],
+    ) -> Result<()> {
         tx.execute(
             "DELETE FROM transaction_splits WHERE transaction_id = ?1",
             [transaction_id],
@@ -109,8 +144,7 @@ impl BookkeepingService {
                 ],
             )?;
         }
-        tx.commit()?;
-        self.list_transaction_splits(transaction_id)
+        Ok(())
     }
 
     /// 清除交易的拆分（等价于空列表）。

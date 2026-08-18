@@ -67,6 +67,10 @@ struct UpdateTransactionRequest {
     /// 商户/收款方：提供非空值按名称设置并学习；提供空串清除；不提供保持不变。
     #[serde(default)]
     payee_name: Option<String>,
+    /// 拆分分类（可选）：不提供保持不变；空数组清除拆分；提供数组则与父交易
+    /// 字段在同一个事务内整体替换（各拆分金额之和须等于最终父交易金额）。
+    #[serde(default)]
+    splits: Option<Vec<SplitInput>>,
 }
 
 async fn api_transactions(
@@ -227,7 +231,8 @@ async fn api_update_transaction(
     // 只有用户显式修改 Payee 或 Category 才视为人工确认（机器自动识别的导入
     // 交易仅改 note/amount/时间/账户等无关字段不应反向强化学习）。
     let should_confirm_learning = request.payee_name.is_some() || request.category_id.is_some();
-    service.update_transaction(
+    // 父交易字段 + 拆分在同一个 SQLite 事务内原子提交（含学习撤销）。
+    service.update_transaction_with_splits(
         transaction_id,
         request.note,
         request.occurred_at,
@@ -235,6 +240,7 @@ async fn api_update_transaction(
         request.amount,
         request.account_id,
         request.settled_amount,
+        request.splits.as_deref(),
     )?;
     if let Some(payee_name) = request.payee_name {
         service.set_transaction_payee(transaction_id, Some(&payee_name))?;

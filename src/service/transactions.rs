@@ -5,7 +5,7 @@ use rusqlite::{params, TransactionBehavior};
 use rust_decimal::Decimal;
 
 use super::*;
-use crate::domain::{CategoryKind, Transaction, TransactionKind};
+use crate::domain::{CategoryKind, SplitInput, Transaction, TransactionKind};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
@@ -525,6 +525,13 @@ impl BookkeepingService {
     /// 可改字段：备注、时间、分类、金额、账户（须与旧账户同币种）、结算额。
     /// 不可改：已撤销的流水、转账/借款/调整流水、已发生报销的支出、报销收入
     /// 流水的金额/账户/结算额（这些只允许改备注/分类/时间）。
+    ///
+    /// 不涉及拆分；等价于以 `splits: None` 调用
+    /// [`BookkeepingService::update_transaction_with_splits`]。
+    ///
+    /// 生产路径统一走 `update_transaction_with_splits`；本方法作为便捷包装
+    /// 供测试与明确「不改拆分」的调用方使用（二进制构建中仅测试引用）。
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub fn update_transaction(
         &mut self,
@@ -535,6 +542,41 @@ impl BookkeepingService {
         amount: Option<Decimal>,
         account_id: Option<i64>,
         settled_amount: Option<Decimal>,
+    ) -> Result<Transaction> {
+        self.update_transaction_with_splits(
+            transaction_id,
+            note,
+            occurred_at,
+            category_id,
+            amount,
+            account_id,
+            settled_amount,
+            None,
+        )
+    }
+
+    /// 编辑一笔收入/支出流水，并可选地原子替换其拆分分类。
+    ///
+    /// 与 [`BookkeepingService::update_transaction`] 相同的字段规则，另加
+    /// `splits` 参数：`None` = 不动拆分（此时若改了金额且交易已有拆分，
+    /// 新金额必须等于旧拆分总和）；`Some(&[])` = 清除拆分；`Some(列表)` =
+    /// 校验后整体替换（总和须等于最终新金额）。
+    ///
+    /// 父交易字段、余额调整与拆分替换在同一个 `BEGIN IMMEDIATE` 事务内
+    /// 完成：任一步失败全部回滚，绝不出现「父交易已更新、拆分未生效」的
+    /// 中间状态。拆分一旦存在，该交易此前的学习样本在同一事务内撤销
+    /// （有拆分的交易不参与 Payee → Category 学习）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_transaction_with_splits(
+        &mut self,
+        transaction_id: i64,
+        note: Option<String>,
+        occurred_at: Option<DateTime<Utc>>,
+        category_id: Option<i64>,
+        amount: Option<Decimal>,
+        account_id: Option<i64>,
+        settled_amount: Option<Decimal>,
+        splits: Option<&[SplitInput]>,
     ) -> Result<Transaction> {
         let tx = self
             .conn
@@ -605,15 +647,25 @@ impl BookkeepingService {
             positive_amount(settled)?;
             settled
         };
-        // 拆分一致性：已有拆分时，父金额必须等于拆分总和（第一版不自动按比例改拆分）。
-        if amount.is_some() {
-            if let Some(total) = Self::splits_total_in_tx(&tx, transaction_id)? {
-                if total != new_amount {
-                    return Err(KokuError::InvalidInput(format!(
-                        "transaction amount must equal the split total ({total}) when splits exist"
-                    )));
+        // 拆分处理（与父交易同事务）：
+        // - 显式提供 splits：非空则校验后整体替换，总和须等于最终新金额；
+        //   空数组表示清除拆分，无约束；
+        // - 未提供但改了金额：沿用旧规则——已有拆分时新金额必须等于旧拆分总和
+        //   （第一版不自动按比例改拆分）。
+        match splits {
+            Some(items) if !items.is_empty() => {
+                Self::validate_splits_in_tx(&tx, transaction.kind, items, new_amount)?;
+            }
+            None if amount.is_some() => {
+                if let Some(total) = Self::splits_total_in_tx(&tx, transaction_id)? {
+                    if total != new_amount {
+                        return Err(KokuError::InvalidInput(format!(
+                            "transaction amount must equal the split total ({total}) when splits exist"
+                        )));
+                    }
                 }
             }
+            _ => {}
         }
         if let Some(category_id) = category_id {
             let category = Self::category_in_tx(&tx, category_id)?;
@@ -670,6 +722,13 @@ impl BookkeepingService {
                 transaction_id
             ],
         )?;
+        // 拆分替换与学习撤销在同一事务内完成（原子）。
+        if let Some(items) = splits {
+            Self::replace_transaction_splits_in_tx(&tx, transaction_id, items)?;
+            if !items.is_empty() {
+                Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
+            }
+        }
         tx.commit()?;
         self.transaction(transaction_id)
     }
