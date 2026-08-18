@@ -64,6 +64,7 @@ export function ImportModal({
         current
           ? {
               ...current,
+              category_suggestion_count: Math.max(0, current.category_suggestion_count - 1),
               category_suggestions: current.category_suggestions.filter(
                 (item) => item.transaction_id !== suggestion.transaction_id
               )
