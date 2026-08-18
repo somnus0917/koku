@@ -121,6 +121,7 @@ export function TransactionRow({
           <span className="transaction-meta">
             <span>{payeeMeta ?? meta.label}</span>
             {reimbursable ? <span className="reimburse-status">{t("transactions.pendingReimburse")}</span> : ""}
+            {transaction.has_splits ? <span className="split-status">{t("transactions.split")}</span> : ""}
             {transaction.has_receipt ? <span className="receipt-status"><Paperclip size={11} /> {t("transactions.receipt")}</span> : ""}
             {transaction.tags.map((tag) => (
               <span className="transaction-tag" key={tag}>#{tag}</span>

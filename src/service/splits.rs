@@ -759,6 +759,24 @@ mod tests {
     }
 
     #[test]
+    fn transaction_payload_exposes_has_splits_flag() -> Result<()> {
+        let (mut service, account, food, shopping, _) = seeded()?;
+        let tx =
+            service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
+        assert!(!service.transaction(tx.id)?.has_splits);
+        service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
+        assert!(service.transaction(tx.id)?.has_splits);
+        // 列表查询同样暴露标记（供前端列表打标，无 N+1）。
+        let listed = service.transactions(10, 0)?;
+        assert!(listed
+            .iter()
+            .any(|item| item.id == tx.id && item.has_splits));
+        service.clear_transaction_splits(tx.id)?;
+        assert!(!service.transaction(tx.id)?.has_splits);
+        Ok(())
+    }
+
+    #[test]
     fn request_with_payee_and_splits_never_creates_a_sample() -> Result<()> {
         let (mut service, account, food, shopping, _) = seeded()?;
         let tx =

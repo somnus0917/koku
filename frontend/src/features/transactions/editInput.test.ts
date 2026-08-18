@@ -23,6 +23,7 @@ function makeTransaction(overrides: Partial<Transaction> = {}): Transaction {
     reimbursed_at: null,
     reimbursed_amount: "0",
     has_receipt: false,
+    has_splits: false,
     tags: [],
     payee_id: null,
     payee_name: null,

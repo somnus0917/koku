@@ -254,6 +254,7 @@ export const en = {
         voidedSuffix: " · voided",
         pendingReimburse: "To reimburse",
         receipt: "Receipt",
+        split: "Split",
         original: "orig.",
         arrived: "to",
         settledLabel: "settled",

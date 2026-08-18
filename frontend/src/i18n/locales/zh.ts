@@ -254,6 +254,7 @@ export const zh = {
         voidedSuffix: " · 已撤销",
         pendingReimburse: "待报销",
         receipt: "小票",
+        split: "拆分",
         original: "原币",
         arrived: "到账",
         settledLabel: "入账",

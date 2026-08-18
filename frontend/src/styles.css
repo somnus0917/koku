@@ -2898,6 +2898,19 @@ button:disabled {
   font-weight: 650;
 }
 
+.transaction-meta .split-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
 .transaction-meta .transaction-tag {
   flex: 0 0 auto;
   padding: 1px 6px;

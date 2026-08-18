@@ -36,6 +36,7 @@ pub(super) type TransactionRow = (
     Option<i64>,
     Option<String>,
     Option<String>,
+    bool,
 );
 
 pub(super) fn account_from_row(row: AccountRow) -> Result<Account> {
@@ -105,6 +106,7 @@ pub(super) fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Trans
         row.get(19)?,
         row.get(20)?,
         row.get(21)?,
+        row.get(22)?,
     ))
 }
 
@@ -132,6 +134,7 @@ pub(super) fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         payee_id: row.19,
         raw_description: row.20,
         payee_name: row.21,
+        has_splits: row.22,
     })
 }
 

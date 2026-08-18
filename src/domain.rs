@@ -272,6 +272,9 @@ pub struct Transaction {
     pub reimbursed_amount: Decimal,
     /// 是否已挂有小票/发票附件
     pub has_receipt: bool,
+    /// 是否已有拆分分类（父交易仅作默认分类，统计以拆分为准）
+    #[serde(default)]
+    pub has_splits: bool,
     /// 关联标签（标签名，按创建顺序）
     #[serde(default)]
     pub tags: Vec<String>,
