@@ -15,6 +15,9 @@ use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 struct CreateCategoryRequest {
     name: String,
     kind: CategoryKind,
+    /// 用户自选图标（lucide 图标名，可空；空白视为未选择）。
+    #[serde(default)]
+    icon: Option<String>,
 }
 
 async fn api_categories(
@@ -32,7 +35,7 @@ async fn api_create_category(
 ) -> Result<(StatusCode, Json<ApiResponse<Category>>)> {
     let category = lock_ledger(&state, user.user_id)
         .await?
-        .create_category(request.name, request.kind)?;
+        .create_category_with_icon(request.name, request.kind, request.icon)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
 }
 

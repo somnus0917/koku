@@ -97,13 +97,14 @@ impl BookkeepingService {
     fn category_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Category> {
         let row = tx
             .query_row(
-                "SELECT id, name, kind FROM categories WHERE id = ?1 AND archived_at IS NULL",
+                "SELECT id, name, kind, icon FROM categories WHERE id = ?1 AND archived_at IS NULL",
                 [id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
@@ -632,6 +633,48 @@ mod tests {
             .categories()?
             .iter()
             .any(|item| item.id == travel.id));
+        Ok(())
+    }
+
+    #[test]
+    fn category_icon_round_trip_and_validation() -> Result<()> {
+        let mut service = test_service()?;
+        // 带图标创建 → 读回一致，并出现在分类列表。
+        let with_icon = service.create_category_with_icon(
+            "健身",
+            CategoryKind::Expense,
+            Some("Dumbbell".to_owned()),
+        )?;
+        assert_eq!(with_icon.icon.as_deref(), Some("Dumbbell"));
+        let listed = service.category(with_icon.id)?;
+        assert_eq!(listed.icon.as_deref(), Some("Dumbbell"));
+        assert!(service
+            .categories()?
+            .iter()
+            .any(|item| item.id == with_icon.id && item.icon.as_deref() == Some("Dumbbell")));
+        // 不带图标（便捷包装）→ icon 为空。
+        let plain = service.create_category("普通支出", CategoryKind::Expense)?;
+        assert_eq!(plain.icon, None);
+        // 空白图标视为未选择。
+        let blank = service.create_category_with_icon(
+            "空白图标",
+            CategoryKind::Expense,
+            Some("   ".to_owned()),
+        )?;
+        assert_eq!(blank.icon, None);
+        // 超长图标名拒绝。
+        assert!(service
+            .create_category_with_icon("超长图标", CategoryKind::Expense, Some("A".repeat(33)),)
+            .is_err());
+        // 归档后重建带图标：恢复并写入图标。
+        service.delete_category(with_icon.id)?;
+        let revived = service.create_category_with_icon(
+            "健身",
+            CategoryKind::Expense,
+            Some("Pizza".to_owned()),
+        )?;
+        assert_eq!(revived.id, with_icon.id);
+        assert_eq!(revived.icon.as_deref(), Some("Pizza"));
         Ok(())
     }
 

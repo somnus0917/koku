@@ -31,6 +31,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             kind       TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
             created_at TEXT NOT NULL,
             archived_at TEXT,
+            icon       TEXT,
             UNIQUE(name, kind)
         );
 

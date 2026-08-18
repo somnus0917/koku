@@ -536,6 +536,7 @@ export const zh = {
           kind: "分类类型",
           name: "新分类名称",
           namePlaceholder: "例如：旅行",
+          icon: "图标",
           done: "完成",
           add: "添加分类",
           confirmDelete: "删除“{{name}}”？历史账单和统计不会受到影响。",

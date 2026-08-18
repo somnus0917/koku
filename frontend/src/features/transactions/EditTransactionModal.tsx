@@ -165,7 +165,7 @@ export function EditTransactionModal({
           </label>
           <label><span>{t("common.category")}</span>
             <div className="category-input">
-              <CategoryAvatar name={matchingCategories.find((item) => item.id === categoryId)?.name ?? t("modals.editTransaction.defaultCategory")} size="small" />
+              <CategoryAvatar name={matchingCategories.find((item) => item.id === categoryId)?.name ?? t("modals.editTransaction.defaultCategory")} icon={matchingCategories.find((item) => item.id === categoryId)?.icon} size="small" />
               <select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>
                 {matchingCategories.map((item) => (
                   <option key={item.id} value={item.id}>{item.name}</option>

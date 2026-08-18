@@ -5,6 +5,8 @@ import type { Category, CategoryKind } from "../types";
 export function createCategory(input: {
   name: string;
   kind: CategoryKind;
+  /** 用户自选图标（lucide 图标名）。 */
+  icon?: string;
 }): Promise<Category> {
   return request("/api/categories", {
     method: "POST",

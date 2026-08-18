@@ -4,14 +4,17 @@ import { categoryVisual } from "../lib";
 
 export function CategoryAvatar({
   name,
+  icon,
   size = "medium",
   className = ""
 }: {
   name: string;
+  /** 用户存储的图标名（lucide）；未提供时按名称回退默认视觉。 */
+  icon?: string | null;
   size?: "tiny" | "small" | "medium";
   className?: string;
 }) {
-  const visual = categoryVisual(name);
+  const visual = categoryVisual(name, icon);
   const Icon = visual.icon;
   const iconSize = size === "tiny" ? 11 : size === "small" ? 14 : 18;
   return (

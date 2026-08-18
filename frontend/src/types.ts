@@ -37,6 +37,8 @@ export interface Category {
   id: number;
   name: string;
   kind: CategoryKind;
+  /** 用户自选图标（lucide 图标名）；无则前端按名称回退默认视觉 */
+  icon: string | null;
 }
 
 export type UserRole = "admin" | "member";

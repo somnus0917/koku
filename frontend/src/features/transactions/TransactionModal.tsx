@@ -146,7 +146,7 @@ export function TransactionModal({
           ) : (
             <>
               <label><span>{t("modals.transaction.currency")}</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-              <label><span>{t("common.category")}</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? t("modals.transaction.defaultCategory")} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
+              <label><span>{t("common.category")}</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? t("modals.transaction.defaultCategory")} icon={selectedCategory?.icon} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
               <label className="span-two"><span>{t("modals.transaction.payee")}</span>
                 <input list="koku-payee-suggestions" value={payeeName} onChange={(e) => setPayeeName(e.target.value)} placeholder={t("modals.transaction.payeePlaceholder")} />
                 <datalist id="koku-payee-suggestions">

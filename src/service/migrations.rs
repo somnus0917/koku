@@ -139,6 +139,10 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
     if !table_has_column(conn, "accounts", "due_day")? {
         conn.execute("ALTER TABLE accounts ADD COLUMN due_day INTEGER", [])?;
     }
+    // —— 分类图标：用户自选 lucide 图标 key（自定义分类展示用）——
+    if !table_has_column(conn, "categories", "icon")? {
+        conn.execute("ALTER TABLE categories ADD COLUMN icon TEXT", [])?;
+    }
     Ok(())
 }
 

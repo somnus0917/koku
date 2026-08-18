@@ -1,33 +1,65 @@
 //! 纯函数与静态常量：与 React 组件解耦，便于单元测试。
 import {
+  Baby,
   BadgeDollarSign,
+  Banknote,
+  Beer,
+  BookOpen,
   BriefcaseBusiness,
   Building2,
+  Bus,
+  Cake,
   Car,
   ChartCandlestick,
   CircleEllipsis,
   Cloud,
+  Coffee,
+  Coins,
   Dumbbell,
+  Footprints,
+  Fuel,
   Gamepad2,
   Gift,
+  GlassWater,
   GraduationCap,
+  HandCoins,
   Handshake,
   HeartPulse,
   House,
+  IceCreamCone,
   Landmark,
   Laptop,
+  Music,
+  Palette,
+  PartyPopper,
   PawPrint,
   Percent,
+  PiggyBank,
+  Pill,
+  Pizza,
   Plane,
   ReceiptText,
   RotateCcw,
+  Salad,
+  Scissors,
   Shield,
+  Shirt,
   ShoppingBag,
+  ShoppingBasket,
+  ShoppingCart,
   Smartphone,
+  Stethoscope,
   Tags,
+  Ticket,
+  TrainFront,
+  TrendingUp,
   Trophy,
+  Tv,
   Users,
   Utensils,
+  Wallet,
+  Wifi,
+  Wine,
   Zap,
   type LucideIcon
 } from "lucide-react";
@@ -35,6 +67,16 @@ import type { Account, MonthlySummary, Transaction } from "./types";
 import { uiLocale } from "./i18n";
 
 export const CATEGORY_COLORS = ["#274e3f", "#dd8d5b", "#7e95c9", "#d2ad58", "#8f6faf", "#669b92"];
+
+/** 新建分类时可挑选的图标集（lucide 图标名 → 组件，键即持久化的 icon 字段）。 */
+export const CATEGORY_ICONS: Record<string, LucideIcon> = {
+  Utensils, Coffee, Pizza, Salad, IceCreamCone, Cake, Wine, Beer, GlassWater,
+  ShoppingBag, ShoppingCart, ShoppingBasket, Car, Fuel, Bus, TrainFront, Plane,
+  House, Building2, Wifi, Smartphone, Laptop, Tv, Zap, Gamepad2, Dumbbell,
+  HeartPulse, Stethoscope, Pill, PawPrint, GraduationCap, BookOpen, Palette,
+  Music, Ticket, PartyPopper, Gift, Footprints, Shirt, Scissors, Baby, Landmark,
+  Banknote, Coins, HandCoins, Wallet, PiggyBank, ReceiptText
+};
 
 export const COMMON_CURRENCIES = ["CNY", "USD", "HKD", "EUR", "JPY", "GBP"];
 
@@ -69,12 +111,19 @@ export const CATEGORY_VISUALS: Record<string, { icon: LucideIcon; color: string 
   其他支出: { icon: CircleEllipsis, color: "#777b75" }
 };
 
-/** 分类视觉：预设优先，自定义分类按名称哈希生成稳定样式。 */
-export function categoryVisual(name: string): { icon: LucideIcon; color: string } {
+/** 自定义分类的兜底颜色：按名称哈希在调色板中稳定取值。 */
+function categoryColor(name: string): string {
+  const hash = [...name].reduce((value, character) => value + (character.codePointAt(0) ?? 0), 0);
+  return CATEGORY_COLORS[hash % CATEGORY_COLORS.length];
+}
+
+/** 分类视觉：内置预设优先 → 用户存储图标 → 名称哈希兜底（Tags + 稳定颜色）。 */
+export function categoryVisual(name: string, icon?: string | null): { icon: LucideIcon; color: string } {
   const preset = CATEGORY_VISUALS[name];
   if (preset) return preset;
-  const hash = [...name].reduce((value, character) => value + (character.codePointAt(0) ?? 0), 0);
-  return { icon: Tags, color: CATEGORY_COLORS[hash % CATEGORY_COLORS.length] };
+  const stored = icon ? CATEGORY_ICONS[icon] : undefined;
+  if (stored) return { icon: stored, color: categoryColor(name) };
+  return { icon: Tags, color: categoryColor(name) };
 }
 
 /** 金额格式化：Intl 货币格式，支持紧凑展示（万/亿）。 */

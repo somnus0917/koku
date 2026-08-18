@@ -276,6 +276,9 @@ pub struct Category {
     pub id: i64,
     pub name: String,
     pub kind: CategoryKind,
+    /// 用户自选图标（lucide 图标名）；NULL 时前端按名称回退到默认视觉。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

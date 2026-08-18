@@ -111,7 +111,7 @@ export function TransactionRow({
         {transaction.kind === "transfer" || transaction.kind === "loan" || transaction.kind === "adjustment" || transaction.kind === "trade" || transaction.kind === "deposit" ? (
           <span className={`transaction-icon ${meta.className}`}><Icon size={18} /></span>
         ) : (
-          <CategoryAvatar name={showPayee ? transaction.payee_name! : meta.label} className={`transaction-icon ${meta.className}`} />
+          <CategoryAvatar name={showPayee ? transaction.payee_name! : meta.label} icon={showPayee ? null : category?.icon} className={`transaction-icon ${meta.className}`} />
         )}
         <div>
           <strong>

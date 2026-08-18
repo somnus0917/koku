@@ -20,7 +20,7 @@ pub(super) type AccountRow = (
     Option<i64>,
     Option<i64>,
 );
-pub(super) type CategoryRow = (i64, String, String);
+pub(super) type CategoryRow = (i64, String, String, Option<String>);
 pub(super) type UserRow = (i64, String, String, String, i64, String, i64);
 pub(super) type TransactionRow = (
     i64,
@@ -90,6 +90,7 @@ pub(super) fn category_from_row(row: CategoryRow) -> Result<Category> {
         id: row.0,
         name: row.1,
         kind: CategoryKind::from_db(&row.2)?,
+        icon: row.3,
     })
 }
 

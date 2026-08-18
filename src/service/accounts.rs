@@ -358,19 +358,46 @@ impl BookkeepingService {
         self.account(id)
     }
 
+    /// 创建分类（便捷包装：不带图标，供既有调用方与测试使用）。
     pub fn create_category(
         &mut self,
         name: impl Into<String>,
         kind: CategoryKind,
     ) -> Result<Category> {
+        self.create_category_with_icon(name.into(), kind, None)
+    }
+
+    /// 创建分类（可带用户自选图标；同事务写入）。
+    ///
+    /// - `icon`：lucide 图标名（如 `"Pizza"`）；空白视为未选择，长度上限 32。
+    /// - 复用（归档后重建）同名同类型分类时恢复并写入该图标。
+    pub fn create_category_with_icon(
+        &mut self,
+        name: impl Into<String>,
+        kind: CategoryKind,
+        icon: Option<String>,
+    ) -> Result<Category> {
         let name = required_text(name.into(), "category name")?;
+        let icon = match icon.map(|value| value.trim().to_owned()) {
+            Some(value) if !value.is_empty() => {
+                if value.chars().count() > 32 {
+                    return Err(KokuError::InvalidInput(
+                        "category icon must be 32 characters or fewer".to_owned(),
+                    ));
+                }
+                Some(value)
+            }
+            _ => None,
+        };
         self.conn.execute(
             r#"
-            INSERT INTO categories(name, kind, created_at, archived_at)
-            VALUES (?1, ?2, ?3, NULL)
-            ON CONFLICT(name, kind) DO UPDATE SET archived_at = NULL
+            INSERT INTO categories(name, kind, created_at, archived_at, icon)
+            VALUES (?1, ?2, ?3, NULL, ?4)
+            ON CONFLICT(name, kind) DO UPDATE SET
+                archived_at = NULL,
+                icon = excluded.icon
             "#,
-            params![name, kind.as_str(), timestamp(Utc::now())],
+            params![name, kind.as_str(), timestamp(Utc::now()), icon],
         )?;
         let id = self.conn.query_row(
             "SELECT id FROM categories WHERE name = ?1 AND kind = ?2",
@@ -583,13 +610,14 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, kind FROM categories WHERE id = ?1 AND archived_at IS NULL",
+                "SELECT id, name, kind, icon FROM categories WHERE id = ?1 AND archived_at IS NULL",
                 [id],
                 |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
@@ -603,13 +631,14 @@ impl BookkeepingService {
 
     pub fn categories(&self) -> Result<Vec<Category>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, kind FROM categories WHERE archived_at IS NULL ORDER BY kind, id",
+            "SELECT id, name, kind, icon FROM categories WHERE archived_at IS NULL ORDER BY kind, id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?;
         rows.map(|row| category_from_row(row?)).collect()

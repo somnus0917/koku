@@ -536,6 +536,7 @@ export const en = {
           kind: "Category type",
           name: "New category name",
           namePlaceholder: "e.g. Travel",
+          icon: "Icon",
           done: "Done",
           add: "Add category",
           confirmDelete: "Delete “{{name}}”? Historical bills and statistics are not affected.",

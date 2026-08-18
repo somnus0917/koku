@@ -59,7 +59,7 @@ export function BudgetPanel({
               <div className={`budget-row ${over ? "over" : ""}`} key={category.id}>
                 <div className="budget-row-head">
                   <span className="budget-category">
-                    <CategoryAvatar name={category.name} size="small" />
+                    <CategoryAvatar name={category.name} icon={category.icon} size="small" />
                     {category.name}
                   </span>
                   {editing ? (
