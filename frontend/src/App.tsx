@@ -98,13 +98,11 @@ import { TotpModal } from "./features/auth/TotpModal";
 import { EditTransactionModal } from "./features/transactions/EditTransactionModal";
 import { ImportModal } from "./features/transactions/ImportModal";
 import { TransactionModal } from "./features/transactions/TransactionModal";
-import {
-  AccountsPage,
-  Dashboard,
-  InsightsPage,
-  LoansSection,
-  TransactionsPage
-} from "./components/ledger";
+import { AccountsPage } from "./features/accounts/AccountsPage";
+import { Dashboard } from "./features/dashboard/DashboardPage";
+import { InsightsPage } from "./features/insights/InsightsPage";
+import { LoansSection } from "./features/loans/LoansSection";
+import { TransactionsPage } from "./features/transactions/TransactionsPage";
 import { UsersAdminPage } from "./components/users";
 import { SystemAdminPage } from "./components/system";
 import { useTheme } from "./theme";

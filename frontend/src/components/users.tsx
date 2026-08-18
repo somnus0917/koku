@@ -20,7 +20,7 @@ import {
   setUserEnabled
 } from "../api";
 import { formatDate } from "../lib";
-import { PageTitle } from "./ledger";
+import { PageTitle } from "./PageTitle";
 import type { User } from "../types";
 
 /** 密码输入弹窗：新建用户（含用户名）或重置密码。 */

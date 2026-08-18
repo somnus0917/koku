@@ -25,7 +25,8 @@ import {
   restoreBackup
 } from "../api";
 import { formatBytes, formatDate } from "../lib";
-import { EmptyState, PageTitle } from "./ledger";
+import { EmptyState } from "./EmptyState";
+import { PageTitle } from "./PageTitle";
 import type { BackupMeta, R2Status } from "../types";
 
 export function SystemAdminPage() {
