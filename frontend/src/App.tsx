@@ -82,24 +82,22 @@ import {
   restoreTransaction,
   deleteTransactionPermanently
 } from "./api";
-import {
-  AccountModal,
-  CategoryModal,
-  DepositModal,
-  EditAccountModal,
-  EditTransactionModal,
-  ImportModal,
-  LoanModal,
-  PasswordModal,
-  ReconciliationModal,
-  RecurringModal,
-  ReimburseModal,
-  RepayModal,
-  SettleDepositModal,
-  TotpModal,
-  TradeModal,
-  TransactionModal
-} from "./components/modals";
+import { AccountModal } from "./features/accounts/AccountModal";
+import { EditAccountModal } from "./features/accounts/EditAccountModal";
+import { CategoryModal } from "./features/categories/CategoryModal";
+import { DepositModal } from "./features/deposits/DepositModal";
+import { SettleDepositModal } from "./features/deposits/SettleDepositModal";
+import { TradeModal } from "./features/holdings/TradeModal";
+import { LoanModal } from "./features/loans/LoanModal";
+import { RepayModal } from "./features/loans/RepayModal";
+import { ReimburseModal } from "./features/reimbursements/ReimburseModal";
+import { ReconciliationModal } from "./features/reconciliation/ReconciliationModal";
+import { RecurringModal } from "./features/recurring/RecurringModal";
+import { PasswordModal } from "./features/auth/PasswordModal";
+import { TotpModal } from "./features/auth/TotpModal";
+import { EditTransactionModal } from "./features/transactions/EditTransactionModal";
+import { ImportModal } from "./features/transactions/ImportModal";
+import { TransactionModal } from "./features/transactions/TransactionModal";
 import {
   AccountsPage,
   Dashboard,
