@@ -39,9 +39,6 @@ export function InsightsPage({
         <SummaryCard label={t("insights.expenseLabel")} value={summary.total_expense} currency={summary.currency} tone="orange" />
         <SummaryCard label={t("insights.netLabel")} value={summary.net} currency={summary.currency} tone="blue" />
       </section>
-      <MonthlyTrendPanel currency={summary.currency} />
-      <YearlySummaryPanel currency={summary.currency} />
-      <RollingSummaryPanel currency={summary.currency} />
       <CashFlowSankey summary={cashFlow} />
       <BudgetPanel
         summary={summary}
@@ -69,6 +66,9 @@ export function InsightsPage({
           <CategoryBars summary={summary} detailed />
         </article>
       </section>
+      <MonthlyTrendPanel currency={summary.currency} />
+      <YearlySummaryPanel currency={summary.currency} />
+      <RollingSummaryPanel currency={summary.currency} />
       <article className="insight-callout">
         <span className="callout-icon"><ChartNoAxesCombined size={22} /></span>
         <div><span>KOKU NOTE</span><h3>{t("insights.retainedNote", { percent: healthScore(summary) })}</h3></div>
