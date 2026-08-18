@@ -6,6 +6,7 @@ export * from "./categories";
 export * from "./transactions";
 export * from "./deposits";
 export * from "./loans";
+export * from "./payees";
 export * from "./holdings";
 export * from "./budgets";
 export * from "./recurring";

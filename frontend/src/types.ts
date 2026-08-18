@@ -68,6 +68,16 @@ export interface Transaction {
   reimbursed_amount: string;
   has_receipt: boolean;
   tags: string[];
+  payee_id: number | null;
+  payee_name: string | null;
+  raw_description: string | null;
+}
+
+/** 商户/收款方：从流水描述中识别或用户手动设置，参与自动分类学习。 */
+export interface Payee {
+  id: number;
+  name: string;
+  created_at: string;
 }
 
 export interface Loan {
@@ -309,6 +319,14 @@ export interface ImportResult {
   skipped_duplicates: number;
   failed: number;
   issues: ImportIssue[];
+  /** 成功导入且识别出商户（Payee）的条数。 */
+  payees_recognized: number;
+  /** 成功导入且高置信度自动应用分类的条数。 */
+  categories_auto_applied: number;
+  /** 成功导入且产生中等置信度分类建议（未自动应用）的条数。 */
+  category_suggestions: number;
+  /** 成功导入但未能识别商户的条数。 */
+  unrecognized: number;
 }
 
 export type ReconciliationStatus = "open" | "completed" | "cancelled";

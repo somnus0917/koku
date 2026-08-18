@@ -81,6 +81,7 @@ export function createTransaction(input: {
   occurred_at: string;
   note: string;
   tag_names?: string[];
+  payee_name?: string;
 }): Promise<Transaction> {
   return request("/api/transactions", {
     method: "POST",
@@ -138,6 +139,7 @@ export function updateTransaction(
     account_id?: number;
     settled_amount?: string;
     tag_names?: string[];
+    payee_name?: string;
   }
 ): Promise<Transaction> {
   return request(`/api/transactions/${id}`, {

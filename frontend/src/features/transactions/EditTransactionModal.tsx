@@ -1,12 +1,13 @@
 //! 编辑交易弹窗。
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { TagEditor } from "./TagEditor";
 import { CategoryAvatar } from "../../components/avatar";
 import { formatMoney, toLocalDateTimeValue } from "../../lib";
-import type { Account, Category, Tag, Transaction } from "../../types";
+import { listPayees } from "../../api";
+import type { Account, Category, Payee, Tag, Transaction } from "../../types";
 
 export function EditTransactionModal({
   transaction,
@@ -29,6 +30,7 @@ export function EditTransactionModal({
     account_id?: number;
     settled_amount?: string;
     tag_names?: string[];
+    payee_name?: string;
   }) => Promise<void>;
 }) {
   const account = accounts.find((item) => item.id === transaction.account_id);
@@ -46,9 +48,23 @@ export function EditTransactionModal({
   const [settledAmount, setSettledAmount] = useState(transaction.settled_amount);
   const [accountId, setAccountId] = useState(transaction.account_id);
   const [tagNames, setTagNames] = useState<string[]>(transaction.tags);
+  const [payeeName, setPayeeName] = useState(transaction.payee_name ?? "");
+  const [payees, setPayees] = useState<Payee[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { t } = useTranslation();
+  // 商户自动补全数据（datalist 客户端过滤）。
+  useEffect(() => {
+    let cancelled = false;
+    listPayees()
+      .then((items) => {
+        if (!cancelled) setPayees(items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -62,6 +78,7 @@ export function EditTransactionModal({
         account_id?: number;
         settled_amount?: string;
         tag_names?: string[];
+        payee_name?: string;
       } = {};
       if (note !== transaction.note) input.note = note;
       if (occurredAt !== toLocalDateTimeValue(transaction.occurred_at)) {
@@ -76,6 +93,10 @@ export function EditTransactionModal({
       }
       if (tagNames.join(",") !== transaction.tags.join(",")) {
         input.tag_names = tagNames;
+      }
+      // 商户：值变化才提交；空串表示清除。
+      if (payeeName.trim() !== (transaction.payee_name ?? "")) {
+        input.payee_name = payeeName.trim();
       }
       if (Object.keys(input).length === 0) {
         onClose();
@@ -148,6 +169,17 @@ export function EditTransactionModal({
           </label>
           <label className="span-two"><span>{t("common.note")}</span>
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("common.optional")} />
+          </label>
+          <label className="span-two"><span>{t("modals.transaction.payee")}</span>
+            <input
+              list="koku-payee-suggestions"
+              value={payeeName}
+              onChange={(e) => setPayeeName(e.target.value)}
+              placeholder={t("modals.transaction.payeePlaceholder")}
+            />
+            <datalist id="koku-payee-suggestions">
+              {payees.map((payee) => <option key={payee.id} value={payee.name} />)}
+            </datalist>
           </label>
           <label className="span-two"><span>{t("common.tags")}</span>
             <TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} />

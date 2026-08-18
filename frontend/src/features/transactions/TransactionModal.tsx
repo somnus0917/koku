@@ -7,8 +7,9 @@ import { RateHintLine, useRateHint } from "../../components/RateHint";
 import { TagEditor } from "./TagEditor";
 import { CategoryAvatar } from "../../components/avatar";
 import { availableCurrencies, localDateTimeValue, readQuickEntry, writeQuickEntry } from "../../lib";
+import { listPayees } from "../../api";
 import type { createTransaction, createTransfer } from "../../api";
-import type { Account, Category, Tag, TransactionKind } from "../../types";
+import type { Account, Category, Payee, Tag, TransactionKind } from "../../types";
 
 export type TransactionSubmit =
   | { kind: "expense" | "income"; payload: Parameters<typeof createTransaction>[0] }
@@ -41,9 +42,23 @@ export function TransactionModal({
   const [note, setNote] = useState(lastEntry?.note ?? "");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
   const [tagNames, setTagNames] = useState<string[]>([]);
+  const [payeeName, setPayeeName] = useState("");
+  const [payees, setPayees] = useState<Payee[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const { t } = useTranslation();
+  // 商户自动补全数据（datalist 客户端过滤）。
+  useEffect(() => {
+    let cancelled = false;
+    listPayees()
+      .then((items) => {
+        if (!cancelled) setPayees(items);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const matchingCategories = categories.filter((item) => item.kind === kind);
   const selectedCategory = categories.find((item) => item.id === categoryId);
   const currencyOptions = availableCurrencies(accounts);
@@ -100,7 +115,8 @@ export function TransactionModal({
             settled_amount: foreignTransaction ? settledAmount : amount,
             occurred_at: isoDate,
             note,
-            tag_names: tagNames
+            tag_names: tagNames,
+            payee_name: payeeName.trim() ? payeeName.trim() : undefined
           }
         });
         writeQuickEntry({ kind, account_id: accountId, category_id: categoryId, amount, note });
@@ -131,6 +147,12 @@ export function TransactionModal({
             <>
               <label><span>{t("modals.transaction.currency")}</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
               <label><span>{t("common.category")}</span><div className="category-input"><CategoryAvatar name={selectedCategory?.name ?? t("modals.transaction.defaultCategory")} size="small" /><select value={categoryId} onChange={(e) => setCategoryId(Number(e.target.value))}>{matchingCategories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></div></label>
+              <label className="span-two"><span>{t("modals.transaction.payee")}</span>
+                <input list="koku-payee-suggestions" value={payeeName} onChange={(e) => setPayeeName(e.target.value)} placeholder={t("modals.transaction.payeePlaceholder")} />
+                <datalist id="koku-payee-suggestions">
+                  {payees.map((payee) => <option key={payee.id} value={payee.name} />)}
+                </datalist>
+              </label>
             </>
           )}
           {foreignTransaction && (

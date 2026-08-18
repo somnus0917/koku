@@ -27,6 +27,9 @@ struct CreateTransactionRequest {
     note: String,
     #[serde(default)]
     tag_names: Vec<String>,
+    /// 商户/收款方名称（可选）：按名称查找/创建并参与分类学习。
+    #[serde(default)]
+    payee_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +64,9 @@ struct UpdateTransactionRequest {
     settled_amount: Option<Decimal>,
     /// 提供时整体替换标签；不提供则保持不变。
     tag_names: Option<Vec<String>>,
+    /// 商户/收款方：提供非空值按名称设置并学习；提供空串清除；不提供保持不变。
+    #[serde(default)]
+    payee_name: Option<String>,
 }
 
 async fn api_transactions(
@@ -150,6 +156,12 @@ async fn api_create_transaction(
     if !request.tag_names.is_empty() {
         service.set_transaction_tags(transaction.id, request.tag_names)?;
     }
+    // 手动记账带 Payee：设置商户并触发 (Payee, Category) 学习。
+    if let Some(payee_name) = request.payee_name {
+        if !payee_name.trim().is_empty() {
+            service.set_transaction_payee(transaction.id, Some(&payee_name))?;
+        }
+    }
     let transaction = service.transaction(transaction.id)?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
@@ -210,6 +222,8 @@ async fn api_update_transaction(
     Json(request): Json<UpdateTransactionRequest>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
+    // 学习需要对比编辑前后的 Payee/分类（仅人工修改触发，自动推断不学习）。
+    let before = service.transaction(transaction_id)?;
     service.update_transaction(
         transaction_id,
         request.note,
@@ -219,6 +233,17 @@ async fn api_update_transaction(
         request.account_id,
         request.settled_amount,
     )?;
+    if let Some(payee_name) = request.payee_name {
+        service.set_transaction_payee(transaction_id, Some(&payee_name))?;
+    } else {
+        let after = service.transaction(transaction_id)?;
+        // 分类被纠正且交易已有 Payee → 记录新 (Payee, Category)。
+        if after.category_id != before.category_id {
+            if let (Some(payee_id), Some(category_id)) = (after.payee_id, after.category_id) {
+                service.learn_payee_category(payee_id, category_id)?;
+            }
+        }
+    }
     if let Some(tag_names) = request.tag_names {
         service.set_transaction_tags(transaction_id, tag_names)?;
     }
