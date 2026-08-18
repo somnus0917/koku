@@ -3704,3 +3704,15 @@ button:disabled {
 .split-totals .negative {
   color: var(--expense, #c0392b);
 }
+/* 拆分加载失败区：错误提示 + 重试按钮同行排列。 */
+.split-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 6px;
+}
+/* 父分类语义提示（有拆分时）横跨表单两列。 */
+.form-grid .fx-hint.span-two {
+  grid-column: 1 / -1;
+  margin-top: -6px;
+}

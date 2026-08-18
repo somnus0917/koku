@@ -486,6 +486,10 @@ export const zh = {
           splitAssigned: "已分配：{{amount}}",
           splitRemaining: "剩余：{{amount}}",
           splitRemainingError: "拆分金额之和必须等于交易金额（剩余需为 0）才能保存",
+          splitLoading: "正在加载拆分信息…",
+          splitLoadError: "拆分信息加载失败，请重试。",
+          splitRetry: "重试",
+          splitCategoryHint: "该分类仅作为父交易默认分类；统计以拆分分类为准。",
           save: "保存修改"
         },
         editAccount: {

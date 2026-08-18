@@ -140,6 +140,8 @@ export function updateTransaction(
     settled_amount?: string;
     tag_names?: string[];
     payee_name?: string;
+    /** 拆分有变化才携带：非空数组整体替换；空数组清除（与父交易原子提交）。 */
+    splits?: { category_id: number; amount: string; note?: string }[];
   }
 ): Promise<Transaction> {
   return request(`/api/transactions/${id}`, {

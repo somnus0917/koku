@@ -486,6 +486,10 @@ export const en = {
           splitAssigned: "Assigned: {{amount}}",
           splitRemaining: "Remaining: {{amount}}",
           splitRemainingError: "Split amounts must sum to the transaction amount (remaining must be 0)",
+          splitLoading: "Loading split info…",
+          splitLoadError: "Failed to load split info. Please retry.",
+          splitRetry: "Retry",
+          splitCategoryHint: "This category is only the parent default; statistics follow the split categories.",
           save: "Save changes"
         },
         editAccount: {
