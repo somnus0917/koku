@@ -672,6 +672,15 @@ export const en = {
         enabledFlash: "“{{username}}” enabled",
         delete: "Delete user"
       },
+      settings: {
+        learningTitle: "Auto-categorization learning",
+        learningHint: "Koku learns from the payees and categories you confirm and uses that to recognize future transactions. Clearing stops future imports from reusing these stats.",
+        clearLearning: "Clear learning data",
+        clearing: "Clearing…",
+        clearLearningConfirm: "Clear auto-categorization learning data? This empties merchant aliases and category stats; transactions, payees, and existing categories stay untouched.",
+        clearedLearning: "Learning data cleared",
+        clearLearningFailed: "Failed to clear"
+      },
       system: {
         title: "System management",
         creating: "Backing up…",
@@ -715,13 +724,6 @@ export const en = {
         r2Restored: "Restored from R2; all sessions invalidated. You will be signed in again shortly…",
         r2RestoreFailed: "Failed to restore from R2",
         r2StatusLoadFailed: "Failed to load R2 status",
-        learningTitle: "Auto-categorization learning",
-        learningHint: "Koku learns from the payees and categories you confirm. Clearing stops future imports from reusing these stats; existing transactions and payees are untouched.",
-        clearLearning: "Clear auto-categorization learning data",
-        clearing: "Clearing…",
-        clearLearningConfirm: "Clear auto-categorization learning data? This empties merchant aliases and category stats, but keeps payees, transactions, and existing categories.",
-        clearedLearning: "Auto-categorization learning data cleared",
-        clearLearningFailed: "Failed to clear"
       }
 
   }

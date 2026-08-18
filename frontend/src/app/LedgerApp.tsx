@@ -45,6 +45,7 @@ import { AccountsPage } from "../features/accounts/AccountsPage";
 import { EditAccountModal } from "../features/accounts/EditAccountModal";
 import { PasswordModal } from "../features/auth/PasswordModal";
 import { TotpModal } from "../features/auth/TotpModal";
+import { LearningSettingsModal } from "../features/settings/LearningSettingsModal";
 import { CategoryModal } from "../features/categories/CategoryModal";
 import { Dashboard } from "../features/dashboard/DashboardPage";
 import { DepositModal } from "../features/deposits/DepositModal";
@@ -88,6 +89,7 @@ type Modal =
   | "import"
   | "totp"
   | "reconcile"
+  | "settings"
   | null;
 
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
@@ -381,6 +383,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         onOpenCategories={() => setModal("category")}
         onOpenPassword={() => setModal("password")}
         onOpenTotp={() => setModal("totp")}
+        onOpenLearningSettings={() => setModal("settings")}
         onLogout={() => void onLogout()}
         mobileNavOpen={mobileNavOpen}
         onCloseMobileNav={() => setMobileNavOpen(false)}
@@ -570,6 +573,11 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
       )}
       {modal === "totp" && (
         <TotpModal
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === "settings" && (
+        <LearningSettingsModal
           onClose={() => setModal(null)}
         />
       )}

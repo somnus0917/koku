@@ -1,6 +1,6 @@
 //! 侧边栏：品牌、主导航与个人操作区。
 import { useTranslation } from "react-i18next";
-import { KeyRound, LogOut, MoreHorizontal, ShieldCheck, X } from "lucide-react";
+import { KeyRound, LogOut, MoreHorizontal, ShieldCheck, Sparkles, X } from "lucide-react";
 import { NAV_ITEMS, type View } from "./nav";
 import type { UserRole } from "../types";
 
@@ -12,6 +12,7 @@ export function Sidebar({
   onOpenCategories,
   onOpenPassword,
   onOpenTotp,
+  onOpenLearningSettings,
   onLogout,
   mobileNavOpen,
   onCloseMobileNav
@@ -23,6 +24,7 @@ export function Sidebar({
   onOpenCategories: () => void;
   onOpenPassword: () => void;
   onOpenTotp: () => void;
+  onOpenLearningSettings: () => void;
   onLogout: () => void;
   mobileNavOpen: boolean;
   onCloseMobileNav: () => void;
@@ -68,6 +70,7 @@ export function Sidebar({
         </button>
         <button className="password-button" onClick={onOpenPassword} aria-label={t("common.changePassword")} title={t("common.changePassword")}><KeyRound size={17} /></button>
         <button className="password-button" onClick={onOpenTotp} aria-label={t("totp.title")} title={t("totp.title")}><ShieldCheck size={17} /></button>
+        <button className="password-button" onClick={onOpenLearningSettings} aria-label={t("settings.learningTitle")} title={t("settings.learningTitle")}><Sparkles size={17} /></button>
         <button className="logout-button" onClick={onLogout} aria-label={t("common.logout")} title={t("common.logout")}><LogOut size={17} /></button>
       </div>
     </aside>
