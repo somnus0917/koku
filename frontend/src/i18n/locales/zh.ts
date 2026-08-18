@@ -679,6 +679,15 @@ export const zh = {
         enabledFlash: "「{{username}}」已启用",
         delete: "删除用户"
       },
+      settings: {
+        learningTitle: "自动分类学习",
+        learningHint: "Koku 会根据你确认过的商户和分类自动识别后续流水。清除学习数据后，导入将不再复用这些历史统计。",
+        clearLearning: "清除学习数据",
+        clearing: "正在清除…",
+        clearLearningConfirm: "确定清除自动分类学习数据？将清空商户别名与分类统计；不会删除交易、商户，也不会修改现有分类。",
+        clearedLearning: "学习数据已清除",
+        clearLearningFailed: "清除失败"
+      },
       system: {
         title: "系统管理",
         creating: "备份中…",
@@ -721,14 +730,7 @@ export const zh = {
         r2RestoreConfirm: "从 R2 下载「{{filename}}」并恢复？恢复会覆盖共享库与全部账本文件，并使所有会话失效。",
         r2Restored: "已从 R2 恢复，所有会话已失效，即将重新登录…",
         r2RestoreFailed: "从 R2 恢复失败",
-        r2StatusLoadFailed: "加载 R2 状态失败",
-        learningTitle: "自动分类学习",
-        learningHint: "Koku 会从你确认的商户与分类中自动学习。清除后，导入将不再复用这些历史统计，已记交易与商户本身不受影响。",
-        clearLearning: "清除自动分类学习数据",
-        clearing: "正在清除…",
-        clearLearningConfirm: "确定清除自动分类学习数据？将清空商户别名与分类统计，但不会删除商户、交易或修改已有分类。",
-        clearedLearning: "自动分类学习数据已清除",
-        clearLearningFailed: "清除失败"
+        r2StatusLoadFailed: "加载 R2 状态失败"
       }
 
   }
