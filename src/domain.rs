@@ -1,6 +1,6 @@
 //! 领域类型：账户/分类/交易枚举、内置分类与对外 DTO。
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -238,6 +238,37 @@ pub struct Account {
     pub balance: Decimal,
     /// 信用额度；仅信用账户有值
     pub credit_limit: Option<Decimal>,
+    /// 账单日（1~31，可空）；仅信用账户有意义
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement_day: Option<u32>,
+    /// 还款日（1~31，可空）；仅信用账户有意义
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_day: Option<u32>,
+}
+
+/// 信用卡账单摘要（v1：按现有交易动态计算，无账单快照表）。
+///
+/// 口径说明见 [`crate::service::credit_cards`]；金额均为账户结算币种。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreditCardSummary {
+    pub account_id: i64,
+    /// 账户结算币种（所有金额的币种）。
+    pub currency: String,
+    pub credit_limit: Option<Decimal>,
+    /// 已占用额度：未撤销消费 − 还款（FIFO/总负债口径，下限 0）。
+    pub used_credit: Decimal,
+    /// 可用额度：credit_limit − used_credit；未设额度为 `None`。
+    pub available_credit: Option<Decimal>,
+    pub statement_day: Option<u32>,
+    pub due_day: Option<u32>,
+    /// 最近一期已出账、尚未还清的消费金额；未设账单日为 `None`。
+    pub current_statement_amount: Option<Decimal>,
+    /// 最近账单日之后、尚未出账的消费金额；未设账单日为 `None`。
+    pub unbilled_amount: Option<Decimal>,
+    /// 下一次账单日（YYYY-MM-DD）；未设账单日为 `None`。
+    pub next_statement_date: Option<NaiveDate>,
+    /// 下一次还款日（YYYY-MM-DD）；未设还款日为 `None`。
+    pub next_due_date: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

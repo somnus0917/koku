@@ -114,6 +114,26 @@ impl BookkeepingService {
         self.account(id)
     }
 
+    /// 设置或清除账单日（1~31，可空；仅对信用账户有意义）。
+    pub fn set_statement_day(&mut self, id: i64, statement_day: Option<u32>) -> Result<Account> {
+        validate_credit_day(statement_day, "statement day")?;
+        self.conn.execute(
+            "UPDATE accounts SET statement_day = ?1 WHERE id = ?2",
+            params![statement_day.map(i64::from), id],
+        )?;
+        self.account(id)
+    }
+
+    /// 设置或清除还款日（1~31，可空；仅对信用账户有意义）。
+    pub fn set_due_day(&mut self, id: i64, due_day: Option<u32>) -> Result<Account> {
+        validate_credit_day(due_day, "due day")?;
+        self.conn.execute(
+            "UPDATE accounts SET due_day = ?1 WHERE id = ?2",
+            params![due_day.map(i64::from), id],
+        )?;
+        self.account(id)
+    }
+
     pub fn create_category(
         &mut self,
         name: impl Into<String>,
@@ -155,7 +175,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, credit_limit, statement_day, due_day FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -165,6 +185,8 @@ impl BookkeepingService {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )
@@ -178,7 +200,7 @@ impl BookkeepingService {
 
     pub fn accounts(&self) -> Result<Vec<Account>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts ORDER BY id",
+            "SELECT id, name, account_type, currency, balance, credit_limit, statement_day, due_day FROM accounts ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -188,6 +210,8 @@ impl BookkeepingService {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<i64>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
             ))
         })?;
         rows.map(|row| account_from_row(row?)).collect()
@@ -379,4 +403,16 @@ impl BookkeepingService {
         transaction.commit()?;
         Ok(category)
     }
+}
+
+/// 校验账单日/还款日：`None`（清除）或 1~31；越界报错。
+fn validate_credit_day(day: Option<u32>, field: &str) -> Result<()> {
+    if let Some(day) = day {
+        if !(1..=31).contains(&day) {
+            return Err(KokuError::InvalidInput(format!(
+                "{field} must be between 1 and 31"
+            )));
+        }
+    }
+    Ok(())
 }

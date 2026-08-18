@@ -10,6 +10,7 @@ import { DepositSection } from "../deposits/DepositSection";
 import { LoansSection } from "../loans/LoansSection";
 import { RecurringSection } from "../recurring/RecurringSection";
 import { HoldingSection } from "../holdings/HoldingSection";
+import { CreditCardSection } from "./CreditCardSection";
 import { formatMoney } from "../../lib";
 import type { Account, AccountType, AppData, Deposit, Loan } from "../../types";
 
@@ -90,6 +91,7 @@ export function AccountsPage({
       />
       <AccountGroup title={t("accounts.type.stock")} subtitle={t("accounts.accountCount", { count: stock.length })} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <AccountGroup title={t("accounts.type.credit")} subtitle={t("accounts.accountCount", { count: credit.length })} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
+      <CreditCardSection accounts={credit} display={display} rates={rates} />
       <LoansSection
         loans={data.loans}
         accounts={data.accounts}

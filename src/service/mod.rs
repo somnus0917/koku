@@ -20,6 +20,7 @@ pub struct BookkeepingService {
 mod accounts;
 mod auth;
 mod budgets;
+mod credit_cards;
 mod deposits;
 mod holdings;
 mod import;
@@ -70,7 +71,7 @@ impl BookkeepingService {
     fn account_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Account> {
         let row = tx
             .query_row(
-                "SELECT id, name, account_type, currency, balance, credit_limit FROM accounts WHERE id = ?1",
+                "SELECT id, name, account_type, currency, balance, credit_limit, statement_day, due_day FROM accounts WHERE id = ?1",
                 [id],
                 |row| {
                     Ok((
@@ -80,6 +81,8 @@ impl BookkeepingService {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )

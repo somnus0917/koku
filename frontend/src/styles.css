@@ -1680,6 +1680,80 @@ button:disabled {
   font-size: 14px;
 }
 
+/* ---- 信用卡账单区域（v1 简单统计块）---- */
+.credit-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.credit-card-card {
+  padding: 17px;
+  border-radius: 16px;
+  background: var(--card, var(--surface));
+}
+
+.credit-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.credit-card-head strong {
+  font-size: 13px;
+}
+
+.credit-card-head .credit-card-balance {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.credit-card-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.credit-card-stats,
+.credit-card-dates {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.credit-card-dates {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.credit-card-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.credit-card-stat span {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.credit-card-stat strong {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .transaction-toolbar {
   display: flex;
   align-items: center;

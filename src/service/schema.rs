@@ -20,7 +20,9 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             created_at    TEXT NOT NULL,
             interest_rate TEXT,
             maturity_at   TEXT,
-            credit_limit  TEXT
+            credit_limit  TEXT,
+            statement_day INTEGER,
+            due_day       INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS categories (

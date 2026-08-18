@@ -153,6 +153,18 @@ export function formatDate(value: string): string {
   }).format(new Date(value));
 }
 
+/** 纯日期（如 "2026-09-10" → "2026年9月10日"），按本地时区解析，避免日期回跳。 */
+export function formatDay(value: string): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : new Date(value);
+  return new Intl.DateTimeFormat(uiLocale(), {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  }).format(date);
+}
+
 const QUICK_ENTRY_KEY = "koku:quick-entry";
 
 /** 最近一笔收入/支出（快速记账预填用）。 */

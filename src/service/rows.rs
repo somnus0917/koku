@@ -10,7 +10,16 @@ use crate::domain::{
 };
 use crate::error::Result;
 
-pub(super) type AccountRow = (i64, String, String, String, String, Option<String>);
+pub(super) type AccountRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+);
 pub(super) type CategoryRow = (i64, String, String);
 pub(super) type UserRow = (i64, String, String, String, i64, String, i64);
 pub(super) type TransactionRow = (
@@ -47,6 +56,8 @@ pub(super) fn account_from_row(row: AccountRow) -> Result<Account> {
         currency: row.3,
         balance: decimal_from_db(&row.4)?,
         credit_limit: row.5.as_deref().map(decimal_from_db).transpose()?,
+        statement_day: row.6.map(|day| day as u32),
+        due_day: row.7.map(|day| day as u32),
     })
 }
 

@@ -132,6 +132,13 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    // —— 信用卡账单模型：账单日 / 还款日（放在账户整表重建之后，避免重建丢失新列）——
+    if !table_has_column(conn, "accounts", "statement_day")? {
+        conn.execute("ALTER TABLE accounts ADD COLUMN statement_day INTEGER", [])?;
+    }
+    if !table_has_column(conn, "accounts", "due_day")? {
+        conn.execute("ALTER TABLE accounts ADD COLUMN due_day INTEGER", [])?;
+    }
     Ok(())
 }
 

@@ -12,6 +12,25 @@ export interface Account {
   balance: string;
   /** 信用额度，仅信用账户有值 */
   credit_limit: string | null;
+  /** 账单日（1~31），仅信用账户有值 */
+  statement_day: number | null;
+  /** 还款日（1~31），仅信用账户有值 */
+  due_day: number | null;
+}
+
+/** 信用卡账单摘要（v1 按现有交易动态计算）。 */
+export interface CreditCardSummary {
+  account_id: number;
+  currency: string;
+  credit_limit: string | null;
+  used_credit: string;
+  available_credit: string | null;
+  statement_day: number | null;
+  due_day: number | null;
+  current_statement_amount: string | null;
+  unbilled_amount: string | null;
+  next_statement_date: string | null;
+  next_due_date: string | null;
 }
 
 export interface Category {
@@ -374,9 +393,9 @@ export interface Reconciliation {
   note: string;
 }
 
-/** 到期提醒项（存款到期 / 借款到期）。 */
+/** 到期提醒项（存款到期 / 借款到期 / 信用卡还款）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan";
+  kind: "deposit" | "loan" | "credit_card";
   id: number;
   title: string;
   amount: string;
