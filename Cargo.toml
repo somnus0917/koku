@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "A minimal, private, SQLite-backed personal finance MVP"
+# 主服务二进制；gen_hash 为预览凭据生成工具，cargo run 默认仍跑服务本体。
+default-run = "koku"
 
 [dependencies]
 axum = { version = "0.8", features = ["multipart"] }
