@@ -168,6 +168,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             reimbursed_amount TEXT NOT NULL DEFAULT '0',
             payee_id      INTEGER REFERENCES payees(id),
             raw_description TEXT,
+            import_external_id TEXT,
             CHECK (
                 (kind IN ('expense', 'income') AND category_id IS NOT NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)

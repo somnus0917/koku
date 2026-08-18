@@ -80,9 +80,12 @@ pub struct ImportRow {
     /// Koku 导出格式特有：商户名称（导入时恢复 Payee，不视为新的人工确认）。
     #[serde(default)]
     pub payee_name: Option<String>,
-    /// Koku 导出格式特有：导入时的原始流水描述。
+    /// 导入时的原始流水描述（QIF/OFX/通用银行 CSV 生成；Koku 导出 CSV 亦恢复）。
     #[serde(default)]
     pub raw_description: Option<String>,
+    /// 外部唯一流水 ID（OFX `FITID`、通用 CSV 流水号列）：存在时优先用于去重。
+    #[serde(default)]
+    pub external_id: Option<String>,
 }
 
 /// 行级解析问题（不中断整份文件）。
@@ -170,6 +173,18 @@ const PAYEE_ALIASES: &[&str] = &[
     "对方户名",
     "收款方",
     "付款方",
+];
+
+/// 通用银行 CSV 中的「外部唯一流水号」列名（优先用于导入去重）。
+/// 刻意不包含普通 `id`：避免把行号/自增 id 误当流水号。
+const EXTERNAL_ID_ALIASES: &[&str] = &[
+    "transaction_id",
+    "reference",
+    "reference_number",
+    "流水号",
+    "交易流水号",
+    "交易编号",
+    "参考号",
 ];
 const CURRENCY_ALIASES: &[&str] = &["currency", "币种", "货币", "交易币种"];
 const TYPE_ALIASES: &[&str] = &[
@@ -281,6 +296,7 @@ fn parse_koku_export_csv(
             settled_amount: settled,
             payee_name: non_empty(get(payee_col)).map(str::to_owned),
             raw_description: non_empty(get(raw_col)).map(str::to_owned),
+            external_id: None,
         });
     }
     Ok((rows, issues))
@@ -292,6 +308,7 @@ fn parse_generic_csv(mut reader: csv::Reader<&[u8]>, headers: &[String]) -> Resu
     let amount_col = alias_index(headers, AMOUNT_ALIASES);
     let note_col = alias_index(headers, NOTE_ALIASES);
     let payee_col = alias_index(headers, PAYEE_ALIASES);
+    let external_id_col = alias_index(headers, EXTERNAL_ID_ALIASES);
     let currency_col = alias_index(headers, CURRENCY_ALIASES);
     let type_col = alias_index(headers, TYPE_ALIASES);
     if date_col.is_none() || amount_col.is_none() {
@@ -375,6 +392,7 @@ fn parse_generic_csv(mut reader: csv::Reader<&[u8]>, headers: &[String]) -> Resu
             settled_amount: None,
             payee_name: None,
             raw_description,
+            external_id: non_empty(get(external_id_col)).map(str::to_owned),
         });
     }
     Ok((rows, issues))
@@ -426,6 +444,7 @@ pub fn parse_qif(input: &str) -> Result<ParseOutcome> {
                     settled_amount: None,
                     payee_name: None,
                     raw_description,
+                    external_id: None,
                 });
             }
         } else {
@@ -554,6 +573,8 @@ pub fn parse_ofx(input: &str) -> Result<ParseOutcome> {
         }
         let name = extract_tag(block, original, "NAME").unwrap_or_default();
         let memo = extract_tag(block, original, "MEMO").unwrap_or_default();
+        // FITID 是银行提供的唯一流水号，仅用于去重，不进 note/raw_description。
+        let external_id = extract_tag(block, original, "FITID");
         // NAME 优先作为商户识别原始文本，MEMO 作为用户备注；
         // NAME 为空时回退 MEMO（保持简单规则）。
         let note = memo.trim().to_owned();
@@ -576,6 +597,7 @@ pub fn parse_ofx(input: &str) -> Result<ParseOutcome> {
             settled_amount: None,
             payee_name: None,
             raw_description,
+            external_id,
         });
     }
     Ok((rows, issues))

@@ -1,7 +1,8 @@
 //! 批量导入流水：把 [`crate::importer`] 解析出的行写入账本。
 //! 逐行处理：分类校验（行内分类名 > 默认分类）、跨币种结算金额折算
-//! （行内明确给定 > 同币种原值 > 缓存汇率）、按 (账户/类型/时间/金额/备注)
-//! 指纹去重。单行失败不中断整批，错误汇总进 `issues` 返回前端。
+//! （行内明确给定 > 同币种原值 > 缓存汇率）、去重（外部唯一流水 ID 优先，
+//! 账户/类型/时间/金额/币种/结算额/原始描述/备注字段指纹兜底）。单行失败
+//! 不中断整批，错误汇总进 `issues` 返回前端。
 
 use rusqlite::params;
 use serde::Serialize;
@@ -277,31 +278,50 @@ impl BookkeepingService {
             (amount * rate).round_dp(2)
         };
 
-        // 去重指纹：(账户, 类型, 时间, 金额, 币种, 结算金额, 原始描述, 备注)。
-        // 原始描述必须参与指纹：QIF/OFX 拆分后，同日同金额但商户不同的两笔流水
-        // 不能因 note 为空而被误判为重复（宁可保守，不误删合法交易）。
-        let duplicate: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM transactions
-                 WHERE account_id = ?1 AND kind = ?2 AND occurred_at = ?3
-                   AND amount = ?4 AND currency = ?5 AND settled_amount = ?6
-                   AND COALESCE(raw_description, '') = ?7 AND note = ?8
-                   AND voided_at IS NULL
-                 LIMIT 1",
-                params![
-                    account_id,
-                    kind.as_str(),
-                    timestamp(occurred_at),
-                    decimal_to_db(amount),
-                    currency,
-                    decimal_to_db(settled_amount),
-                    raw_description,
-                    row.note
-                ],
-                |row| row.get(0),
-            )
-            .optional()?;
+        // 两级去重：external_id 优先，字段指纹兜底。
+        // - 有 external_id：同一账户下同 ID 即重复（不同 external_id 即使内容全同
+        //   也视为两笔）；voided 的交易保留 external_id，仍算重复。
+        // - 无 external_id：字段指纹（账户/类型/时间/金额/币种/结算额/原始描述/备注），
+        //   已撤销交易不参与匹配。
+        let duplicate: Option<i64> = match row
+            .external_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(external_id) => self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM transactions
+                     WHERE account_id = ?1 AND import_external_id = ?2
+                     LIMIT 1",
+                    params![account_id, external_id],
+                    |row| row.get(0),
+                )
+                .optional()?,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM transactions
+                     WHERE account_id = ?1 AND kind = ?2 AND occurred_at = ?3
+                       AND amount = ?4 AND currency = ?5 AND settled_amount = ?6
+                       AND COALESCE(raw_description, '') = ?7 AND note = ?8
+                       AND voided_at IS NULL
+                     LIMIT 1",
+                    params![
+                        account_id,
+                        kind.as_str(),
+                        timestamp(occurred_at),
+                        decimal_to_db(amount),
+                        currency,
+                        decimal_to_db(settled_amount),
+                        raw_description,
+                        row.note
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?,
+        };
         if duplicate.is_some() {
             return Ok(ImportRowOutcome {
                 imported: false,
@@ -323,7 +343,12 @@ impl BookkeepingService {
                     row.note.clone(),
                 )?;
                 // 保存原始描述与识别出的商户（学习数据只由人工操作产生，导入不学习）。
-                self.set_import_metadata(tx.id, &raw_description, payee_id)?;
+                self.set_import_metadata(
+                    tx.id,
+                    &raw_description,
+                    payee_id,
+                    row.external_id.as_deref(),
+                )?;
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
@@ -338,7 +363,12 @@ impl BookkeepingService {
                     occurred_at,
                     row.note.clone(),
                 )?;
-                self.set_import_metadata(tx.id, &raw_description, payee_id)?;
+                self.set_import_metadata(
+                    tx.id,
+                    &raw_description,
+                    payee_id,
+                    row.external_id.as_deref(),
+                )?;
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
@@ -358,7 +388,7 @@ impl BookkeepingService {
 mod tests {
     use super::*;
     use crate::domain::AccountType;
-    use crate::importer::parse_qif;
+    use crate::importer::{parse_ofx, parse_qif};
     use crate::service::payees::{AUTO_CATEGORY_CONFIDENCE, SUGGEST_CATEGORY_CONFIDENCE};
     use chrono::NaiveDate;
 
@@ -377,6 +407,7 @@ mod tests {
             settled_amount: None,
             payee_name: None,
             raw_description: None,
+            external_id: None,
         }
     }
 
@@ -875,6 +906,186 @@ P星巴克
         assert_eq!(result.categories_auto_applied, 0);
         assert_eq!(result.category_suggestion_count, 0);
         assert!(result.category_suggestions.is_empty());
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 外部唯一流水 ID（external_id）去重
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn same_content_different_external_ids_both_import() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.raw_description = Some("麦当劳".to_owned());
+        a.external_id = Some("EXT-1".to_owned());
+        let mut b = row(2, date(2026, 3, 1), "-30.00", "午餐");
+        b.raw_description = Some("麦当劳".to_owned());
+        b.external_id = Some("EXT-2".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a, b],
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn same_external_id_is_deduplicated_on_reimport() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.raw_description = Some("麦当劳".to_owned());
+        a.external_id = Some("EXT-1".to_owned());
+        let first = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a],
+        )?;
+        assert_eq!(first.imported, 1);
+        // 同一 external_id 再导入（内容不同也不重要）→ 重复。
+        let mut b = row(2, date(2026, 3, 2), "-99.00", "完全不同");
+        b.external_id = Some("EXT-1".to_owned());
+        let second = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![b],
+        )?;
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped_duplicates, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn same_external_id_in_different_accounts_both_import() -> Result<()> {
+        let (mut service, _, food_id) = seeded_service()?;
+        let account_a =
+            service.create_account("账户A", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let account_b =
+            service.create_account("账户B", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.external_id = Some("EXT-1".to_owned());
+        let mut b = row(2, date(2026, 3, 1), "-30.00", "午餐");
+        b.external_id = Some("EXT-1".to_owned());
+        let result_a = service.import_transactions(
+            ImportFormat::Csv,
+            account_a.id,
+            Some(food_id),
+            None,
+            vec![a],
+        )?;
+        let result_b = service.import_transactions(
+            ImportFormat::Csv,
+            account_b.id,
+            Some(food_id),
+            None,
+            vec![b],
+        )?;
+        assert_eq!(result_a.imported, 1);
+        assert_eq!(result_b.imported, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn without_external_id_fallback_fingerprint_still_works() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.raw_description = Some("麦当劳".to_owned());
+        let mut dup = row(2, date(2026, 3, 1), "-30.00", "午餐");
+        dup.raw_description = Some("麦当劳".to_owned());
+        let mut other = row(3, date(2026, 3, 1), "-30.00", "早餐");
+        other.raw_description = Some("星巴克".to_owned());
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a, dup, other],
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn voided_transaction_keeps_external_id_and_blocks_reimport() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let mut a = row(1, date(2026, 3, 1), "-30.00", "午餐");
+        a.external_id = Some("EXT-1".to_owned());
+        let first = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![a],
+        )?;
+        assert_eq!(first.imported, 1);
+        let tx = service.transactions(100, 0)?[0].clone();
+        // void 保留 external_id → 再导入同一 external_id 仍算重复。
+        service.void_transaction(tx.id)?;
+        let mut b = row(2, date(2026, 3, 1), "-30.00", "午餐");
+        b.external_id = Some("EXT-1".to_owned());
+        let second = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![b.clone()],
+        )?;
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped_duplicates, 1);
+        // permanent delete 后 external_id 随交易删除 → 允许重新导入。
+        service.delete_transaction(tx.id)?;
+        let third = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![b],
+        )?;
+        assert_eq!(third.imported, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn ofx_fitid_drives_deduplication() -> Result<()> {
+        let input = "\
+<OFX><STMTTRN>
+<FITID>ID-1
+<DTPOSTED>20240315120000.000[-5:EST]
+<TRNAMT>-30.00
+<NAME>麦当劳</NAME>
+</STMTTRN>
+<STMTTRN>
+<FITID>ID-2
+<DTPOSTED>20240315120000.000[-5:EST]
+<TRNAMT>-30.00
+<NAME>麦当劳</NAME>
+</STMTTRN>
+</OFX>
+";
+        let (rows, issues) = parse_ofx(input)?;
+        assert!(issues.is_empty());
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].external_id.as_deref(), Some("ID-1"));
+        assert_eq!(rows[1].external_id.as_deref(), Some("ID-2"));
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let result = service.import_transactions(
+            ImportFormat::Ofx,
+            account_id,
+            Some(food_id),
+            None,
+            rows,
+        )?;
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped_duplicates, 0);
         Ok(())
     }
 }

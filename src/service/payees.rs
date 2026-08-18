@@ -167,16 +167,19 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
-    /// 导入专用：把机器识别出的原始描述与 Payee 写回交易（不触发学习）。
+    /// 导入专用：把机器识别出的原始描述、Payee 与外部唯一流水 ID 写回交易
+    /// （不触发学习）。
     pub(crate) fn set_import_metadata(
         &mut self,
         transaction_id: i64,
         raw_description: &str,
         payee_id: Option<i64>,
+        external_id: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "UPDATE transactions SET raw_description = ?1, payee_id = ?2 WHERE id = ?3",
-            params![raw_description, payee_id, transaction_id],
+            "UPDATE transactions SET raw_description = ?1, payee_id = ?2, import_external_id = ?3
+             WHERE id = ?4",
+            params![raw_description, payee_id, external_id, transaction_id],
         )?;
         Ok(())
     }
@@ -882,7 +885,12 @@ mod tests {
                 [],
                 |row| row.get(0),
             )?;
-        assert!(has_payee_column && has_raw_column);
+        let has_external_id: bool = service.conn.query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('transactions') WHERE name = 'import_external_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(has_payee_column && has_raw_column && has_external_id);
         // 已有交易完整保留且可正常读取。
         let tx = service.transaction(1)?;
         assert_eq!(tx.note, "legacy note");
@@ -1052,7 +1060,7 @@ mod tests {
             chrono::Utc::now(),
             "星巴克 - 早餐",
         )?;
-        service.set_import_metadata(tx.id, "星巴克 - 早餐", Some(payee_id))?;
+        service.set_import_metadata(tx.id, "星巴克 - 早餐", Some(payee_id), None)?;
         Ok(tx.id)
     }
 

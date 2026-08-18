@@ -126,6 +126,12 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if !table_has_column(conn, "transactions", "import_external_id")? {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN import_external_id TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
