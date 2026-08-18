@@ -42,9 +42,10 @@ impl BookkeepingService {
         Ok(result)
     }
 
-    /// 原子替换交易的拆分（空列表即清除，恢复父交易分类统计）。
+    /// 原子替换交易的拆分。
     ///
-    /// 校验顺序：交易存在 → 类型支持拆分 → 各拆分分类存在且类型匹配 →
+    /// 空数组（`&[]`）等价于清除拆分，恢复父交易分类统计，不做金额校验；
+    /// 非空数组校验顺序：交易存在 → 类型支持拆分 → 各拆分分类存在且类型匹配 →
     /// 金额 > 0 → 总和等于父交易金额 → 整体替换；任一步失败全部回滚。
     /// 拆分一旦存在，该交易此前的单分类学习样本在同一事务内撤销
     /// （有拆分的交易不参与 Payee → Category 学习，见 `confirm_transaction_learning`）。
@@ -57,7 +58,10 @@ impl BookkeepingService {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
-        Self::validate_splits_in_tx(&tx, transaction.kind, splits, transaction.amount)?;
+        // 空数组 = 清除；非空数组才校验总和 == 父交易金额。
+        if !splits.is_empty() {
+            Self::validate_splits_in_tx(&tx, transaction.kind, splits, transaction.amount)?;
+        }
         Self::replace_transaction_splits_in_tx(&tx, transaction_id, splits)?;
         if !splits.is_empty() {
             Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
@@ -499,7 +503,7 @@ mod tests {
             service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
         service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
         // 一次更新：金额 100 → 120，拆分 60+40 → 70+50（总和 == 新金额）。
-        let updated = service.update_transaction_with_splits(
+        let updated = service.update_transaction_edit(
             tx.id,
             None,
             None,
@@ -508,6 +512,9 @@ mod tests {
             None,
             None,
             Some(&[input(food, "70.00"), input(shopping, "50.00")]),
+            None,
+            None,
+            false,
         )?;
         assert_eq!(updated.amount, Decimal::from(120_u32));
         let splits = service.list_transaction_splits(tx.id)?;
@@ -528,7 +535,7 @@ mod tests {
         let balance_before = service.account(account)?.balance;
         // 金额 120 + 拆分 70+40（总和 110 ≠ 120）→ 校验失败，父交易与拆分全部回滚。
         assert!(service
-            .update_transaction_with_splits(
+            .update_transaction_edit(
                 tx.id,
                 None,
                 None,
@@ -537,6 +544,9 @@ mod tests {
                 None,
                 None,
                 Some(&[input(food, "70.00"), input(shopping, "40.00")]),
+                None,
+                None,
+                false,
             )
             .is_err());
         let transaction = service.transaction(tx.id)?;
@@ -580,7 +590,7 @@ mod tests {
         let tx =
             service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
         service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
-        let updated = service.update_transaction_with_splits(
+        let updated = service.update_transaction_edit(
             tx.id,
             None,
             None,
@@ -589,6 +599,9 @@ mod tests {
             None,
             None,
             Some(&[input(shopping, "30.00"), input(food, "70.00")]),
+            None,
+            None,
+            false,
         )?;
         // 父金额不变，拆分整体替换。
         assert_eq!(updated.amount, Decimal::from(100_u32));
@@ -614,7 +627,7 @@ mod tests {
         service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
         // 备注 + 分类 + 金额一起改，但拆分总和与金额不符 → 全部回滚，保持旧值。
         assert!(service
-            .update_transaction_with_splits(
+            .update_transaction_edit(
                 tx.id,
                 Some("新备注".to_owned()),
                 None,
@@ -623,6 +636,9 @@ mod tests {
                 None,
                 None,
                 Some(&[input(food, "70.00"), input(shopping, "30.00")]),
+                None,
+                None,
+                false,
             )
             .is_err());
         let transaction = service.transaction(tx.id)?;
@@ -639,7 +655,7 @@ mod tests {
         let tx =
             service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
         service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
-        let updated = service.update_transaction_with_splits(
+        let updated = service.update_transaction_edit(
             tx.id,
             None,
             None,
@@ -648,9 +664,28 @@ mod tests {
             None,
             None,
             Some(&[]),
+            None,
+            None,
+            false,
         )?;
         assert_eq!(updated.amount, Decimal::from(100_u32));
         assert!(service.list_transaction_splits(tx.id)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn set_transaction_splits_with_empty_list_clears_splits() -> Result<()> {
+        let (mut service, account, food, shopping, _) = seeded()?;
+        let tx =
+            service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
+        service.set_transaction_splits(tx.id, &[input(shopping, "100.00")])?;
+        // 空数组 = 清除（服务层与 PUT /splits 共用此路径）。
+        service.set_transaction_splits(tx.id, &[])?;
+        assert!(service.list_transaction_splits(tx.id)?.is_empty());
+        // 统计回到父分类。
+        let summary = service.monthly_summary(2026, 8, "CNY")?;
+        assert_eq!(summary.expenses_by_category.len(), 1);
+        assert_eq!(summary.expenses_by_category[0].category_id, food);
         Ok(())
     }
 
@@ -703,7 +738,7 @@ mod tests {
         service.confirm_transaction_learning(tx.id)?;
         assert_eq!(learning_row_count(&service, tx.id)?, 1);
         // 原子路径（无 → 有拆分）：同一事务内撤销学习。
-        service.update_transaction_with_splits(
+        service.update_transaction_edit(
             tx.id,
             None,
             None,
@@ -712,6 +747,9 @@ mod tests {
             None,
             None,
             Some(&[input(food, "60.00"), input(shopping, "40.00")]),
+            None,
+            None,
+            false,
         )?;
         assert_eq!(learning_row_count(&service, tx.id)?, 0);
         Ok(())
@@ -782,7 +820,7 @@ mod tests {
         let tx =
             service.record_expense(account, food, Decimal::from(100_u32), fixed_time(), "测试")?;
         // 模拟一次 PATCH：改 Payee + 带拆分（API 流程：原子更新 → 设 Payee → confirm）。
-        service.update_transaction_with_splits(
+        service.update_transaction_edit(
             tx.id,
             None,
             None,
@@ -791,10 +829,178 @@ mod tests {
             None,
             None,
             Some(&[input(food, "60.00"), input(shopping, "40.00")]),
+            None,
+            None,
+            false,
         )?;
         service.set_transaction_payee(tx.id, Some("瑞幸"))?;
         // 学习判断依据提交后最终状态：有拆分 → 不产生样本。
         service.confirm_transaction_learning(tx.id)?;
+        assert_eq!(learning_row_count(&service, tx.id)?, 0);
+        let stats: i64 =
+            service
+                .conn
+                .query_row("SELECT COUNT(*) FROM payee_category_stats", [], |row| {
+                    row.get(0)
+                })?;
+        assert_eq!(stats, 0);
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // 整次编辑原子性：父字段 + Payee + 标签 + 拆分 + 学习一次事务（收尾）
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn atomic_edit_with_invalid_tag_rolls_back_everything() -> Result<()> {
+        let (mut service, account, food, shopping, _) = seeded()?;
+        let tx = service.record_expense(
+            account,
+            food,
+            Decimal::from(100_u32),
+            fixed_time(),
+            "旧备注",
+        )?;
+        service.set_transaction_splits(tx.id, &[input(food, "60.00"), input(shopping, "40.00")])?;
+        let balance_before = service.account(account)?.balance;
+        // 金额 120 + 拆分 70+50（本身合法）+ 非法标签（含逗号）→ 标签校验失败，
+        // 前面已写入的金额/备注/拆分/余额全部回滚。
+        assert!(service
+            .update_transaction_edit(
+                tx.id,
+                Some("新备注".to_owned()),
+                None,
+                None,
+                Some(Decimal::from(120_u32)),
+                None,
+                None,
+                Some(&[input(food, "70.00"), input(shopping, "50.00")]),
+                None,
+                Some(&["好,标签".to_owned()]),
+                false,
+            )
+            .is_err());
+        let transaction = service.transaction(tx.id)?;
+        assert_eq!(transaction.note, "旧备注");
+        assert_eq!(transaction.amount, Decimal::from(100_u32));
+        assert_eq!(transaction.category_id, Some(food));
+        let splits = service.list_transaction_splits(tx.id)?;
+        assert_eq!(splits.len(), 2);
+        assert_eq!(sum_amounts(&splits), Decimal::from(100_u32));
+        assert_eq!(service.account(account)?.balance, balance_before);
+        assert!(service.all_tags()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn payee_failure_rolls_back_other_fields() -> Result<()> {
+        let (mut service, account, food, _, _) = seeded()?;
+        let tx = service.record_expense(
+            account,
+            food,
+            Decimal::from(100_u32),
+            fixed_time(),
+            "旧备注",
+        )?;
+        // 给交易一份原始描述，使 Payee 变更会触发 alias 学习。
+        service.set_import_metadata(tx.id, "星巴克 - 早餐", None, None)?;
+        // 移除 merchant_aliases 表，让 Payee 步骤的 alias 学习失败。
+        service.conn.execute("DROP TABLE merchant_aliases", [])?;
+        // 改 note + amount + payee：Payee 步骤失败 → 前面的备注/金额全部不落库。
+        assert!(service
+            .update_transaction_edit(
+                tx.id,
+                Some("新备注".to_owned()),
+                None,
+                None,
+                Some(Decimal::from(120_u32)),
+                None,
+                None,
+                None,
+                Some("星巴克"),
+                None,
+                false,
+            )
+            .is_err());
+        let transaction = service.transaction(tx.id)?;
+        assert_eq!(transaction.note, "旧备注");
+        assert_eq!(transaction.amount, Decimal::from(100_u32));
+        assert_eq!(transaction.payee_id, None);
+        assert_eq!(
+            transaction.raw_description.as_deref(),
+            Some("星巴克 - 早餐")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn successful_edit_commits_everything_together() -> Result<()> {
+        let (mut service, account, food, shopping, _) = seeded()?;
+        let tx = service.record_expense(
+            account,
+            food,
+            Decimal::from(100_u32),
+            fixed_time(),
+            "旧备注",
+        )?;
+        let updated = service.update_transaction_edit(
+            tx.id,
+            Some("新备注".to_owned()),
+            None,
+            Some(shopping),
+            Some(Decimal::from(120_u32)),
+            None,
+            None,
+            None,
+            Some("星巴克"),
+            Some(&["通勤".to_owned(), "通勤".to_owned()]),
+            true,
+        )?;
+        assert_eq!(updated.note, "新备注");
+        assert_eq!(updated.amount, Decimal::from(120_u32));
+        assert_eq!(updated.category_id, Some(shopping));
+        assert_eq!(updated.payee_name.as_deref(), Some("星巴克"));
+        assert_eq!(updated.tags, vec!["通勤"]);
+        // 学习确认基于提交后最终状态：(星巴克, 购物) 一份样本。
+        let payee = service.get_or_create_payee("星巴克")?;
+        let stats: u64 = service.conn.query_row(
+            "SELECT count FROM payee_category_stats WHERE payee_id = ?1 AND category_id = ?2",
+            params![payee.id, shopping],
+            |row| row.get(0),
+        )?;
+        assert_eq!(stats, 1);
+        assert_eq!(learning_row_count(&service, tx.id)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn edit_with_splits_payee_and_tags_commits_together_without_learning() -> Result<()> {
+        let (mut service, account, food, shopping, _) = seeded()?;
+        let tx = service.record_expense(
+            account,
+            food,
+            Decimal::from(100_u32),
+            fixed_time(),
+            "旧备注",
+        )?;
+        let updated = service.update_transaction_edit(
+            tx.id,
+            Some("新备注".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&[input(food, "60.00"), input(shopping, "40.00")]),
+            Some("星巴克"),
+            Some(&["超市".to_owned()]),
+            true,
+        )?;
+        assert_eq!(updated.note, "新备注");
+        assert_eq!(updated.payee_name.as_deref(), Some("星巴克"));
+        assert_eq!(updated.tags, vec!["超市"]);
+        assert_eq!(service.list_transaction_splits(tx.id)?.len(), 2);
+        // 有拆分：仍不产生单一 Payee → Category 学习样本。
         assert_eq!(learning_row_count(&service, tx.id)?, 0);
         let stats: i64 =
             service

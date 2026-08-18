@@ -17,29 +17,43 @@ impl BookkeepingService {
         names: Vec<String>,
     ) -> Result<Vec<Tag>> {
         self.transaction(transaction_id)?;
+        let tx = self.conn.transaction()?;
+        let tags = Self::set_transaction_tags_in_tx(&tx, transaction_id, &names)?;
+        tx.commit()?;
+        Ok(tags)
+    }
+
+    /// 事务内：整体替换某笔交易的标签（与 [`BookkeepingService::set_transaction_tags`]
+    /// 同语义，供统一编辑路径在同一事务内调用）。
+    pub(super) fn set_transaction_tags_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction_id: i64,
+        names: &[String],
+    ) -> Result<Vec<Tag>> {
         let mut seen: Vec<String> = Vec::new();
         for name in names {
-            let trimmed = validate_tag_name(&name)?;
+            let trimmed = validate_tag_name(name)?;
             if !seen.iter().any(|existing| existing == &trimmed) {
                 seen.push(trimmed);
             }
         }
 
+        let now = timestamp(Utc::now());
         let mut tags = Vec::with_capacity(seen.len());
-        for name in seen {
-            self.conn.execute(
+        for name in &seen {
+            tx.execute(
                 "INSERT INTO tags(name, created_at) VALUES (?1, ?2) ON CONFLICT(name) DO NOTHING",
-                params![name, timestamp(Utc::now())],
+                params![name, now],
             )?;
-            let tag_id =
-                self.conn
-                    .query_row("SELECT id FROM tags WHERE name = ?1", [&name], |row| {
-                        row.get::<_, i64>(0)
-                    })?;
-            tags.push(Tag { id: tag_id, name });
+            let tag_id = tx.query_row("SELECT id FROM tags WHERE name = ?1", [name], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            tags.push(Tag {
+                id: tag_id,
+                name: name.clone(),
+            });
         }
 
-        let tx = self.conn.transaction()?;
         tx.execute(
             "DELETE FROM transaction_tags WHERE transaction_id = ?1",
             [transaction_id],
@@ -55,7 +69,6 @@ impl BookkeepingService {
             "DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM transaction_tags)",
             [],
         )?;
-        tx.commit()?;
         Ok(tags)
     }
 

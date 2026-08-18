@@ -10,7 +10,7 @@ use rusqlite::{params, OptionalExtension};
 use rust_decimal::Decimal;
 
 use super::*;
-use crate::domain::{CategoryPrediction, Payee};
+use crate::domain::{CategoryPrediction, Payee, Transaction};
 use crate::error::{KokuError, Result};
 
 /// 自动应用分类所需的最少历史样本数。
@@ -184,6 +184,105 @@ impl BookkeepingService {
         Ok(())
     }
 
+    /// 事务内：按名称取得 Payee，不存在时创建（与
+    /// [`BookkeepingService::get_or_create_payee`] 同语义，供统一编辑路径
+    /// 在同一事务内调用）。
+    fn get_or_create_payee_in_tx(tx: &SqlTransaction<'_>, name: &str) -> Result<Payee> {
+        let name = normalize_payee_name(name);
+        if name.is_empty() {
+            return Err(KokuError::InvalidInput(
+                "payee name cannot be empty".to_owned(),
+            ));
+        }
+        if let Some((id, stored_name, created_at)) = tx
+            .query_row(
+                "SELECT id, name, created_at FROM payees WHERE name = ?1",
+                [&name],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+        {
+            return Ok(Payee {
+                id,
+                name: stored_name,
+                created_at: parse_timestamp(&created_at)?,
+            });
+        }
+        let created_at = Utc::now();
+        tx.execute(
+            "INSERT INTO payees(name, created_at) VALUES (?1, ?2)",
+            params![&name, timestamp(created_at)],
+        )?;
+        Ok(Payee {
+            id: tx.last_insert_rowid(),
+            name,
+            created_at,
+        })
+    }
+
+    /// 事务内：记录「原始描述 → Payee」的一次人工确认（与
+    /// [`BookkeepingService::learn_alias`] 同语义，供统一编辑路径在同一事务内调用）。
+    fn learn_alias_in_tx(
+        tx: &SqlTransaction<'_>,
+        raw_description: &str,
+        payee_id: i64,
+    ) -> Result<()> {
+        let normalized = normalize_description(raw_description);
+        if normalized.is_empty() {
+            return Ok(());
+        }
+        let now = timestamp(Utc::now());
+        tx.execute(
+            "INSERT INTO merchant_aliases(normalized_description, payee_id, confirmed_count, last_used_at, created_at)
+             VALUES (?1, ?2, 1, ?3, ?3)
+             ON CONFLICT(normalized_description) DO UPDATE SET
+                 payee_id = excluded.payee_id,
+                 confirmed_count = merchant_aliases.confirmed_count + 1,
+                 last_used_at = excluded.last_used_at",
+            params![normalized, payee_id, now],
+        )?;
+        Ok(())
+    }
+
+    /// 事务内：把用户确认的 Payee 应用到交易（与
+    /// [`BookkeepingService::set_transaction_payee`] 同语义，供统一编辑路径
+    /// 在同一事务内调用）。
+    ///
+    /// - `payee_name`: `Some(非空)` = 设置（查找/创建）；`Some(空串)` = 清除；
+    ///   `None` = 保持不变。
+    /// - 仅当 Payee 真正变化时才更新交易并学习 alias。
+    /// - `transaction` 须为该事务内读取的编辑前快照（raw_description 与
+    ///   payee_id 均取编辑前值，与公开方法语义一致）。
+    /// - 返回最终 payee_id（`None` = 未设置）。
+    pub(super) fn set_transaction_payee_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction: &Transaction,
+        payee_name: Option<&str>,
+    ) -> Result<Option<i64>> {
+        let resolved = match payee_name.map(str::trim) {
+            Some(name) if !name.is_empty() => Some(Self::get_or_create_payee_in_tx(tx, name)?.id),
+            _ => None,
+        };
+        if resolved != transaction.payee_id {
+            if let Some(payee_id) = resolved {
+                if let Some(raw) = &transaction.raw_description {
+                    Self::learn_alias_in_tx(tx, raw, payee_id)?;
+                }
+            }
+            tx.execute(
+                "UPDATE transactions SET payee_id = ?1 WHERE id = ?2",
+                params![resolved, transaction.id],
+            )?;
+        }
+        Ok(resolved)
+    }
+
     /// 记录「原始描述 → Payee」的一次人工确认：归一化描述后写入/更新 alias。
     ///
     /// - 描述不可归一化（为空）时忽略，不产生 alias。
@@ -299,10 +398,21 @@ impl BookkeepingService {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
-        if Self::transaction_has_splits_in_tx(&tx, transaction_id)? {
-            Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
-            tx.commit()?;
+        Self::confirm_transaction_learning_in_tx(&tx, transaction_id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 事务内：确认一笔交易当前的 (Payee, Category) 为学习样本
+    /// （与 [`BookkeepingService::confirm_transaction_learning`] 同语义，供统一
+    /// 编辑路径在提交前调用；学习判断基于同一事务内的最终状态）。
+    pub(super) fn confirm_transaction_learning_in_tx(
+        tx: &SqlTransaction<'_>,
+        transaction_id: i64,
+    ) -> Result<()> {
+        let transaction = Self::transaction_in_tx(tx, transaction_id)?;
+        if Self::transaction_has_splits_in_tx(tx, transaction_id)? {
+            Self::revoke_transaction_learning_in_tx(tx, transaction_id)?;
             return Ok(());
         }
         let current_pair = match (transaction.payee_id, transaction.category_id) {
@@ -321,7 +431,7 @@ impl BookkeepingService {
             return Ok(());
         }
         // 撤销旧贡献（含 transaction_learning 行删除）。
-        Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
+        Self::revoke_transaction_learning_in_tx(tx, transaction_id)?;
         // 加入新贡献（清除 Payee 时撤销后不新增）。
         if let Some((payee_id, category_id)) = current_pair {
             let now = timestamp(Utc::now());
@@ -343,7 +453,6 @@ impl BookkeepingService {
                 params![transaction_id, payee_id, category_id, now],
             )?;
         }
-        tx.commit()?;
         Ok(())
     }
 

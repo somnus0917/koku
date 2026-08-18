@@ -526,11 +526,12 @@ impl BookkeepingService {
     /// 不可改：已撤销的流水、转账/借款/调整流水、已发生报销的支出、报销收入
     /// 流水的金额/账户/结算额（这些只允许改备注/分类/时间）。
     ///
-    /// 不涉及拆分；等价于以 `splits: None` 调用
-    /// [`BookkeepingService::update_transaction_with_splits`]。
+    /// 不涉及拆分/Payee/标签/学习；等价于以 `splits: None`、`payee_name: None`、
+    /// `tag_names: None`、`confirm_learning: false` 调用
+    /// [`BookkeepingService::update_transaction_edit`]。
     ///
-    /// 生产路径统一走 `update_transaction_with_splits`；本方法作为便捷包装
-    /// 供测试与明确「不改拆分」的调用方使用（二进制构建中仅测试引用）。
+    /// 生产路径统一走 `update_transaction_edit`；本方法作为便捷包装
+    /// 供测试与明确「只改基础字段」的调用方使用（二进制构建中仅测试引用）。
     #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub fn update_transaction(
@@ -543,7 +544,7 @@ impl BookkeepingService {
         account_id: Option<i64>,
         settled_amount: Option<Decimal>,
     ) -> Result<Transaction> {
-        self.update_transaction_with_splits(
+        self.update_transaction_edit(
             transaction_id,
             note,
             occurred_at,
@@ -552,22 +553,31 @@ impl BookkeepingService {
             account_id,
             settled_amount,
             None,
+            None,
+            None,
+            false,
         )
     }
 
-    /// 编辑一笔收入/支出流水，并可选地原子替换其拆分分类。
+    /// 一次编辑请求的全部字段在同一个事务内原子提交（生产统一入口）。
     ///
-    /// 与 [`BookkeepingService::update_transaction`] 相同的字段规则，另加
-    /// `splits` 参数：`None` = 不动拆分（此时若改了金额且交易已有拆分，
-    /// 新金额必须等于旧拆分总和）；`Some(&[])` = 清除拆分；`Some(列表)` =
-    /// 校验后整体替换（总和须等于最终新金额）。
+    /// 覆盖：
+    /// - 基础字段 note / occurred_at / category_id / amount / account_id /
+    ///   settled_amount（校验规则同 [`BookkeepingService::update_transaction`]）；
+    /// - `splits`：`None` = 不动拆分（此时若改了金额且交易已有拆分，新金额必须
+    ///   等于旧拆分总和）；`Some(&[])` = 清除拆分；`Some(列表)` = 校验后整体替换
+    ///   （总和须等于最终新金额）；
+    /// - `payee_name`：`None` = 不动；`Some(空串)` = 清除；`Some(非空)` = 设置
+    ///   （查找/创建，Payee 真正变化时学习 alias）；
+    /// - `tag_names`：`None` = 不动；`Some(&[])` = 清除；`Some(列表)` = 整体替换；
+    /// - `confirm_learning`：为真时按**提交后最终状态**确认 Payee → Category
+    ///   学习样本（有拆分的交易只撤销旧贡献、不新增样本）。
     ///
-    /// 父交易字段、余额调整与拆分替换在同一个 `BEGIN IMMEDIATE` 事务内
-    /// 完成：任一步失败全部回滚，绝不出现「父交易已更新、拆分未生效」的
-    /// 中间状态。拆分一旦存在，该交易此前的学习样本在同一事务内撤销
-    /// （有拆分的交易不参与 Payee → Category 学习）。
+    /// 以上全部在同一个 `BEGIN IMMEDIATE` 事务内完成：任一步失败整体回滚，
+    /// 绝不出现「部分字段已保存」的中间状态；alias 与学习样本也只会在整次
+    /// 编辑成功后落库。
     #[allow(clippy::too_many_arguments)]
-    pub fn update_transaction_with_splits(
+    pub fn update_transaction_edit(
         &mut self,
         transaction_id: i64,
         note: Option<String>,
@@ -577,6 +587,9 @@ impl BookkeepingService {
         account_id: Option<i64>,
         settled_amount: Option<Decimal>,
         splits: Option<&[SplitInput]>,
+        payee_name: Option<&str>,
+        tag_names: Option<&[String]>,
+        confirm_learning: bool,
     ) -> Result<Transaction> {
         let tx = self
             .conn
@@ -713,7 +726,7 @@ impl BookkeepingService {
                  amount = ?4, account_id = ?5, settled_amount = ?6
              WHERE id = ?7",
             params![
-                note.unwrap_or(transaction.note),
+                note.unwrap_or_else(|| transaction.note.clone()),
                 timestamp(occurred_at.unwrap_or(transaction.occurred_at)),
                 category_id.or(transaction.category_id),
                 decimal_to_db(new_amount),
@@ -728,6 +741,18 @@ impl BookkeepingService {
             if !items.is_empty() {
                 Self::revoke_transaction_learning_in_tx(&tx, transaction_id)?;
             }
+        }
+        // Payee：查找/创建 + 更新 payee_id + alias 学习（同一事务，失败整体回滚）。
+        if payee_name.is_some() {
+            Self::set_transaction_payee_in_tx(&tx, &transaction, payee_name)?;
+        }
+        // 标签：整体替换（同一事务；非法标签名在此失败并回滚前面所有写入）。
+        if let Some(names) = tag_names {
+            Self::set_transaction_tags_in_tx(&tx, transaction_id, names)?;
+        }
+        // 学习确认：以提交后最终状态为准（有拆分只撤销、不新增）。
+        if confirm_learning {
+            Self::confirm_transaction_learning_in_tx(&tx, transaction_id)?;
         }
         tx.commit()?;
         self.transaction(transaction_id)

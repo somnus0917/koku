@@ -230,9 +230,10 @@ async fn api_update_transaction(
     let mut service = lock_ledger(&state, user.user_id).await?;
     // 只有用户显式修改 Payee 或 Category 才视为人工确认（机器自动识别的导入
     // 交易仅改 note/amount/时间/账户等无关字段不应反向强化学习）。
-    let should_confirm_learning = request.payee_name.is_some() || request.category_id.is_some();
-    // 父交易字段 + 拆分在同一个 SQLite 事务内原子提交（含学习撤销）。
-    service.update_transaction_with_splits(
+    let confirm_learning = request.payee_name.is_some() || request.category_id.is_some();
+    // 父交易字段 + Payee + 标签 + 拆分 + 学习确认在同一个 SQLite 事务内原子
+    // 提交：任一步失败全部回滚，绝不出现「部分字段已保存」的中间状态。
+    let transaction = service.update_transaction_edit(
         transaction_id,
         request.note,
         request.occurred_at,
@@ -241,18 +242,10 @@ async fn api_update_transaction(
         request.account_id,
         request.settled_amount,
         request.splits.as_deref(),
+        request.payee_name.as_deref(),
+        request.tag_names.as_deref(),
+        confirm_learning,
     )?;
-    if let Some(payee_name) = request.payee_name {
-        service.set_transaction_payee(transaction_id, Some(&payee_name))?;
-    }
-    if let Some(tag_names) = request.tag_names {
-        service.set_transaction_tags(transaction_id, tag_names)?;
-    }
-    // 人工保存确认学习样本：撤销旧贡献、加入新贡献（幂等，无变化不累加）。
-    if should_confirm_learning {
-        service.confirm_transaction_learning(transaction_id)?;
-    }
-    let transaction = service.transaction(transaction_id)?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
