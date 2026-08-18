@@ -50,8 +50,11 @@ export function ImportModal({
     }
   };
 
-  const finish = () => {
-    onComplete();
+  /** 导入一旦发生（result != null），任何关闭路径都先刷新父页面再关闭（只执行一次）。 */
+  const closeAfterImport = () => {
+    if (result) {
+      onComplete();
+    }
     onClose();
   };
 
@@ -77,7 +80,7 @@ export function ImportModal({
   };
 
   return (
-    <ModalShell eyebrow="IMPORT" title={t("modals.import.title")} onClose={onClose}>
+    <ModalShell eyebrow="IMPORT" title={t("modals.import.title")} onClose={closeAfterImport}>
       {result ? (
         <div className="import-result">
           <div className="import-summary">
@@ -130,8 +133,8 @@ export function ImportModal({
             {t("modals.import.doneHint", { format: result.format.toUpperCase() })}
           </p>
           <div className="modal-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>{t("common.close")}</button>
-            <button type="button" className="primary-button" onClick={finish}>{t("modals.category.done")}</button>
+            <button type="button" className="secondary-button" onClick={closeAfterImport}>{t("common.close")}</button>
+            <button type="button" className="primary-button" onClick={closeAfterImport}>{t("modals.category.done")}</button>
           </div>
         </div>
       ) : (
