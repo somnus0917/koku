@@ -479,6 +479,13 @@ export const en = {
           amount: "Amount ({{currency}})",
           settled: "Credit to account balance · {{currency}}",
           lockedNote: "This expense has already been reimbursed; only the note, category and time can be edited.",
+          splits: "Split categories",
+          addSplit: "Add split line",
+          removeSplit: "Remove split line",
+          splitTotal: "Total: {{amount}}",
+          splitAssigned: "Assigned: {{amount}}",
+          splitRemaining: "Remaining: {{amount}}",
+          splitRemainingError: "Split amounts must sum to the transaction amount (remaining must be 0)",
           save: "Save changes"
         },
         editAccount: {

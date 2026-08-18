@@ -344,6 +344,16 @@ export interface ImportResult {
   unrecognized: number;
 }
 
+/** 交易拆分：把一笔 expense/income 的金额按多个分类归属（余额只动一次）。 */
+export interface TransactionSplit {
+  id: number;
+  transaction_id: number;
+  category_id: number;
+  amount: string;
+  note: string | null;
+  created_at: string;
+}
+
 export type ReconciliationStatus = "open" | "completed" | "cancelled";
 
 /** 一次账户对账：把对账单余额与账面余额核对，差额可生成调整流水。 */

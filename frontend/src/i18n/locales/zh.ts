@@ -479,6 +479,13 @@ export const zh = {
           amount: "金额（{{currency}}）",
           settled: "计入账户余额 · {{currency}}",
           lockedNote: "该笔支出已发生报销，仅可修改备注、分类和时间。",
+          splits: "拆分分类",
+          addSplit: "添加拆分行",
+          removeSplit: "删除拆分行",
+          splitTotal: "总金额：{{amount}}",
+          splitAssigned: "已分配：{{amount}}",
+          splitRemaining: "剩余：{{amount}}",
+          splitRemainingError: "拆分金额之和必须等于交易金额（剩余需为 0）才能保存",
           save: "保存修改"
         },
         editAccount: {

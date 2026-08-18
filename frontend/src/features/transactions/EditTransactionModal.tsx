@@ -1,12 +1,12 @@
 //! 编辑交易弹窗。
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, Plus, X } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { TagEditor } from "./TagEditor";
 import { CategoryAvatar } from "../../components/avatar";
 import { formatMoney, toLocalDateTimeValue } from "../../lib";
-import { listPayees } from "../../api";
+import { clearTransactionSplits, listPayees, listTransactionSplits, setTransactionSplits } from "../../api";
 import type { Account, Category, Payee, Tag, Transaction } from "../../types";
 
 export function EditTransactionModal({
@@ -66,6 +66,45 @@ export function EditTransactionModal({
     };
   }, []);
 
+  // 拆分分类：仅 expense/income 支持；加载现有拆分作为初始快照。
+  const [splits, setSplits] = useState<{ category_id: number; amount: string; note: string }[]>([]);
+  const [originalSplits, setOriginalSplits] = useState<{ category_id: number; amount: string; note: string }[]>([]);
+  const [splitsLoaded, setSplitsLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    listTransactionSplits(transaction.id)
+      .then((items) => {
+        if (cancelled) return;
+        const rows = items.map((item) => ({
+          category_id: item.category_id,
+          amount: item.amount,
+          note: item.note ?? ""
+        }));
+        setSplits(rows);
+        setOriginalSplits(rows);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setSplitsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transaction.id]);
+  const assigned = splits.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const totalAmount = Number(amount) || 0;
+  const remaining = totalAmount - assigned;
+  const splitsChanged = JSON.stringify(splits) !== JSON.stringify(originalSplits);
+  const updateSplit = (index: number, patch: Partial<{ category_id: number; amount: string; note: string }>) => {
+    setSplits((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+  const addSplit = () => {
+    setSplits((rows) => [...rows, { category_id: matchingCategories[0]?.id ?? 0, amount: "", note: "" }]);
+  };
+  const removeSplit = (index: number) => {
+    setSplits((rows) => rows.filter((_, i) => i !== index));
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true); setError(null);
@@ -98,11 +137,25 @@ export function EditTransactionModal({
       if (payeeName.trim() !== (transaction.payee_name ?? "")) {
         input.payee_name = payeeName.trim();
       }
-      if (Object.keys(input).length === 0) {
+      if (splits.length > 0 && remaining.toFixed(2) !== "0.00") {
+        setError(t("modals.editTransaction.splitRemainingError"));
+        setSubmitting(false);
+        return;
+      }
+      if (Object.keys(input).length === 0 && !splitsChanged) {
         onClose();
         return;
       }
-      await onSubmit(input);
+      if (Object.keys(input).length > 0) {
+        await onSubmit(input);
+      }
+      if (splitsChanged) {
+        if (splits.length > 0) {
+          await setTransactionSplits(transaction.id, splits);
+        } else {
+          await clearTransactionSplits(transaction.id);
+        }
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("modals.transaction.saveFailed"));
       setSubmitting(false);
@@ -184,6 +237,55 @@ export function EditTransactionModal({
           <label className="span-two"><span>{t("common.tags")}</span>
             <TagEditor value={tagNames} onChange={setTagNames} suggestions={tags.map((tag) => tag.name)} />
           </label>
+        </div>
+        <div className="split-section">
+          <div className="section-heading compact-heading">
+            <div><span>SPLIT</span><h2>{t("modals.editTransaction.splits")}</h2></div>
+          </div>
+          {splits.map((row, index) => (
+            <div className="split-row" key={index}>
+              <select
+                value={row.category_id}
+                onChange={(e) => updateSplit(index, { category_id: Number(e.target.value) })}
+              >
+                {matchingCategories.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                value={row.amount}
+                onChange={(e) => updateSplit(index, { amount: e.target.value })}
+                placeholder="0.00"
+              />
+              <input
+                value={row.note}
+                onChange={(e) => updateSplit(index, { note: e.target.value })}
+                placeholder={t("common.optional")}
+              />
+              <button
+                type="button"
+                className="row-action"
+                onClick={() => removeSplit(index)}
+                aria-label={t("modals.editTransaction.removeSplit")}
+              ><X size={15} /></button>
+            </div>
+          ))}
+          <div className="split-actions">
+            <button type="button" className="text-button" onClick={addSplit}><Plus size={15} /> {t("modals.editTransaction.addSplit")}</button>
+          </div>
+          {splits.length > 0 && (
+            <div className="split-totals">
+              <span>{t("modals.editTransaction.splitTotal", { amount: formatMoney(amount, transaction.currency) })}</span>
+              <span>{t("modals.editTransaction.splitAssigned", { amount: formatMoney(assigned.toFixed(2), transaction.currency) })}</span>
+              <span className={Math.abs(remaining) < 0.005 ? "positive" : "negative"}>
+                {t("modals.editTransaction.splitRemaining", { amount: formatMoney(remaining.toFixed(2), transaction.currency) })}
+              </span>
+            </div>
+          )}
         </div>
         {reimbursementLocked && <p className="fx-hint">{t("modals.editTransaction.lockedNote")}</p>}
         {error && <div className="form-error">{error}</div>}

@@ -3656,3 +3656,47 @@ button:disabled {
   gap: 8px;
   line-height: 1.6;
 }
+
+/* ---- 拆分交易（Split Transaction）---- */
+.split-section {
+  margin-top: 14px;
+  padding: 0 0 4px;
+}
+.split-section .section-heading {
+  margin-bottom: 8px;
+}
+.split-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.split-row select {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.split-row input[type="number"] {
+  flex: 0 1 110px;
+  min-width: 0;
+}
+.split-row input:not([type]) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.split-actions {
+  margin: 2px 0 6px;
+}
+.split-totals {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.9em;
+  color: var(--muted, #888);
+  margin-top: 4px;
+}
+.split-totals .positive {
+  color: var(--income, #2e8b57);
+}
+.split-totals .negative {
+  color: var(--expense, #c0392b);
+}

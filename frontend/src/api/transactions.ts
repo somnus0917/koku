@@ -1,7 +1,7 @@
 //! 交易流水 API：查询、增删改、作废/恢复、导出、导入与小票。
 import { API_BASE, ApiError, request, type Envelope } from "./client";
 import i18n from "../i18n";
-import type { ImportResult, Receipt, Transaction, TransactionKind } from "../types";
+import type { ImportResult, Receipt, Transaction, TransactionKind, TransactionSplit } from "../types";
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
 export function loadTransactions(
@@ -147,6 +147,27 @@ export function updateTransaction(
     body: JSON.stringify(input)
   });
 }
+/** 列出交易的拆分分类（无拆分为空数组）。 */
+export function listTransactionSplits(transactionId: number): Promise<TransactionSplit[]> {
+  return request<TransactionSplit[]>(`/api/transactions/${transactionId}/splits`);
+}
+
+/** 原子替换交易的拆分分类（金额总和须等于父交易金额）。 */
+export function setTransactionSplits(
+  transactionId: number,
+  splits: { category_id: number; amount: string; note?: string }[]
+): Promise<TransactionSplit[]> {
+  return request(`/api/transactions/${transactionId}/splits`, {
+    method: "PUT",
+    body: JSON.stringify(splits)
+  });
+}
+
+/** 清除交易的拆分分类（恢复父交易分类统计）。 */
+export function clearTransactionSplits(transactionId: number): Promise<{ cleared: boolean }> {
+  return request(`/api/transactions/${transactionId}/splits`, { method: "DELETE" });
+}
+
 /** 批量导入交易（CSV/QIF/OFX）；multipart 字段见后端契约。 */
 export function importTransactions(
   file: File,
