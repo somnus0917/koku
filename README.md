@@ -31,7 +31,9 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 应用内改密码（修改后旧会话全部失效）
 - TOTP 二步验证：登录分两步，应用内自助开启/关闭（基于 `totp-rs`）
 - 数据库备份/恢复：管理员一键备份（共享库 + 全部用户账本打包 zip）、下载、恢复；可选定时备份；可选自动上传 Cloudflare R2 实现异地冗余（含从 R2 恢复）
-- CSV 导入：支持 Koku 导出 CSV 往返、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），逐行去重与错误汇总
+- CSV 导入：支持 Koku 导出 CSV 往返（含商户/原始描述）、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），逐行去重与错误汇总
+- 商户/收款方 Payee：交易可关联商户，输入时自动补全，列表展示并支持搜索
+- 自动学习分类（本地统计，非 AI）：根据用户确认的「原始描述 → 商户」映射与「商户 → 分类」历史频率自动识别商户并预测分类；高置信度自动分类、中置信度给出可一键采纳的分类建议；人工纠正会即时更新统计。学习数据只存在用户自己的 SQLite 账本中，可在个人设置中清除
 - 年度汇总与滚动平均：按年统计逐月收支与分类明细，最近 N 个月收支的滚动均值视图
 - 通用 API 限流：除健康检查外所有 `/api` 请求按客户端限流（默认 300 次/分钟）
 - 深色/浅色/跟随系统三种主题，本地持久化并实时跟随系统偏好
@@ -50,9 +52,22 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 koku/
 ├── Cargo.toml          # Rust API 与领域核心
 ├── src/main.rs         # 进程入口、定时备份与 SMTP 提醒后台任务
-├── src/domain.rs       # 领域类型：账户/分类/交易/对账/提醒枚举与 DTO
-├── src/service.rs      # SQLite 持久化、记账业务、软撤销与迁移
-├── src/api.rs          # REST API 处理器、鉴权中间件与路由
+├── src/domain.rs       # 领域类型：账户/分类/交易/商户/对账/提醒枚举与 DTO
+├── src/service/        # SQLite 持久化与记账业务（按领域拆分子模块）
+│   ├── mod.rs          # BookkeepingService 核心、共享 helper 与模块声明
+│   ├── schema.rs       # 建表/索引初始化（幂等）
+│   ├── migrations.rs   # 旧库兼容迁移（补列、整表重建）
+│   ├── transactions.rs # 收支/转账/软撤销/流水查询
+│   ├── payees.rs       # 商户归一化、别名学习、分类统计与预测
+│   ├── import.rs       # 批量导入写入与学习统计
+│   └── …               # accounts/budgets/loans/recurring/summaries/users 等
+├── src/api/            # REST 处理器、鉴权中间件与路由（按领域拆分子模块）
+│   ├── mod.rs          # 路由装配与全局中间件（鉴权/CORS/限流/Trace）
+│   ├── state.rs        # AppState / AuthenticatedUser / 账本锁
+│   ├── auth.rs         # 登录/TOTP/会话/密码
+│   ├── transactions.rs # 流水 CRUD
+│   ├── payees.rs       # 商户搜索与学习数据清理
+│   └── …               # accounts/categories/deposits/loans/budgets 等
 ├── src/auth.rs         # 登录配置与会话 Cookie/令牌工具
 ├── src/totp.rs         # TOTP 密钥生成/校验/otpauth URI
 ├── src/backup.rs       # 备份/恢复：VACUUM INTO 快照 + zip 打包
@@ -65,8 +80,11 @@ koku/
 ├── src/error.rs        # 统一错误类型与 HTTP 映射
 ├── data/koku.db        # 首次运行自动创建，不纳入版本控制
 └── frontend/
-    ├── src/App.tsx     # 页面、业务交互和组件
-    ├── src/api.ts      # 独立 API 客户端
+    ├── src/app/        # 应用外壳：App 会话路由 / LedgerApp 页面编排 / Sidebar / Topbar
+    ├── src/api/        # 独立 API 客户端（按领域拆分子模块 + client 封装）
+    ├── src/features/   # 按业务领域的页面与弹窗（accounts/transactions/payees/settings…）
+    ├── src/i18n/       # 多语言资源（locales/zh.ts、locales/en.ts）
+    ├── src/components/ # 共享 UI 组件（ModalShell / RateHint / PageTitle…）
     ├── src/theme.ts    # 浅色/深色/跟随系统主题 hook
     ├── src/styles.css  # Koku 视觉系统与响应式布局
     └── vite.config.ts  # 开发代理 /api -> 127.0.0.1:8080
