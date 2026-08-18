@@ -116,9 +116,14 @@ fn build_transport(config: &MailerConfig) -> Result<SmtpTransport> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// 多个测试读写同一组环境变量，必须串行执行避免互相干扰。
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn mailer_config_is_absent_without_host() -> Result<()> {
+        let _guard = ENV_LOCK.lock().unwrap();
         // 测试环境变量可控：确保 KOKU_SMTP_HOST 未设置。
         std::env::remove_var("KOKU_SMTP_HOST");
         assert!(MailerConfig::from_env()?.is_none());
@@ -127,6 +132,7 @@ mod tests {
 
     #[test]
     fn mailer_config_requires_from_and_to_when_host_is_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("KOKU_SMTP_HOST", "smtp.example.com");
         std::env::remove_var("KOKU_SMTP_FROM");
         std::env::remove_var("KOKU_SMTP_TO");
@@ -139,6 +145,7 @@ mod tests {
 
     #[test]
     fn rejects_unknown_tls_modes() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("KOKU_SMTP_HOST", "smtp.example.com");
         std::env::set_var("KOKU_SMTP_FROM", "a@example.com");
         std::env::set_var("KOKU_SMTP_TO", "b@example.com");
