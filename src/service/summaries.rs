@@ -88,6 +88,9 @@ impl BookkeepingService {
         let (start, end) = month_bounds(year, month)?;
         let currency = normalize_currency(currency.to_owned())?;
         let today = Utc::now().date_naive();
+        let class = CATEGORY_AGG_CLASS;
+        let amount = CATEGORY_AGG_AMOUNT;
+        let from = CATEGORY_AGG_FROM;
         let sql = format!(
             r#"
             SELECT t.kind,
@@ -100,10 +103,7 @@ impl BookkeepingService {
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
             GROUP BY 1, 2, 3, 4
             ORDER BY 1, 2, 4
-            "#,
-            class = CATEGORY_AGG_CLASS,
-            amount = CATEGORY_AGG_AMOUNT,
-            from = CATEGORY_AGG_FROM,
+            "#
         );
         let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(params![timestamp(start), timestamp(end)], |row| {
@@ -147,6 +147,9 @@ impl BookkeepingService {
         let today = Utc::now().date_naive();
         let range = optional_month_bounds(year, month)?;
         let (filter_sql, params) = tag_filter_sql(&normalized, range.as_ref());
+        let class = CATEGORY_AGG_CLASS;
+        let amount = CATEGORY_AGG_AMOUNT;
+        let from = CATEGORY_AGG_FROM;
         let sql = format!(
             "SELECT t.kind,
                     {class},
@@ -155,10 +158,7 @@ impl BookkeepingService {
              {from}
              WHERE {filter_sql}
              GROUP BY 1, 2, 3, 4
-             ORDER BY 1, 2, 4",
-            class = CATEGORY_AGG_CLASS,
-            amount = CATEGORY_AGG_AMOUNT,
-            from = CATEGORY_AGG_FROM,
+             ORDER BY 1, 2, 4"
         );
         let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(
@@ -372,6 +372,9 @@ impl BookkeepingService {
         let currency = normalize_currency(currency.to_owned())?;
         let (start, end) = year_bounds(year)?;
         let today = Utc::now().date_naive();
+        let class = CATEGORY_AGG_CLASS;
+        let amount = CATEGORY_AGG_AMOUNT;
+        let from = CATEGORY_AGG_FROM;
         let sql = format!(
             r#"
             SELECT CAST(strftime('%m', t.occurred_at) AS INTEGER),
@@ -385,10 +388,7 @@ impl BookkeepingService {
               AND t.occurred_at >= ?1 AND t.occurred_at < ?2
             GROUP BY 1, 2, 3, 4, 5
             ORDER BY 1, 2, 3
-            "#,
-            class = CATEGORY_AGG_CLASS,
-            amount = CATEGORY_AGG_AMOUNT,
-            from = CATEGORY_AGG_FROM,
+            "#
         );
         let mut statement = self.conn.prepare(&sql)?;
         let rows = statement.query_map(params![timestamp(start), timestamp(end)], |row| {
