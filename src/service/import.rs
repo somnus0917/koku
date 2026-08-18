@@ -340,6 +340,31 @@ mod tests {
         Ok((service, account.id, food.id))
     }
 
+    /// 通过真实交易确认一笔 (Payee, Category) 学习样本（预置导入学习数据用）。
+    fn learn(service: &mut BookkeepingService, payee_id: i64, category_id: i64) -> Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let account = service.create_account(
+            format!("预置学习-{n}"),
+            AccountType::Cash,
+            "CNY",
+            Decimal::from(100000_u32),
+        )?;
+        let tx = service.record_expense(
+            account.id,
+            category_id,
+            Decimal::from(10_u32),
+            chrono::Utc::now(),
+            "预置样本",
+        )?;
+        service.conn.execute(
+            "UPDATE transactions SET payee_id = ?1 WHERE id = ?2",
+            params![payee_id, tx.id],
+        )?;
+        service.confirm_transaction_learning(tx.id)
+    }
+
     #[test]
     fn imports_rows_and_deduplicates_by_fingerprint() -> Result<()> {
         let (mut service, account_id, food_id) = seeded_service()?;
@@ -486,7 +511,7 @@ mod tests {
         let eleme = service.get_or_create_payee("饿了么")?;
         service.learn_alias("支付宝-上海拉扎斯信息科技有限公司", eleme.id)?;
         for _ in 0..5 {
-            service.learn_payee_category(eleme.id, food.id)?;
+            learn(&mut service, eleme.id, food.id)?;
         }
         let mut imported_row = row(
             1,
@@ -508,7 +533,12 @@ mod tests {
         assert_eq!(result.categories_auto_applied, 1);
         assert_eq!(result.category_suggestions, 0);
         assert_eq!(result.unrecognized, 0);
-        let transaction = service.transactions(100, 0)?[0].clone();
+        // 预置学习也创建了交易，按导入备注定位导入的那条。
+        let transaction = service
+            .transactions(100, 0)?
+            .into_iter()
+            .find(|item| item.note == "支付宝-上海拉扎斯信息科技有限公司20260815001")
+            .unwrap();
         assert_eq!(transaction.payee_id, Some(eleme.id));
         assert_eq!(transaction.category_id, Some(food.id));
         assert_eq!(
@@ -535,10 +565,10 @@ mod tests {
         let jd = service.get_or_create_payee("京东")?;
         service.learn_alias("京东商城", jd.id)?;
         for _ in 0..7 {
-            service.learn_payee_category(jd.id, food.id)?;
+            learn(&mut service, jd.id, food.id)?;
         }
         for _ in 0..3 {
-            service.learn_payee_category(jd.id, shopping.id)?;
+            learn(&mut service, jd.id, shopping.id)?;
         }
         let mut imported_row = row(1, date(2026, 3, 2), "-99.00", "京东商城");
         imported_row.note = "支付宝-京东商城".to_owned();
@@ -554,7 +584,11 @@ mod tests {
         assert_eq!(result.categories_auto_applied, 0);
         assert_eq!(result.category_suggestions, 1);
         assert_eq!(result.unrecognized, 0);
-        let transaction = service.transactions(100, 0)?[0].clone();
+        let transaction = service
+            .transactions(100, 0)?
+            .into_iter()
+            .find(|item| item.note == "支付宝-京东商城")
+            .unwrap();
         assert_eq!(transaction.payee_id, Some(jd.id));
         // 建议未自动应用：分类保持默认「购物」。
         assert_eq!(transaction.category_id, Some(shopping.id));

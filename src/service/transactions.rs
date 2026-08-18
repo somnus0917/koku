@@ -509,6 +509,10 @@ impl BookkeepingService {
             [transaction_id],
         )?;
         tx.execute(
+            "DELETE FROM transaction_learning WHERE transaction_id = ?1",
+            [transaction_id],
+        )?;
+        tx.execute(
             "DELETE FROM reimbursements WHERE expense_id = ?1 OR income_id = ?1",
             [transaction_id],
         )?;

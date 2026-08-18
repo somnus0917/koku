@@ -142,6 +142,12 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             note                      TEXT NOT NULL DEFAULT ''
         );
 
+        CREATE TABLE IF NOT EXISTS payees (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS transactions (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
             kind          TEXT NOT NULL CHECK (kind IN ('expense', 'income', 'transfer', 'loan', 'adjustment', 'trade', 'deposit')),
@@ -179,12 +185,6 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_transactions_account
             ON transactions(account_id, to_account_id);
 
-        CREATE TABLE IF NOT EXISTS payees (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT NOT NULL UNIQUE,
-            created_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS merchant_aliases (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
             normalized_description TEXT NOT NULL UNIQUE,
@@ -200,6 +200,13 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             count        INTEGER NOT NULL DEFAULT 0,
             last_used_at TEXT NOT NULL,
             PRIMARY KEY (payee_id, category_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS transaction_learning (
+            transaction_id INTEGER PRIMARY KEY REFERENCES transactions(id),
+            payee_id       INTEGER NOT NULL REFERENCES payees(id),
+            category_id    INTEGER NOT NULL REFERENCES categories(id),
+            updated_at     TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS users (
