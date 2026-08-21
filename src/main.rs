@@ -34,7 +34,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::api::{api_router, AppState};
+use crate::api::{api_router, lock_auth, lock_ledger, AppState};
 use crate::auth::AuthConfig;
 use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
@@ -92,6 +92,55 @@ async fn run_server() -> Result<()> {
         if admin_ledger.is_empty()? {
             seed_demo_data(&mut admin_ledger)?;
         }
+    }
+
+    // 周期交易和预算结转由服务端负责，不再依赖任一用户打开浏览器。默认每小时
+    // 检查一次；每项业务自身幂等，因此重启或多次 tick 不会重复记账。
+    let jobs_interval_minutes = std::env::var("KOKU_JOBS_INTERVAL_MINUTES")
+        .unwrap_or_else(|_| "60".to_owned())
+        .parse::<u64>()
+        .map_err(|error| {
+            KokuError::AuthConfiguration(format!(
+                "KOKU_JOBS_INTERVAL_MINUTES must be an integer: {error}"
+            ))
+        })?;
+    if !(1..=24 * 60).contains(&jobs_interval_minutes) {
+        return Err(KokuError::AuthConfiguration(
+            "KOKU_JOBS_INTERVAL_MINUTES must be between 1 and 1440".to_owned(),
+        ));
+    }
+    {
+        let jobs_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(jobs_interval_minutes * 60));
+            loop {
+                interval.tick().await;
+                let _maintenance = jobs_state.maintenance.read().await;
+                let users = match lock_auth(&jobs_state).and_then(|service| service.users()) {
+                    Ok(users) => users,
+                    Err(error) => {
+                        tracing::error!(target: "jobs", error = %error, "could not list users for scheduled jobs");
+                        continue;
+                    }
+                };
+                for user in users.into_iter().filter(|user| user.enabled) {
+                    match lock_ledger(&jobs_state, user.id).await {
+                        Ok(mut ledger) => {
+                            if let Err(error) = ledger.run_recurring() {
+                                tracing::error!(target: "jobs", user_id = user.id, error = %error, "recurring job failed");
+                            }
+                            if let Err(error) = ledger.rollover_budgets_once(chrono::Utc::now()) {
+                                tracing::error!(target: "jobs", user_id = user.id, error = %error, "budget rollover failed");
+                            }
+                        }
+                        Err(error) => {
+                            tracing::error!(target: "jobs", user_id = user.id, error = %error, "could not open ledger for scheduled jobs")
+                        }
+                    }
+                }
+            }
+        });
     }
 
     // 定时备份：KOKU_BACKUP_INTERVAL_HOURS > 0 时启用（0 表示关闭，仅手动触发）。

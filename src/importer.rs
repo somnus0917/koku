@@ -100,6 +100,34 @@ pub struct ParseIssue {
     pub message: String,
 }
 
+/// 导入前的只读预览：用于确认格式与内容，不会写入账本。
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportPreview {
+    pub format: String,
+    pub total_rows: usize,
+    pub income_rows: usize,
+    pub expense_rows: usize,
+    pub issues: Vec<ParseIssue>,
+    pub sample_rows: Vec<ImportRow>,
+}
+
+pub fn preview(format: ImportFormat, rows: &[ImportRow], issues: Vec<ParseIssue>) -> ImportPreview {
+    ImportPreview {
+        format: format.as_str().to_owned(),
+        total_rows: rows.len(),
+        income_rows: rows
+            .iter()
+            .filter(|row| row.amount.is_sign_positive())
+            .count(),
+        expense_rows: rows
+            .iter()
+            .filter(|row| row.amount.is_sign_negative())
+            .count(),
+        issues,
+        sample_rows: rows.iter().take(20).cloned().collect(),
+    }
+}
+
 type ParseOutcome = (Vec<ImportRow>, Vec<ParseIssue>);
 
 /// 按格式分发解析。

@@ -3,13 +3,14 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
-import type { Account, Category, RecurrenceFrequency } from "../../types";
+import type { Account, Category, RecurrenceFrequency, RecurringRule } from "../../types";
 
 export function RecurringModal({
   accounts,
   categories,
   onClose,
-  onSubmit
+  onSubmit,
+  rule
 }: {
   accounts: Account[];
   categories: Category[];
@@ -23,14 +24,15 @@ export function RecurringModal({
     frequency: RecurrenceFrequency;
     next_due_at: string;
   }) => Promise<void>;
+  rule?: RecurringRule | null;
 }) {
-  const [kind, setKind] = useState<"expense" | "income">("expense");
-  const [accountId, setAccountId] = useState(accounts[0]?.id ?? 0);
-  const [categoryId, setCategoryId] = useState("");
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
-  const [frequency, setFrequency] = useState<RecurrenceFrequency>("monthly");
-  const [startDate, setStartDate] = useState("");
+  const [kind, setKind] = useState<"expense" | "income">(rule?.kind === "income" ? "income" : "expense");
+  const [accountId, setAccountId] = useState(rule?.account_id ?? accounts[0]?.id ?? 0);
+  const [categoryId, setCategoryId] = useState(rule ? String(rule.category_id) : "");
+  const [amount, setAmount] = useState(rule?.amount ?? "");
+  const [note, setNote] = useState(rule?.note ?? "");
+  const [frequency, setFrequency] = useState<RecurrenceFrequency>(rule?.frequency ?? "monthly");
+  const [startDate, setStartDate] = useState(rule?.next_due_at.slice(0, 10) ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { t } = useTranslation();
@@ -55,7 +57,7 @@ export function RecurringModal({
     }
   };
   return (
-    <ModalShell eyebrow="RECURRING" title={t("modals.recurring.title")} onClose={onClose}>
+    <ModalShell eyebrow="RECURRING" title={rule ? t("modals.recurring.editTitle") : t("modals.recurring.title")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="form-grid">
           <label><span>{t("modals.recurring.kind")}</span>
@@ -92,7 +94,7 @@ export function RecurringModal({
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
           <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.create")}</button>
+          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{rule ? t("modals.recurring.save") : t("common.create")}</button>
         </div>
       </form>
     </ModalShell>

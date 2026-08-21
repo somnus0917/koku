@@ -1,14 +1,15 @@
 //! 交易流水 API：查询、增删改、作废/恢复、导出、导入与小票。
 import { API_BASE, ApiError, request, type Envelope } from "./client";
 import i18n from "../i18n";
-import type { ImportResult, Receipt, Transaction, TransactionKind, TransactionSplit } from "../types";
+import type { ImportPreview, ImportResult, Receipt, Transaction, TransactionKind, TransactionSplit } from "../types";
 
 /** 分页读取交易流水；传入 `year`/`month` 时按自然月过滤，否则读取全部。 */
 export function loadTransactions(
   offset: number,
   limit: number,
   year?: number,
-  month?: number
+  month?: number,
+  filters?: { search?: string; kind?: string; tags?: string[] }
 ): Promise<Transaction[]> {
   const query = new URLSearchParams({
     limit: String(limit),
@@ -18,6 +19,9 @@ export function loadTransactions(
     query.set("year", String(year));
     query.set("month", String(month));
   }
+  if (filters?.search?.trim()) query.set("search", filters.search.trim());
+  if (filters?.kind && filters.kind !== "all") query.set("kind", filters.kind);
+  if (filters?.tags?.length) query.set("tags", filters.tags.join(","));
   return request<Transaction[]>(`/api/transactions?${query.toString()}`);
 }
 /** 给交易上传小票/发票附件（multipart；文件字段名为 `file`）。 */
@@ -202,4 +206,30 @@ export function importTransactions(
     }
     return payload.data;
   });
+}
+
+/** 只解析导入文件并返回前 20 条样例，不写入账本。 */
+export function previewImportTransactions(
+  file: File,
+  input: { format?: string; account_id: number; category_id?: number; currency?: string }
+): Promise<ImportPreview> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("account_id", String(input.account_id));
+  if (input.format) form.append("format", input.format);
+  if (input.category_id !== undefined) form.append("category_id", String(input.category_id));
+  if (input.currency) form.append("currency", input.currency);
+  return fetch(`${API_BASE}/api/transactions/import/preview`, {
+    method: "POST", credentials: "same-origin", body: form
+  }).then(async (response) => {
+    const payload = (await response.json().catch(() => ({}))) as Partial<Envelope<ImportPreview>> & { error?: string };
+    if (!response.ok) throw new ApiError(payload.error ?? i18n.t("api.importFailed", { status: response.status }), response.status);
+    if (payload.data === undefined) throw new Error(i18n.t("api.invalidData"));
+    return payload.data;
+  });
+}
+
+/** 软撤销一整批已导入流水。 */
+export function undoImportBatch(batchId: string): Promise<{ undone: number }> {
+  return request(`/api/transactions/import/${batchId}/undo`, { method: "POST" });
 }

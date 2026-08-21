@@ -12,7 +12,7 @@ import { RecurringSection } from "../recurring/RecurringSection";
 import { HoldingSection } from "../holdings/HoldingSection";
 import { CreditCardSection } from "./CreditCardSection";
 import { formatMoney } from "../../lib";
-import type { Account, AccountType, AppData, Deposit, Loan } from "../../types";
+import type { Account, AccountType, AppData, Deposit, Loan, RecurringRule } from "../../types";
 
 export function AccountsPage({
   data,
@@ -24,6 +24,8 @@ export function AccountsPage({
   onRepay,
   onCreateRecurring,
   onDeleteRecurring,
+  onEditRecurring,
+  onToggleRecurringPaused,
   onBuyStock,
   onSellStock,
   onSetHoldingPrice,
@@ -40,6 +42,8 @@ export function AccountsPage({
   onRepay: (loan: Loan) => void;
   onCreateRecurring: () => void;
   onDeleteRecurring: (id: number) => void;
+  onEditRecurring: (rule: RecurringRule) => void;
+  onToggleRecurringPaused: (rule: RecurringRule) => void;
   onBuyStock: (symbol?: string) => void;
   onSellStock: (symbol: string) => void;
   onSetHoldingPrice: (holdingId: number, price: string) => void;
@@ -106,6 +110,8 @@ export function AccountsPage({
         categories={data.categories}
         onCreate={onCreateRecurring}
         onDelete={onDeleteRecurring}
+        onEdit={onEditRecurring}
+        onTogglePaused={onToggleRecurringPaused}
       />
       <HoldingSection
         holdings={data.holdings}

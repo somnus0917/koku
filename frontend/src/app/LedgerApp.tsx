@@ -27,15 +27,15 @@ import {
   reimburse,
   repayLoan,
   restoreTransaction,
-  rolloverBudgets,
-  runRecurring,
   sellStock,
   sendReminderDigest,
   setBudget,
   setHoldingPrice,
+  setRecurringPaused,
   settleDeposit,
   unmarkReimbursable,
   updateAccount,
+  updateRecurringRule,
   updateTransaction,
   uploadReceipt,
   voidTransaction
@@ -70,7 +70,7 @@ import { MobileBottomNav } from "./MobileBottomNav";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import type { View } from "./nav";
-import type { Account, AppData, Deposit, Loan, ReminderItem, Transaction, UserRole } from "../types";
+import type { Account, AppData, Deposit, Loan, ReminderItem, RecurringRule, Transaction, UserRole } from "../types";
 
 type Modal =
   | "transaction"
@@ -95,6 +95,7 @@ type Modal =
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
 const TRANSACTIONS_PAGE_SIZE = 200;
 const MONTH_TRANSACTIONS_LIMIT = 1000;
+type TransactionFilters = { search: string; kind: string; tags: string[] };
 
 export function LedgerApp({ username, role, userId, onLogout }: { username: string; role: UserRole; userId: number; onLogout: () => Promise<void> }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
@@ -111,6 +112,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   const [settleTarget, setSettleTarget] = useState<Deposit | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
   const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
+  const [editRecurring, setEditRecurring] = useState<RecurringRule | null>(null);
   const [reconcileAccount, setReconcileAccount] = useState<Account | null>(null);
   const [tradeSide, setTradeSide] = useState<"buy" | "sell">("buy");
   const [tradeSymbol, setTradeSymbol] = useState("");
@@ -126,6 +128,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   const [txOffset, setTxOffset] = useState(0);
   const [txHasMore, setTxHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [txFilters, setTxFilters] = useState<TransactionFilters>({ search: "", kind: "all", tags: [] });
 
   // monthValue 为空字符串表示「全部月份」；此时 year/month 为 undefined。
   const monthParts = monthValue ? monthValue.split("-").map(Number) : [];
@@ -137,16 +140,14 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
       if (quiet) setRefreshing(true);
       else setLoading(true);
       try {
-        // 先触发周期交易到期生成与月度预算自动延续（均请求驱动、无后台任务），再读取最新数据。
-        await runRecurring().catch(() => undefined);
-        await rolloverBudgets().catch(() => undefined);
+        // 周期交易与预算结转由服务端后台任务执行；前端只读取最新账本状态。
         const now = new Date();
         const summaryYear = year ?? now.getFullYear();
         const summaryMonth = month ?? now.getMonth() + 1;
         const limit = month === undefined ? TRANSACTIONS_PAGE_SIZE : MONTH_TRANSACTIONS_LIMIT;
         const [summary, transactions] = await Promise.all([
           loadSummaryData(summaryYear, summaryMonth, currency),
-          loadTransactions(0, limit, year, month)
+          loadTransactions(0, limit, year, month, txFilters)
         ]);
         setData({ ...summary, transactions });
         setTxOffset(transactions.length);
@@ -159,14 +160,14 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         setRefreshing(false);
       }
     },
-    [currency, month, year, t]
+    [currency, month, year, t, txFilters]
   );
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !txHasMore) return;
     setLoadingMore(true);
     try {
-      const page = await loadTransactions(txOffset, TRANSACTIONS_PAGE_SIZE);
+      const page = await loadTransactions(txOffset, TRANSACTIONS_PAGE_SIZE, year, month, txFilters);
       setData((current) =>
         current ? { ...current, transactions: [...current.transactions, ...page] } : current
       );
@@ -177,7 +178,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, txHasMore, txOffset, t]);
+  }, [loadingMore, txHasMore, txOffset, t, year, month, txFilters]);
 
   useEffect(() => {
     void refresh();
@@ -268,9 +269,13 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               setLoanTarget(loan);
               setModal("repay");
             }}
-            onCreateRecurring={() => setModal("recurring")}
+            onCreateRecurring={() => { setEditRecurring(null); setModal("recurring"); }}
             onDeleteRecurring={(id) =>
               void mutate(() => deleteRecurringRule(id), t("accounts.recurringDeleted"))
+            }
+            onEditRecurring={(rule) => { setEditRecurring(rule); setModal("recurring"); }}
+            onToggleRecurringPaused={(rule) =>
+              void mutate(() => setRecurringPaused(rule.id, !rule.paused_at), rule.paused_at ? t("accounts.recurringResumed") : t("accounts.recurringPaused"))
             }
             onBuyStock={(symbol = "") => {
               setTradeSide("buy");
@@ -330,6 +335,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             onLoadMore={loadMore}
             loadingMore={loadingMore}
             hasMore={txHasMore}
+            onFilterChange={setTxFilters}
             exportYear={year}
             exportMonth={month}
           />
@@ -408,6 +414,10 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           reminderError={reminderError}
           reminderSending={reminderSending}
           onSendDigest={() => void sendDigest()}
+          onReminderAction={() => {
+            setReminderOpen(false);
+            setActiveView("accounts");
+          }}
           onOpenMobileMenu={() => setMobileNavOpen(true)}
           role={role}
           theme={theme}
@@ -542,8 +552,9 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         <RecurringModal
           accounts={data.accounts}
           categories={data.categories}
+          rule={editRecurring}
           onClose={() => setModal(null)}
-          onSubmit={(input) => mutate(() => createRecurringRule(input), t("accounts.recurringCreated"))}
+          onSubmit={(input) => mutate(() => editRecurring ? updateRecurringRule(editRecurring.id, input) : createRecurringRule(input), t("accounts.recurringCreated"))}
         />
       )}
       {modal === "trade" && data && (

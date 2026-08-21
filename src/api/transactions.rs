@@ -52,6 +52,11 @@ struct TransactionQuery {
     /// 与 `month` 成对出现时，只返回该自然月的流水。
     year: Option<i32>,
     month: Option<u32>,
+    /// 全文关键词（备注、原始描述、商户），由 SQLite 在全部历史流水中筛选。
+    search: Option<String>,
+    kind: Option<TransactionKind>,
+    /// 逗号分隔标签，AND 语义。
+    tags: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,15 +86,28 @@ async fn api_transactions(
     let limit = query.limit.unwrap_or(500);
     let offset = query.offset.unwrap_or(0);
     let service = lock_ledger(&state, user.user_id).await?;
-    let transactions = match (query.year, query.month) {
-        (Some(year), Some(month)) => service.transactions_in_month(year, month, limit, offset)?,
-        (None, None) => service.transactions(limit, offset)?,
+    let range = match (query.year, query.month) {
+        (Some(year), Some(month)) => Some(crate::service::month_bounds(year, month)?),
+        (None, None) => None,
         _ => {
             return Err(KokuError::InvalidInput(
                 "year and month must be provided together".to_owned(),
             ))
         }
     };
+    let tags: Vec<String> = query
+        .tags
+        .as_deref()
+        .map(|value| value.split(',').map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let transactions = service.search_transactions(
+        range,
+        limit,
+        offset,
+        query.search.as_deref(),
+        query.kind,
+        &tags,
+    )?;
     Ok(Json(ApiResponse::new(transactions)))
 }
 

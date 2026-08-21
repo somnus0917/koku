@@ -25,14 +25,14 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 标签：跨类目聚合（多对多），表单自由输入 + 列表筛选
 - 股票持仓：买入/卖出（摊薄成本）、市价更新，持仓市值计入净资产；支持一键从 Stooq 拉取市价（可配置缓存有效期，Dashboard 加载时自动懒刷新）
 - 账户对账：以对账单余额为目标余额，完成时自动生成可审计的调整流水（撤销即回滚）
-- 信用卡账单：信用账户可设账单日/还款日（1~31，无对应日期自动落到月末），账户页展示额度/已用/可用、本期已出账与未出账金额、下次账单与还款日；消费 = Credit 账户上的支出，还款 = 储蓄 → 信用卡的转账（**还款不是支出**，不会重复统计）；每个结束的账单周期在首次读取时固化为不可变快照，未出账部分按 `occurred_at` 动态计算；还款/贷项按 FIFO 冲抵最早账单（可解释近似，不追踪「某次还款具体还哪一期」）；金额全程 `Decimal` 精确求和，不使用浮点
+- 信用卡账单：信用账户可设账单日/还款日（1~31，无对应日期自动落到月末），账户页展示额度/已用/可用、本期已出账与未出账金额、下次账单与还款日及近期账单历史；消费 = Credit 账户上的支出，还款 = 储蓄 → 信用卡的转账（**还款不是支出**，不会重复统计）；每个结束的账单周期在首次读取时固化为不可变快照，未出账部分按 `occurred_at` 动态计算；还款/贷项按 FIFO 冲抵最早账单（可解释近似，不追踪「某次还款具体还哪一期」）；金额全程 `Decimal` 精确求和，不使用浮点
 - 到期提醒：API 返回未来 N 天内到期（含逾期）的定存、借款与未还信用卡账单；可选 SMTP 每日邮件摘要
 - 报销附件：交易可挂小票/发票图片（存 SQLite BLOB）
 - 到期提醒：Dashboard 顶部提示已到期未结的定存与借款
 - 应用内改密码（修改后旧会话全部失效）
 - TOTP 二步验证：登录分两步，应用内自助开启/关闭（基于 `totp-rs`）
 - 数据库备份/恢复：管理员一键备份（共享库 + 全部用户账本打包 zip）、下载、恢复；可选定时备份；可选自动上传 Cloudflare R2 实现异地冗余（含从 R2 恢复）
-- CSV 导入：支持 Koku 收支交易 CSV 再导入（保留分类、Payee 与原始描述等交易元数据，需自行选择目标账户）、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），逐行去重与错误汇总。注意：CSV 是数据交换/编辑/再导入格式，不是完整账本备份——账户、转账与复杂交易不会自动重建，完整备份/恢复请使用数据库 ZIP backup
+- CSV 导入：支持 Koku 收支交易 CSV 再导入（保留分类、Payee 与原始描述等交易元数据，需自行选择目标账户）、通用银行流水 CSV（中文/英文列名别名）、QIF、OFX（SGML/XML），先预览后确认、逐行去重与错误汇总，并可整批软撤销。注意：CSV 是数据交换/编辑/再导入格式，不是完整账本备份——账户、转账与复杂交易不会自动重建，完整备份/恢复请使用数据库 ZIP backup
 - 商户/收款方 Payee：交易可关联商户，输入时自动补全，列表展示并支持搜索
 - 自动学习分类（本地统计，非 AI）：根据用户确认的「原始描述 → 商户」映射与「商户 → 分类」历史频率自动识别商户并预测分类；高置信度自动分类、中置信度给出可一键采纳的分类建议；人工纠正会即时更新统计。学习数据只存在用户自己的 SQLite 账本中，可在个人设置中清除
 - 年度汇总与滚动平均：按年统计逐月收支与分类明细，最近 N 个月收支的滚动均值视图
@@ -260,6 +260,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
 | `KOKU_RATE_LIMIT_PER_MINUTE` | `300` | 通用 API 限流：每客户端每分钟请求上限；`0` 关闭 |
 | `KOKU_BACKUP_INTERVAL_HOURS` | `0` | 定时备份间隔（小时）；`0` 关闭（仅管理员手动触发） |
+| `KOKU_JOBS_INTERVAL_MINUTES` | `60` | 服务端周期交易生成与预算结转检查间隔（分钟，1–1440） |
 | `KOKU_BACKUP_KEEP` | `14` | 保留最近多少份备份，超出的自动清理 |
 | `KOKU_QUOTE_TTL_HOURS` | `24` | 持仓市价缓存有效期（小时），超过视为过期并在刷新时重新拉取 |
 | `KOKU_SMTP_HOST` | 未设置 | SMTP 服务器（设置后启用到期提醒邮件；不设置则仅应用内提醒） |
@@ -292,12 +293,16 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `DELETE` | `/api/users/{id}` | （管理员）删除用户（连带其独立账本，不可恢复） |
 | `GET/POST` | `/api/accounts` | 查询或创建账户 |
 | `PATCH` | `/api/accounts/{id}` | 编辑账户（名称/类型/币种；有交易历史时不可改币种） |
+| `GET` | `/api/accounts/{id}/credit-card-summary` | 信用卡额度、已用额度、已出账与未出账摘要 |
+| `GET` | `/api/accounts/{id}/credit-card-statements` | 信用卡已固化账单及按 FIFO 计算的待还金额 |
 | `POST` | `/api/accounts/{id}/adjust-balance` | 余额调整（带符号增量，生成可追溯的调整流水） |
 | `GET/POST` | `/api/categories` | 查询或创建分类 |
 | `DELETE` | `/api/categories/{id}` | 删除分类；历史账单和统计保留原分类 |
-| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=` 按自然月过滤；记录时可带 `tag_names` |
+| `GET/POST` | `/api/transactions` | 查询或记录收入/支出；查询支持 `?limit=&offset=` 分页（默认 `limit=500`，上限 1000），可加 `?year=&month=`、`search=`、`kind=`、`tags=` 在服务端筛选；记录时可带 `tag_names` |
 | `GET` | `/api/transactions/export` | 导出交易为 CSV（可选 `?year=&month=`），触发浏览器下载 |
 | `POST` | `/api/transactions/import` | 批量导入流水（multipart：`file`/`format`(auto,csv,qif,ofx)/`account_id`/`category_id`/`currency`），逐行去重并返回错误汇总 |
+| `POST` | `/api/transactions/import/preview` | 解析导入文件并返回行数、收支统计、问题与样例，不写入账本 |
+| `POST` | `/api/transactions/import/{batch_id}/undo` | 整批软撤销一次导入产生的流水 |
 | `POST` | `/api/transfers` | 原子账户转账 |
 | `POST` | `/api/transactions/{id}/void` | 撤销交易并恢复余额（软删除） |
 | `POST` | `/api/transactions/{id}/restore` | 撤销删除：恢复已撤销的流水（余额与报销状态一并恢复） |
@@ -309,8 +314,10 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `GET` | `/api/tags` | 查询全部标签 |
 | `GET/PUT/DELETE` | `/api/budgets` / `/api/budgets/{category_id}` | 查询/设置/清除某分类某月预算（`?year=&month=`） |
 | `GET/POST` | `/api/recurring` | 查询或创建周期交易（每月/每周） |
-| `POST` | `/api/recurring/run` | 触发到期周期交易生成（请求驱动） |
-| `DELETE` | `/api/recurring/{id}` | 删除周期交易 |
+| `POST` | `/api/recurring/run` | 手动触发到期周期交易生成（服务端也定时执行） |
+| `PUT/DELETE` | `/api/recurring/{id}` | 编辑或删除周期交易 |
+| `POST` | `/api/recurring/{id}/paused` | 暂停或恢复周期交易（`{"paused": true|false}`） |
+| `GET` | `/api/recurring/{id}/preview` | 预览接下来三次发生日期 |
 | `GET/POST` | `/api/holdings` | 查询股票持仓 |
 | `POST` | `/api/holdings/refresh` | 刷新全部过期/缺失市价（Stooq，并发拉取），返回逐标的明细 |
 | `POST` | `/api/holdings/buy` / `/api/holdings/sell` | 买入/卖出股票（现金与持仓联动） |

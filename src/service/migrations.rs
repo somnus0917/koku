@@ -132,6 +132,23 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if !table_has_column(conn, "transactions", "import_batch_id")? {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN import_batch_id TEXT",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_transactions_import_batch
+            ON transactions(import_batch_id);
+        CREATE TABLE IF NOT EXISTS import_batches (
+            id         TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            undone_at  TEXT
+        );
+        "#,
+    )?;
     // —— 信用卡账单模型：账单日 / 还款日（放在账户整表重建之后，避免重建丢失新列）——
     if !table_has_column(conn, "accounts", "statement_day")? {
         conn.execute("ALTER TABLE accounts ADD COLUMN statement_day INTEGER", [])?;

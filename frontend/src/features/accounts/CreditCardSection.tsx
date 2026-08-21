@@ -4,8 +4,8 @@ import { useTranslation } from "react-i18next";
 import { CreditCard } from "lucide-react";
 import { convertedMoney } from "../../components/accountDisplay";
 import { formatDay, formatMoney } from "../../lib";
-import { getCreditCardSummary } from "../../api";
-import type { Account, AppData, CreditCardSummary } from "../../types";
+import { getCreditCardStatements, getCreditCardSummary } from "../../api";
+import type { Account, AppData, CreditCardStatement, CreditCardSummary } from "../../types";
 
 export function CreditCardSection({
   accounts,
@@ -48,13 +48,14 @@ function CreditCardCard({
 }) {
   const { t } = useTranslation();
   const [summary, setSummary] = useState<CreditCardSummary | null>(null);
+  const [statements, setStatements] = useState<CreditCardStatement[]>([]);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setFailed(false);
-    getCreditCardSummary(account.id)
-      .then((item) => {
-        if (!cancelled) setSummary(item);
+    Promise.all([getCreditCardSummary(account.id), getCreditCardStatements(account.id)])
+      .then(([item, history]) => {
+        if (!cancelled) { setSummary(item); setStatements(history); }
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -116,6 +117,16 @@ function CreditCardCard({
             {summary.next_statement_date != null && row(t("accounts.nextStatement"), formatDay(summary.next_statement_date))}
             {summary.next_due_date != null && row(t("accounts.nextDue"), formatDay(summary.next_due_date))}
           </div>
+          {statements.length > 0 && (
+            <div className="credit-card-dates" aria-label="Credit card statement history">
+              {statements.slice(0, 3).map((item) => (
+                <div className="credit-card-stat" key={item.statement_date}>
+                  <span>{formatDay(item.statement_date)} · {item.due_at ? formatDay(item.due_at) : "—"}</span>
+                  <strong>{formatMoney(item.outstanding, account.currency)} / {formatMoney(item.amount, account.currency)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </article>

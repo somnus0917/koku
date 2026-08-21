@@ -6,7 +6,8 @@ use rust_decimal::Decimal;
 
 use super::*;
 use crate::domain::{
-    CategoryKind, RecurrenceFrequency, RecurringRule, Transaction, TransactionKind,
+    CategoryKind, RecurrenceFrequency, RecurringOccurrence, RecurringRule, Transaction,
+    TransactionKind,
 };
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
@@ -92,6 +93,71 @@ impl BookkeepingService {
         self.conn
             .execute("DELETE FROM recurring_rules WHERE id = ?1", [id])?;
         Ok(rule)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_recurring_rule(
+        &mut self,
+        id: i64,
+        kind: TransactionKind,
+        account_id: i64,
+        category_id: i64,
+        amount: Decimal,
+        note: String,
+        frequency: RecurrenceFrequency,
+        next_due_at: DateTime<Utc>,
+    ) -> Result<RecurringRule> {
+        positive_amount(amount)?;
+        if !matches!(kind, TransactionKind::Expense | TransactionKind::Income) {
+            return Err(KokuError::InvalidInput(
+                "recurring rules must be expense or income".to_owned(),
+            ));
+        }
+        self.account(account_id)?;
+        let category = self.category(category_id)?;
+        let expected = if kind == TransactionKind::Expense {
+            CategoryKind::Expense
+        } else {
+            CategoryKind::Income
+        };
+        if category.kind != expected {
+            return Err(KokuError::CategoryKindMismatch {
+                expected: expected.as_str(),
+                actual: category.kind.as_str(),
+            });
+        }
+        self.conn.execute(
+            "UPDATE recurring_rules SET kind = ?1, account_id = ?2, category_id = ?3, amount = ?4, note = ?5, frequency = ?6, next_due_at = ?7 WHERE id = ?8",
+            params![kind.as_str(), account_id, category_id, decimal_to_db(amount), note, frequency.as_str(), timestamp(next_due_at), id],
+        )?;
+        self.recurring_rule(id)
+    }
+
+    pub fn set_recurring_paused(&mut self, id: i64, paused: bool) -> Result<RecurringRule> {
+        self.recurring_rule(id)?;
+        self.conn.execute(
+            "UPDATE recurring_rules SET paused_at = ?1 WHERE id = ?2",
+            params![
+                if paused {
+                    Some(timestamp(Utc::now()))
+                } else {
+                    None
+                },
+                id
+            ],
+        )?;
+        self.recurring_rule(id)
+    }
+
+    pub fn recurring_preview(&self, id: i64, count: usize) -> Result<Vec<RecurringOccurrence>> {
+        let rule = self.recurring_rule(id)?;
+        let mut due_at = rule.next_due_at;
+        let mut values = Vec::with_capacity(count.min(12));
+        for _ in 0..count.min(12) {
+            values.push(RecurringOccurrence { due_at });
+            due_at = advance_next_due(due_at, rule.frequency);
+        }
+        Ok(values)
     }
 
     /// 把到期未生成的周期规则落库为真实流水，并推进 `next_due_at`。
@@ -202,4 +268,57 @@ fn recurring_from_row(row: RecurringRow) -> Result<RecurringRule> {
         next_due_at: parse_timestamp(&row.7)?,
         paused_at: row.8.as_deref().map(parse_timestamp).transpose()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::AccountType;
+
+    #[test]
+    fn recurring_rules_can_be_edited_paused_and_previewed() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        service.ensure_default_categories()?;
+        let account = service.create_account("现金", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let category = service
+            .categories()?
+            .into_iter()
+            .find(|category| category.name == "餐饮")
+            .expect("default food category");
+        let first_due = Utc::now() + Duration::days(3);
+        let rule = service.create_recurring_rule(
+            TransactionKind::Expense,
+            account.id,
+            category.id,
+            Decimal::from(20_u32),
+            "午餐".to_owned(),
+            RecurrenceFrequency::Weekly,
+            first_due,
+        )?;
+        let updated = service.update_recurring_rule(
+            rule.id,
+            TransactionKind::Expense,
+            account.id,
+            category.id,
+            Decimal::from(25_u32),
+            "订阅".to_owned(),
+            RecurrenceFrequency::Monthly,
+            first_due,
+        )?;
+        assert_eq!(updated.note, "订阅");
+        assert_eq!(updated.amount, Decimal::from(25_u32));
+        assert_eq!(updated.frequency, RecurrenceFrequency::Monthly);
+
+        let paused = service.set_recurring_paused(rule.id, true)?;
+        assert!(paused.paused_at.is_some());
+        let preview = service.recurring_preview(rule.id, 3)?;
+        assert_eq!(preview.len(), 3);
+        assert_eq!(preview[0].due_at.timestamp(), first_due.timestamp());
+        assert!(preview[1].due_at > preview[0].due_at);
+        assert!(service
+            .set_recurring_paused(rule.id, false)?
+            .paused_at
+            .is_none());
+        Ok(())
+    }
 }

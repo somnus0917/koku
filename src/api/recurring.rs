@@ -8,7 +8,9 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::domain::{RecurrenceFrequency, RecurringRule, Transaction, TransactionKind};
+use crate::domain::{
+    RecurrenceFrequency, RecurringOccurrence, RecurringRule, Transaction, TransactionKind,
+};
 use crate::error::Result;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
@@ -23,6 +25,11 @@ struct CreateRecurringRequest {
     note: String,
     frequency: RecurrenceFrequency,
     next_due_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetPausedRequest {
+    paused: bool,
 }
 
 async fn api_recurring_rules(
@@ -63,6 +70,50 @@ async fn api_delete_recurring(
     Ok(Json(ApiResponse::new(rule)))
 }
 
+async fn api_update_recurring(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(rule_id): AxumPath<i64>,
+    Json(request): Json<CreateRecurringRequest>,
+) -> Result<Json<ApiResponse<RecurringRule>>> {
+    let rule = lock_ledger(&state, user.user_id)
+        .await?
+        .update_recurring_rule(
+            rule_id,
+            request.kind,
+            request.account_id,
+            request.category_id,
+            request.amount,
+            request.note,
+            request.frequency,
+            request.next_due_at,
+        )?;
+    Ok(Json(ApiResponse::new(rule)))
+}
+
+async fn api_set_recurring_paused(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(rule_id): AxumPath<i64>,
+    Json(request): Json<SetPausedRequest>,
+) -> Result<Json<ApiResponse<RecurringRule>>> {
+    let rule = lock_ledger(&state, user.user_id)
+        .await?
+        .set_recurring_paused(rule_id, request.paused)?;
+    Ok(Json(ApiResponse::new(rule)))
+}
+
+async fn api_recurring_preview(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(rule_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Vec<RecurringOccurrence>>>> {
+    let occurrences = lock_ledger(&state, user.user_id)
+        .await?
+        .recurring_preview(rule_id, 3)?;
+    Ok(Json(ApiResponse::new(occurrences)))
+}
+
 async fn api_run_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -78,5 +129,16 @@ pub(super) fn router() -> Router<AppState> {
             get(api_recurring_rules).post(api_create_recurring),
         )
         .route("/api/recurring/run", post(api_run_recurring))
-        .route("/api/recurring/{rule_id}", delete(api_delete_recurring))
+        .route(
+            "/api/recurring/{rule_id}",
+            delete(api_delete_recurring).put(api_update_recurring),
+        )
+        .route(
+            "/api/recurring/{rule_id}/paused",
+            post(api_set_recurring_paused),
+        )
+        .route(
+            "/api/recurring/{rule_id}/preview",
+            get(api_recurring_preview),
+        )
 }

@@ -40,8 +40,9 @@ mod summaries;
 mod transactions;
 
 pub use state::AppState;
+pub(crate) use state::{lock_auth, lock_ledger};
 
-use state::{lock_auth, AuthenticatedUser};
+use state::AuthenticatedUser;
 
 /// 备份和恢复自身需要取得维护写锁，不能在本中间件持读锁，否则会自锁。
 fn maintenance_operation(path: &str) -> bool {

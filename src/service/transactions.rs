@@ -1,7 +1,7 @@
 //! 收支与转账：原子余额更新、软撤销、流水查询。
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, TransactionBehavior};
+use rusqlite::{params, params_from_iter, types::Value, TransactionBehavior};
 use rust_decimal::Decimal;
 
 use super::*;
@@ -776,7 +776,7 @@ impl BookkeepingService {
 
     /// 分页读取全部流水，按时间倒序。`limit` 必须为 1..=1000，`offset` 从 0 开始。
     pub fn transactions(&self, limit: u32, offset: u32) -> Result<Vec<Transaction>> {
-        self.transactions_in_range(None, limit, offset)
+        self.search_transactions(None, limit, offset, None, None, &[])
     }
 
     /// 分页读取某自然月的流水（时间倒序）。区间语义复用 `month_bounds`，
@@ -789,14 +789,18 @@ impl BookkeepingService {
         offset: u32,
     ) -> Result<Vec<Transaction>> {
         let (start, end) = month_bounds(year, month)?;
-        self.transactions_in_range(Some((start, end)), limit, offset)
+        self.search_transactions(Some((start, end)), limit, offset, None, None, &[])
     }
 
-    fn transactions_in_range(
+    /// 服务端分页筛选流水。关键词匹配备注、原始描述和商户；标签为 AND 语义。
+    pub fn search_transactions(
         &self,
         range: Option<(DateTime<Utc>, DateTime<Utc>)>,
         limit: u32,
         offset: u32,
+        search: Option<&str>,
+        kind: Option<TransactionKind>,
+        tags: &[String],
     ) -> Result<Vec<Transaction>> {
         if !(1..=1000).contains(&limit) {
             return Err(KokuError::InvalidInput(
@@ -804,25 +808,42 @@ impl BookkeepingService {
             ));
         }
         const COLUMNS: &str = "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions";
-        let rows: Vec<rusqlite::Result<TransactionRow>> = match range {
-            Some((start, end)) => {
-                let mut statement = self.conn.prepare(&format!(
-                    "{COLUMNS} WHERE occurred_at >= ?1 AND occurred_at < ?2 ORDER BY occurred_at DESC, id DESC LIMIT ?3 OFFSET ?4"
-                ))?;
-                let mapped = statement.query_map(
-                    params![timestamp(start), timestamp(end), limit, offset],
-                    transaction_row,
-                )?;
-                mapped.collect()
-            }
-            None => {
-                let mut statement = self.conn.prepare(&format!(
-                    "{COLUMNS} ORDER BY occurred_at DESC, id DESC LIMIT ?1 OFFSET ?2"
-                ))?;
-                let mapped = statement.query_map(params![limit, offset], transaction_row)?;
-                mapped.collect()
-            }
+        let mut where_clauses = Vec::new();
+        let mut values = Vec::new();
+        if let Some((start, end)) = range {
+            where_clauses.push("occurred_at >= ?");
+            values.push(Value::Text(timestamp(start)));
+            where_clauses.push("occurred_at < ?");
+            values.push(Value::Text(timestamp(end)));
+        }
+        if let Some(search) = search.map(str::trim).filter(|value| !value.is_empty()) {
+            where_clauses.push("LOWER(note || ' ' || COALESCE(raw_description, '') || ' ' || COALESCE((SELECT name FROM payees WHERE id = transactions.payee_id), '')) LIKE ?");
+            values.push(Value::Text(format!("%{}%", search.to_lowercase())));
+        }
+        if let Some(kind) = kind {
+            where_clauses.push("kind = ?");
+            values.push(Value::Text(kind.as_str().to_owned()));
+        }
+        for tag in tags
+            .iter()
+            .map(|tag| tag.trim())
+            .filter(|tag| !tag.is_empty())
+        {
+            where_clauses.push("EXISTS (SELECT 1 FROM transaction_tags tt JOIN tags t ON t.id = tt.tag_id WHERE tt.transaction_id = transactions.id AND t.name = ?)");
+            values.push(Value::Text(tag.to_owned()));
+        }
+        let where_sql = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_clauses.join(" AND "))
         };
+        values.push(Value::Integer(i64::from(limit)));
+        values.push(Value::Integer(i64::from(offset)));
+        let mut statement = self.conn.prepare(&format!(
+            "{COLUMNS}{where_sql} ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?"
+        ))?;
+        let mapped = statement.query_map(params_from_iter(values), transaction_row)?;
+        let rows: Vec<rusqlite::Result<TransactionRow>> = mapped.collect();
         rows.into_iter()
             .map(|row| transaction_from_row(row?))
             .collect()

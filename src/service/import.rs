@@ -8,6 +8,7 @@ use rusqlite::params;
 use serde::Serialize;
 
 use super::*;
+use crate::auth::generate_session_token;
 use crate::domain::{CategoryKind, CategorySuggestion, TransactionKind};
 use crate::error::{KokuError, Result};
 use crate::importer::{ImportFormat, ImportRow, ParseIssue};
@@ -19,6 +20,8 @@ const MAX_IMPORT_REPORT_ITEMS: usize = 500;
 /// 一次导入的统计结果。
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportResult {
+    /// 本次导入批次；可通过对应 API 整批撤销（软撤销）。
+    pub batch_id: String,
     pub format: String,
     pub account_id: i64,
     pub imported: usize,
@@ -43,6 +46,7 @@ pub struct ImportResult {
 /// 单行导入结果（统计用）。
 struct ImportRowOutcome {
     imported: bool,
+    transaction_id: Option<i64>,
     payee_recognized: bool,
     category_auto_applied: bool,
     suggestion: Option<CategorySuggestion>,
@@ -71,6 +75,11 @@ impl BookkeepingService {
         let mut category_suggestion_count = 0_usize;
         let mut category_suggestions = Vec::new();
         let mut unrecognized = 0_usize;
+        let batch_id = generate_session_token()?;
+        self.conn.execute(
+            "INSERT INTO import_batches(id, created_at) VALUES (?1, ?2)",
+            params![batch_id, timestamp(Utc::now())],
+        )?;
         for row in rows {
             match self.import_row(
                 account_id,
@@ -81,6 +90,13 @@ impl BookkeepingService {
             ) {
                 Ok(outcome) => {
                     if outcome.imported {
+                        let transaction_id = outcome
+                            .transaction_id
+                            .expect("imported rows have a transaction id");
+                        self.conn.execute(
+                            "UPDATE transactions SET import_batch_id = ?1 WHERE id = ?2",
+                            params![batch_id, transaction_id],
+                        )?;
                         imported += 1;
                         if outcome.payee_recognized {
                             payees_recognized += 1;
@@ -112,6 +128,7 @@ impl BookkeepingService {
             }
         }
         Ok(ImportResult {
+            batch_id,
             format: format.as_str().to_owned(),
             account_id,
             imported,
@@ -124,6 +141,46 @@ impl BookkeepingService {
             category_suggestions,
             unrecognized,
         })
+    }
+
+    /// 软撤销某次导入创建的全部流水，保留审计轨迹与外部流水号去重保护。
+    pub fn undo_import_batch(&mut self, batch_id: &str) -> Result<usize> {
+        let undone_at: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT undone_at FROM import_batches WHERE id = ?1",
+                [batch_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(undone_at) = undone_at else {
+            return Err(KokuError::NotFound {
+                entity: "import batch",
+                id: 0,
+            });
+        };
+        if undone_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "import batch has already been undone".to_owned(),
+            ));
+        }
+        let ids = {
+            let mut statement = self.conn.prepare(
+                "SELECT id FROM transactions WHERE import_batch_id = ?1 AND voided_at IS NULL ORDER BY id DESC",
+            )?;
+            let ids = statement
+                .query_map([batch_id], |row| row.get::<_, i64>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            ids
+        };
+        for id in &ids {
+            self.void_transaction(*id)?;
+        }
+        self.conn.execute(
+            "UPDATE import_batches SET undone_at = ?1 WHERE id = ?2",
+            params![timestamp(Utc::now()), batch_id],
+        )?;
+        Ok(ids.len())
     }
 
     /// 校验并返回导入默认分类；未提供时报错（与既有行为一致）。
@@ -332,13 +389,14 @@ impl BookkeepingService {
         if duplicate.is_some() {
             return Ok(ImportRowOutcome {
                 imported: false,
+                transaction_id: None,
                 payee_recognized: false,
                 category_auto_applied: false,
                 suggestion: None,
             });
         }
 
-        match kind {
+        let transaction_id = match kind {
             TransactionKind::Expense => {
                 let tx = self.record_expense_in_currency(
                     account_id,
@@ -359,6 +417,7 @@ impl BookkeepingService {
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
+                tx.id
             }
             TransactionKind::Income => {
                 let tx = self.record_income_in_currency(
@@ -379,11 +438,13 @@ impl BookkeepingService {
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
+                tx.id
             }
             _ => unreachable!("import only produces income/expense"),
-        }
+        };
         Ok(ImportRowOutcome {
             imported: true,
+            transaction_id: Some(transaction_id),
             payee_recognized,
             category_auto_applied,
             suggestion,
@@ -502,6 +563,46 @@ mod tests {
         let account = service.account(account_id)?;
         // 1000 - 100 - 45.50 + 2000
         assert_eq!(account.balance, Decimal::from_str_exact("2854.50").unwrap());
+        Ok(())
+    }
+
+    #[test]
+    fn undoing_an_import_batch_voids_only_its_transactions() -> Result<()> {
+        let (mut service, account_id, food_id) = seeded_service()?;
+        let existing = service.record_expense(
+            account_id,
+            food_id,
+            Decimal::from(20_u32),
+            chrono::Utc::now(),
+            "导入前已有流水",
+        )?;
+        let result = service.import_transactions(
+            ImportFormat::Csv,
+            account_id,
+            Some(food_id),
+            None,
+            vec![row(1, date(2026, 3, 1), "-100.00", "待撤销导入")],
+        )?;
+
+        assert_eq!(result.imported, 1);
+        assert_eq!(service.undo_import_batch(&result.batch_id)?, 1);
+        let transactions = service.transactions(100, 0)?;
+        assert_eq!(
+            transactions
+                .iter()
+                .filter(|item| item.voided_at.is_none())
+                .count(),
+            1
+        );
+        assert_eq!(
+            transactions
+                .iter()
+                .filter(|item| item.voided_at.is_some())
+                .count(),
+            1
+        );
+        assert!(service.transaction(existing.id)?.voided_at.is_none());
+        assert!(service.undo_import_batch(&result.batch_id).is_err());
         Ok(())
     }
 

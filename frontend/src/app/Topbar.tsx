@@ -42,6 +42,7 @@ export function Topbar({
   reminderError,
   reminderSending,
   onSendDigest,
+  onReminderAction,
   onOpenMobileMenu,
   role,
   theme,
@@ -64,6 +65,7 @@ export function Topbar({
   reminderError: string | null;
   reminderSending: boolean;
   onSendDigest: () => void;
+  onReminderAction: (item: ReminderItem) => void;
   onOpenMobileMenu: () => void;
   role: UserRole;
   theme: ThemePreference;
@@ -135,7 +137,7 @@ export function Topbar({
                   <p className="reminder-empty">{t("reminders.empty")}</p>
                 ) : (
                   reminders.map((item) => (
-                    <div className="reminder-item" key={`${item.kind}-${item.id}`}>
+                    <button className="reminder-item" type="button" key={`${item.kind}-${item.id}`} onClick={() => onReminderAction(item)}>
                       <div className="reminder-item-main">
                         <strong>{item.title}</strong>
                         <span>{formatMoney(item.amount, item.currency)} · {formatReminderDay(item.due_at)}</span>
@@ -143,7 +145,7 @@ export function Topbar({
                       <span className={`reminder-badge ${item.overdue ? "overdue" : ""}`}>
                         {item.overdue ? t("reminders.overdueDays", { days: Math.abs(item.days_left) }) : t("reminders.daysLeft", { days: item.days_left })}
                       </span>
-                    </div>
+                    </button>
                   ))
                 )}
               </div>

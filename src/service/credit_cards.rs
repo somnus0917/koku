@@ -32,7 +32,7 @@ use rusqlite::{params_from_iter, types::Value};
 use rust_decimal::Decimal;
 
 use super::*;
-use crate::domain::{AccountType, CreditCardSummary};
+use crate::domain::{AccountType, CreditCardStatement, CreditCardSummary};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
@@ -184,7 +184,7 @@ impl BookkeepingService {
         Ok(())
     }
 
-    fn credit_card_statements(&self, account_id: i64) -> Result<Vec<CreditCardStatement>> {
+    fn credit_card_statements(&self, account_id: i64) -> Result<Vec<StoredCreditCardStatement>> {
         let mut statement = self.conn.prepare(
             "SELECT statement_date, due_at, amount
              FROM credit_card_statements WHERE account_id = ?1 ORDER BY statement_date",
@@ -198,7 +198,7 @@ impl BookkeepingService {
         })?;
         rows.map(|row| {
             let (statement_date, due_at, amount) = row?;
-            Ok(CreditCardStatement {
+            Ok(StoredCreditCardStatement {
                 statement_date: NaiveDate::parse_from_str(&statement_date, "%Y-%m-%d").map_err(
                     |error| {
                         KokuError::InvalidInput(format!(
@@ -211,6 +211,43 @@ impl BookkeepingService {
             })
         })
         .collect()
+    }
+
+    /// 读取账单历史，同时给出以当前账户余额按 FIFO 分摊的未还金额。
+    pub fn credit_card_statements_history(
+        &mut self,
+        account_id: i64,
+        as_of: DateTime<Utc>,
+    ) -> Result<Vec<CreditCardStatement>> {
+        let account = self.account(account_id)?;
+        if account.account_type != AccountType::Credit {
+            return Err(KokuError::InvalidInput(
+                "credit card statements are only available for credit accounts".to_owned(),
+            ));
+        }
+        if let Some(day) = account.statement_day {
+            self.sync_credit_card_statements(
+                &account,
+                recent_statement_date(as_of.date_naive(), day),
+                as_of,
+            )?;
+        }
+        let statements = self.credit_card_statements(account_id)?;
+        let tracked: Decimal = statements.iter().map(|item| item.amount).sum();
+        let mut paid_or_credited = tracked - account.balance.max(Decimal::ZERO).min(tracked);
+        let mut history = Vec::with_capacity(statements.len());
+        for item in statements {
+            let outstanding = (item.amount - paid_or_credited).max(Decimal::ZERO);
+            paid_or_credited = (paid_or_credited - item.amount).max(Decimal::ZERO);
+            history.push(CreditCardStatement {
+                statement_date: item.statement_date,
+                due_at: item.due_at,
+                amount: item.amount,
+                outstanding,
+            });
+        }
+        history.reverse();
+        Ok(history)
     }
 
     /// 为到期提醒准备所有信用卡的账单快照，再返回按账期排序的未还金额。
@@ -257,7 +294,7 @@ impl BookkeepingService {
 }
 
 #[derive(Debug, Clone)]
-struct CreditCardStatement {
+struct StoredCreditCardStatement {
     statement_date: NaiveDate,
     due_at: Option<DateTime<Utc>>,
     amount: Decimal,
@@ -1095,6 +1132,24 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(persisted, "300");
+        Ok(())
+    }
+
+    #[test]
+    fn statement_history_exposes_fifo_outstanding_amounts() -> Result<()> {
+        let (mut service, credit, cash, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(10))?;
+        service.set_due_day(credit.id, Some(25))?;
+        expense(&mut service, credit.id, food, "300.00", as_of(2026, 8, 5))?;
+        service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        repay(&mut service, cash, credit.id, "100.00", as_of(2026, 8, 18))?;
+
+        let statements = service.credit_card_statements_history(credit.id, as_of(2026, 8, 18))?;
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0].statement_date, date(2026, 8, 10));
+        assert_eq!(statements[0].amount, Decimal::from(300_u32));
+        assert_eq!(statements[0].outstanding, Decimal::from(200_u32));
+        assert_eq!(statements[0].due_at, Some(as_of(2026, 8, 25)));
         Ok(())
     }
 }

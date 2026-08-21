@@ -183,6 +183,8 @@ export const en = {
         repaid: "Repayment recorded",
         recurringCreated: "Recurring rule created",
         recurringDeleted: "Recurring rule deleted",
+        recurringPaused: "Recurring rule paused",
+        recurringResumed: "Recurring rule resumed",
         loans: {
           title: "Lending & borrowing",
           add: "Record a loan",
@@ -197,6 +199,10 @@ export const en = {
           title: "Recurring transactions",
           new: "New rule",
           next: "next",
+          paused: "Paused",
+          edit: "Edit recurring rule",
+          pause: "Pause recurring rule",
+          resume: "Resume recurring rule",
           delete: "Delete recurring rule",
           emptyTitle: "No recurring transactions yet",
           emptyDetail: "Set fixed income or expenses like rent or subscriptions to repeat automatically."
@@ -546,6 +552,8 @@ export const en = {
         },
         recurring: {
           title: "New recurring transaction",
+          editTitle: "Edit recurring transaction",
+          save: "Save",
           kind: "Type",
           selectCategory: "Select category",
           frequency: "Frequency",
@@ -610,7 +618,13 @@ export const en = {
           currencyPlaceholder: "e.g. CNY",
           file: "Statement file",
           importing: "Importing…",
-          start: "Start import"
+          start: "Start import",
+          preview: "Preview import",
+          confirm: "Confirm import",
+          undo: "Undo this import",
+          previewRows: " rows ready",
+          previewHint: "{{format}} was recognized. Nothing is written until you confirm; the first 20 rows are shown below.",
+          previewIssues: "Preview found {{count}} unparseable records"
         }
       },
       totp: {

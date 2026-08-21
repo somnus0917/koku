@@ -272,7 +272,7 @@ fn year_bounds(year: i32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     Ok((start, end))
 }
 
-fn month_bounds(year: i32, month: u32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+pub(crate) fn month_bounds(year: i32, month: u32) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     let start_date = NaiveDate::from_ymd_opt(year, month, 1)
         .ok_or_else(|| KokuError::InvalidInput(format!("invalid year/month: {year}-{month}")))?;
     let (next_year, next_month) = if month == 12 {
@@ -845,6 +845,37 @@ mod tests {
         // 无流水的月份返回空；非法月份报错。
         assert!(service.transactions_in_month(2026, 7, 100, 0)?.is_empty());
         assert!(service.transactions_in_month(2026, 13, 100, 0).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn transaction_search_filters_full_history_on_the_server() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account("零钱", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let salary = service.create_category("工资", CategoryKind::Income)?;
+        let lunch =
+            service.record_expense(cash.id, food.id, Decimal::from(20_u32), Utc::now(), "午餐")?;
+        service.set_transaction_tags(lunch.id, vec!["工作日".to_owned(), "餐饮".to_owned()])?;
+        service.record_income(
+            cash.id,
+            salary.id,
+            Decimal::from(100_u32),
+            Utc::now(),
+            "工资",
+        )?;
+
+        let tags = vec!["工作日".to_owned(), "餐饮".to_owned()];
+        let matches = service.search_transactions(
+            None,
+            100,
+            0,
+            Some("午餐"),
+            Some(TransactionKind::Expense),
+            &tags,
+        )?;
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, lunch.id);
         Ok(())
     }
 

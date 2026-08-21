@@ -271,6 +271,15 @@ pub struct CreditCardSummary {
     pub next_due_date: Option<NaiveDate>,
 }
 
+/// 一期已出账信用卡账单快照及按 FIFO 口径估算的未还金额。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreditCardStatement {
+    pub statement_date: NaiveDate,
+    pub due_at: Option<DateTime<Utc>>,
+    pub amount: Decimal,
+    pub outstanding: Decimal,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Category {
     pub id: i64,
@@ -525,6 +534,12 @@ pub struct RecurringRule {
     pub frequency: RecurrenceFrequency,
     pub next_due_at: DateTime<Utc>,
     pub paused_at: Option<DateTime<Utc>>,
+}
+
+/// 周期规则未来一次实际落账的预览。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecurringOccurrence {
+    pub due_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

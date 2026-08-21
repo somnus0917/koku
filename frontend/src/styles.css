@@ -3551,6 +3551,7 @@ button:disabled {
 }
 
 .reminder-item {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3559,7 +3560,13 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--surface-muted);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
 }
+
+.reminder-item:hover { border-color: var(--accent); }
 
 .reminder-item-main {
   min-width: 0;

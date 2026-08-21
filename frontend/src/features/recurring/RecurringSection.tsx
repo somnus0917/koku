@@ -1,7 +1,8 @@
 //! 周期交易区块（账户页）：规则列表与删除。
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2 } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { getRecurringPreview } from "../../api";
 import { EmptyState } from "../../components/EmptyState";
 import { formatDate, formatMoney } from "../../lib";
 import type { Account, Category, RecurringRule } from "../../types";
@@ -11,17 +12,29 @@ export function RecurringSection({
   accounts,
   categories,
   onCreate,
-  onDelete
+  onDelete,
+  onEdit,
+  onTogglePaused
 }: {
   rules: RecurringRule[];
   accounts: Account[];
   categories: Category[];
   onCreate: () => void;
   onDelete: (id: number) => void;
+  onEdit: (rule: RecurringRule) => void;
+  onTogglePaused: (rule: RecurringRule) => void;
 }) {
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const categoryMap = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
   const { t } = useTranslation();
+  const [previews, setPreviews] = useState<Record<number, string[]>>({});
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(rules.map(async (rule) => [rule.id, (await getRecurringPreview(rule.id)).map((item) => item.due_at)] as const))
+      .then((values) => { if (!cancelled) setPreviews(Object.fromEntries(values)); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [rules]);
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
@@ -41,11 +54,14 @@ export function RecurringSection({
                 <h3>{rule.note || category?.name || t("accounts.recurring.title")}</h3>
                 <span>
                   {category?.name ?? t("common.unknownCategory")} · {rule.frequency === "monthly" ? t("common.monthly") : t("common.weekly")} · {t("accounts.recurring.next")} {formatDate(rule.next_due_at)} · {account?.name ?? t("common.unknownAccount")}
+                  {rule.paused_at ? ` · ${t("accounts.recurring.paused")}` : previews[rule.id]?.length ? ` · ${previews[rule.id].map(formatDate).join(" / ")}` : ""}
                 </span>
               </div>
               <strong className={isExpense ? "expense-text" : "income-text"}>
                 {isExpense ? "−" : "+"}{formatMoney(rule.amount, account?.currency ?? "CNY")}
               </strong>
+              <button className="row-action" onClick={() => onEdit(rule)} title={t("accounts.recurring.edit")} aria-label={t("accounts.recurring.edit")}><Pencil size={16} /></button>
+              <button className="row-action" onClick={() => onTogglePaused(rule)} title={t(rule.paused_at ? "accounts.recurring.resume" : "accounts.recurring.pause")} aria-label={t(rule.paused_at ? "accounts.recurring.resume" : "accounts.recurring.pause")}>{rule.paused_at ? <Play size={16} /> : <Pause size={16} />}</button>
               <button className="row-action" onClick={() => onDelete(rule.id)} title={t("accounts.recurring.delete")} aria-label={t("accounts.recurring.delete")}><Trash2 size={16} /></button>
             </article>
           );

@@ -33,6 +33,13 @@ export interface CreditCardSummary {
   next_due_date: string | null;
 }
 
+export interface CreditCardStatement {
+  statement_date: string;
+  due_at: string | null;
+  amount: string;
+  outstanding: string;
+}
+
 export interface Category {
   id: number;
   name: string;
@@ -164,6 +171,7 @@ export interface RecurringRule {
   next_due_at: string;
   paused_at: string | null;
 }
+export interface RecurringOccurrence { due_at: string; }
 
 export interface Receipt {
   transaction_id: number;
@@ -349,6 +357,7 @@ export interface CategorySuggestion {
 
 /** 一次批量导入的统计结果。 */
 export interface ImportResult {
+  batch_id: string;
   format: string;
   account_id: number;
   imported: number;
@@ -365,6 +374,15 @@ export interface ImportResult {
   category_suggestions: CategorySuggestion[];
   /** 成功导入但未能识别商户的条数。 */
   unrecognized: number;
+}
+
+export interface ImportPreview {
+  format: string;
+  total_rows: number;
+  income_rows: number;
+  expense_rows: number;
+  issues: ImportIssue[];
+  sample_rows: Array<{ line: number; date: string; amount: string; note: string; currency: string | null }>;
 }
 
 /** 交易拆分：把一笔 expense/income 的金额按多个分类归属（余额只动一次）。 */
@@ -395,9 +413,9 @@ export interface Reconciliation {
   note: string;
 }
 
-/** 到期提醒项（存款到期 / 借款到期）。 */
+/** 到期提醒项（存款到期 / 借款到期 / 信用卡账单）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan";
+  kind: "deposit" | "loan" | "credit_card";
   id: number;
   title: string;
   amount: string;

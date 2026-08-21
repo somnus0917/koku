@@ -3,8 +3,8 @@ import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle, Upload } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
-import { importTransactions, updateTransaction } from "../../api";
-import type { Account, Category, CategorySuggestion, ImportResult } from "../../types";
+import { importTransactions, previewImportTransactions, undoImportBatch, updateTransaction } from "../../api";
+import type { Account, Category, CategorySuggestion, ImportPreview, ImportResult } from "../../types";
 
 /** 批量导入交易：选择账单文件与目标账户，导入后展示结果摘要（成功/重复/失败 + 问题行）。
  *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onComplete
@@ -29,6 +29,7 @@ export function ImportModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [preview, setPreview] = useState<ImportPreview | null>(null);
   const { t } = useTranslation();
 
   const input = (): { format?: string; account_id: number; category_id?: number; currency?: string } => ({
@@ -38,14 +39,33 @@ export function ImportModal({
     currency: currency.trim() || undefined
   });
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const submit = async (event?: FormEvent) => {
+    event?.preventDefault();
     if (!file) return;
     setSubmitting(true); setError(null);
     try {
-      setResult(await importTransactions(file, input()));
+      if (!preview) {
+        setPreview(await previewImportTransactions(file, input()));
+      } else {
+        setResult(await importTransactions(file, input()));
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("modals.import.importFailed"));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const undo = async () => {
+    if (!result) return;
+    setSubmitting(true); setError(null);
+    try {
+      await undoImportBatch(result.batch_id);
+      setResult(null); setPreview(null);
+      onComplete();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("modals.import.importFailed"));
+    } finally {
       setSubmitting(false);
     }
   };
@@ -133,8 +153,27 @@ export function ImportModal({
             {t("modals.import.doneHint", { format: result.format.toUpperCase() })}
           </p>
           <div className="modal-actions">
+            <button type="button" className="secondary-button" disabled={submitting} onClick={() => void undo()}>{t("modals.import.undo")}</button>
             <button type="button" className="secondary-button" onClick={closeAfterImport}>{t("common.close")}</button>
             <button type="button" className="primary-button" onClick={closeAfterImport}>{t("modals.category.done")}</button>
+          </div>
+        </div>
+      ) : preview ? (
+        <div className="import-result">
+          <div className="import-summary">
+            <span className="import-count ok"><strong>{preview.total_rows}</strong>{t("modals.import.previewRows")}</span>
+            <span className="import-count ok"><strong>{preview.income_rows}</strong>{t("common.income")}</span>
+            <span className="import-count skip"><strong>{preview.expense_rows}</strong>{t("common.expense")}</span>
+          </div>
+          <p className="fx-hint">{t("modals.import.previewHint", { format: preview.format.toUpperCase() })}</p>
+          {preview.sample_rows.map((row) => <div className="import-issue" key={row.line}><span>{row.date} · {row.amount}</span><span>{row.note}</span></div>)}
+          {preview.issues.length > 0 && <p className="inline-error">{t("modals.import.previewIssues", { count: preview.issues.length })}</p>}
+          {error && <div className="form-error">{error}</div>}
+          <div className="modal-actions">
+            <button type="button" className="secondary-button" onClick={() => setPreview(null)}>{t("modals.totp.back")}</button>
+            <button type="button" className="primary-button" disabled={submitting} onClick={() => void submit()}>
+              {submitting ? <LoaderCircle className="spin" size={17} /> : <Upload size={16} />}{t("modals.import.confirm")}
+            </button>
           </div>
         </div>
       ) : (
@@ -186,7 +225,7 @@ export function ImportModal({
             <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
             <button className="primary-button" disabled={submitting || !file || !accountId}>
               {submitting ? <LoaderCircle className="spin" size={17} /> : <Upload size={16} />}
-              {submitting ? t("modals.import.importing") : t("modals.import.start")}
+              {submitting ? t("modals.import.importing") : t("modals.import.preview")}
             </button>
           </div>
         </form>

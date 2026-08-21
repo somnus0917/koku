@@ -87,7 +87,8 @@ export function TransactionsPage({
   loadingMore = false,
   hasMore = false,
   exportYear,
-  exportMonth
+  exportMonth,
+  onFilterChange
 }: {
   data: AppData;
   onAdd: () => void;
@@ -106,6 +107,7 @@ export function TransactionsPage({
   hasMore?: boolean;
   exportYear?: number;
   exportMonth?: number;
+  onFilterChange?: (filters: { search: string; kind: string; tags: string[] }) => void;
 }) {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<"all" | TransactionKind>("all");
@@ -135,6 +137,10 @@ export function TransactionsPage({
   );
   const rates = useConversionRates(txCurrencies, display);
   const tagFilterKey = tagFilter.join(",");
+  useEffect(() => {
+    const timer = window.setTimeout(() => onFilterChange?.({ search, kind, tags: tagFilter }), 250);
+    return () => window.clearTimeout(timer);
+  }, [search, kind, tagFilterKey, onFilterChange]);
   // 选中标签时拉取对应汇总（月视图按当前月，全部月份视图按全部历史）。
   useEffect(() => {
     if (tagFilter.length === 0) {

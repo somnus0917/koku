@@ -183,6 +183,8 @@ export const zh = {
         repaid: "还款已入账",
         recurringCreated: "周期交易已创建",
         recurringDeleted: "周期交易已删除",
+        recurringPaused: "周期交易已暂停",
+        recurringResumed: "周期交易已恢复",
         loans: {
           title: "借入与借出",
           add: "记一笔借款",
@@ -197,6 +199,10 @@ export const zh = {
           title: "周期交易",
           new: "新建周期",
           next: "下次",
+          paused: "已暂停",
+          edit: "编辑周期交易",
+          pause: "暂停周期交易",
+          resume: "恢复周期交易",
           delete: "删除周期交易",
           emptyTitle: "还没有周期交易",
           emptyDetail: "房租、订阅等固定收支可设为自动重复。"
@@ -546,6 +552,8 @@ export const zh = {
         },
         recurring: {
           title: "新建周期交易",
+          editTitle: "编辑周期交易",
+          save: "保存",
           kind: "类型",
           selectCategory: "选择分类",
           frequency: "周期",
@@ -610,7 +618,13 @@ export const zh = {
           currencyPlaceholder: "例如 CNY",
           file: "账单文件",
           importing: "正在导入…",
-          start: "开始导入"
+          start: "开始导入",
+          preview: "预览导入",
+          confirm: "确认导入",
+          undo: "撤销本批导入",
+          previewRows: "条待导入",
+          previewHint: "已识别 {{format}} 文件；确认后才会写入账本。以下展示前 20 条。",
+          previewIssues: "预览发现 {{count}} 条无法解析的记录"
         }
       },
       totp: {

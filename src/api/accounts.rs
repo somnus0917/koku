@@ -8,7 +8,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
-use crate::domain::{Account, AccountType, CreditCardSummary, Transaction};
+use crate::domain::{Account, AccountType, CreditCardStatement, CreditCardSummary, Transaction};
 use crate::error::Result;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
@@ -114,6 +114,17 @@ async fn api_credit_card_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+async fn api_credit_card_statements(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(account_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Vec<CreditCardStatement>>>> {
+    let statements = lock_ledger(&state, user.user_id)
+        .await?
+        .credit_card_statements_history(account_id, Utc::now())?;
+    Ok(Json(ApiResponse::new(statements)))
+}
+
 async fn api_adjust_balance(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -135,6 +146,10 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/api/accounts/{account_id}/credit-card-summary",
             get(api_credit_card_summary),
+        )
+        .route(
+            "/api/accounts/{account_id}/credit-card-statements",
+            get(api_credit_card_statements),
         )
         .route(
             "/api/accounts/{account_id}/adjust-balance",

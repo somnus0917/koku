@@ -69,7 +69,7 @@ impl AuthenticatedUser {
     }
 }
 
-pub(super) fn lock_auth(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
+pub(crate) fn lock_auth(state: &AppState) -> Result<MutexGuard<'_, BookkeepingService>> {
     state
         .auth
         .lock()
@@ -98,7 +98,7 @@ impl std::ops::DerefMut for LedgerGuard {
 /// 取得某用户的账本服务：命中缓存直接复用连接（同一用户串行访问）；
 /// 首次访问时在 `spawn_blocking` 里打开/创建独立账本文件（schema 初始化
 /// 与迁移不进异步 worker 线程），并补齐默认分类。
-pub(super) async fn lock_ledger(state: &AppState, user_id: i64) -> Result<LedgerGuard> {
+pub(crate) async fn lock_ledger(state: &AppState, user_id: i64) -> Result<LedgerGuard> {
     let cached = {
         let map = state
             .ledgers

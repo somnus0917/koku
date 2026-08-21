@@ -10,7 +10,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use crate::error::{KokuError, Result};
-use crate::importer::{self, ImportFormat};
+use crate::importer::{self, ImportFormat, ImportPreview};
 use crate::service::ImportResult;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
@@ -19,6 +19,15 @@ use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 /// 控制在普通自托管实例可承受的范围内。
 const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_IMPORT_ISSUES: usize = 500;
+
+struct ParsedImport {
+    format: ImportFormat,
+    rows: Vec<importer::ImportRow>,
+    issues: Vec<importer::ParseIssue>,
+    account_id: i64,
+    category_id: Option<i64>,
+    currency: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct ExportQuery {
@@ -155,11 +164,7 @@ async fn api_export_transactions(
 /// 批量导入流水（CSV/QIF/OFX）：multipart 字段
 /// `file`（必填）、`format`（csv|qif|ofx|auto，缺省 auto）、`account_id`（必填）、
 /// `category_id`（可选默认分类）、`currency`（可选默认币种）。
-async fn api_import_transactions(
-    Extension(user): Extension<AuthenticatedUser>,
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Result<(StatusCode, Json<ApiResponse<ImportResult>>)> {
+async fn parse_import_upload(mut multipart: Multipart) -> Result<ParsedImport> {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name: Option<String> = None;
     let mut format: Option<String> = None;
@@ -204,7 +209,7 @@ async fn api_import_transactions(
     let text = String::from_utf8_lossy(&file_bytes).into_owned();
 
     // 解析放到阻塞线程，避免大文件解析拖住异步 worker。
-    let parsed = tokio::task::spawn_blocking(move || -> Result<(
+    let (format, rows, issues) = tokio::task::spawn_blocking(move || -> Result<(
         ImportFormat,
         Vec<importer::ImportRow>,
         Vec<importer::ParseIssue>,
@@ -224,27 +229,83 @@ async fn api_import_transactions(
     .await
     .map_err(|error| KokuError::InvalidInput(format!("import parse task failed: {error}")))??;
 
+    Ok(ParsedImport {
+        format,
+        rows,
+        issues,
+        account_id,
+        category_id,
+        currency,
+    })
+}
+
+/// 只解析并展示导入摘要；用户确认前不会写入账本。
+async fn api_preview_import_transactions(
+    Extension(_user): Extension<AuthenticatedUser>,
+    multipart: Multipart,
+) -> Result<Json<ApiResponse<ImportPreview>>> {
+    let parsed = parse_import_upload(multipart).await?;
+    Ok(Json(ApiResponse::new(importer::preview(
+        parsed.format,
+        &parsed.rows,
+        parsed.issues,
+    ))))
+}
+
+async fn api_import_transactions(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<(StatusCode, Json<ApiResponse<ImportResult>>)> {
+    let parsed = parse_import_upload(multipart).await?;
     let mut result = lock_ledger(&state, user.user_id)
         .await?
-        .import_transactions(parsed.0, account_id, category_id, currency, parsed.1)?;
+        .import_transactions(
+            parsed.format,
+            parsed.account_id,
+            parsed.category_id,
+            parsed.currency,
+            parsed.rows,
+        )?;
     // 解析阶段跳过/失败的行（缺日期、缺金额、非收支类型等）并入结果。
-    let parse_failures = parsed.2.len();
+    let parse_failures = parsed.issues.len();
     result.failed += parse_failures;
     result.issues.extend(
         parsed
-            .2
+            .issues
             .into_iter()
             .take(MAX_IMPORT_ISSUES.saturating_sub(result.issues.len())),
     );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(result))))
 }
 
+async fn api_undo_import_batch(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    axum::extract::Path(batch_id): axum::extract::Path<String>,
+) -> Result<Json<ApiResponse<serde_json::Value>>> {
+    let undone = lock_ledger(&state, user.user_id)
+        .await?
+        .undo_import_batch(&batch_id)?;
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "undone": undone }),
+    )))
+}
+
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/transactions/export", get(api_export_transactions))
         .route(
+            "/api/transactions/import/preview",
+            post(api_preview_import_transactions).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
+        .route(
             "/api/transactions/import",
             post(api_import_transactions).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
+        )
+        .route(
+            "/api/transactions/import/{batch_id}/undo",
+            post(api_undo_import_batch),
         )
 }
 

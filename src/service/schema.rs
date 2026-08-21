@@ -186,6 +186,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             payee_id      INTEGER REFERENCES payees(id),
             raw_description TEXT,
             import_external_id TEXT,
+            import_batch_id TEXT,
             CHECK (
                 (kind IN ('expense', 'income') AND category_id IS NOT NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
@@ -202,6 +203,11 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             ON transactions(occurred_at, voided_at);
         CREATE INDEX IF NOT EXISTS idx_transactions_account
             ON transactions(account_id, to_account_id);
+        CREATE TABLE IF NOT EXISTS import_batches (
+            id         TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            undone_at  TEXT
+        );
 
         CREATE TABLE IF NOT EXISTS merchant_aliases (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
