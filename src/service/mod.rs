@@ -1262,6 +1262,37 @@ mod tests {
     }
 
     #[test]
+    fn stock_trade_can_start_from_a_cash_account_without_creating_stock_account() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("银行卡", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let at = Utc::now();
+
+        service.buy_stock(
+            cash.id,
+            "MSFT".to_owned(),
+            Decimal::from(2_u32),
+            Decimal::from(100_u32),
+            at,
+            "首次建仓".to_owned(),
+        )?;
+
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(800_u32));
+        let holding = service
+            .holdings()?
+            .pop()
+            .expect("holding is created by buy");
+        assert_eq!(holding.account_id, cash.id);
+        assert_eq!(holding.symbol, "MSFT");
+        // 现金与持仓合计仍是原来的 1000，买入不会使净资产凭空减少。
+        assert_eq!(
+            service.balance_summary("CNY")?.total_assets,
+            Decimal::from(1000_u32)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn balance_summary_converts_all_account_and_loan_currencies() -> Result<()> {
         let mut service = test_service()?;
         service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(100_u32))?;

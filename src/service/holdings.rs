@@ -1,4 +1,4 @@
-//! 股票持仓：买入/卖出复合操作，同时影响账户现金余额与持仓。
+//! 股票持仓：买入/卖出复合操作，同时影响资金账户余额与持仓。
 //!
 //! 现金金额统一四舍五入到 2 位小数；持仓股数保留完整精度（可含小数股）。
 
@@ -52,7 +52,8 @@ impl BookkeepingService {
         self.holding(holding_id)
     }
 
-    /// 买入：现金流出 + 增持。`price` 为每股价格（账户币种）。
+    /// 买入：从现金、储蓄或传统证券账户划出资金并创建/增持仓位。
+    /// `price` 为每股价格（资金账户币种）。
     #[allow(clippy::too_many_arguments)]
     pub fn buy_stock(
         &mut self,
@@ -73,7 +74,7 @@ impl BookkeepingService {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let account = Self::account_in_tx(&tx, account_id)?;
-        ensure_stock_account(&account)?;
+        ensure_investment_funding_account(&account)?;
         Self::set_balance(
             &tx,
             account_id,
@@ -104,7 +105,7 @@ impl BookkeepingService {
         self.transaction(transaction_id)
     }
 
-    /// 卖出：现金流入 + 减持（摊薄成本法），清仓时删除持仓。`price` 为每股价格。
+    /// 卖出：资金回到买入时的账户并减持（摊薄成本法），清仓时删除持仓。
     #[allow(clippy::too_many_arguments)]
     pub fn sell_stock(
         &mut self,
@@ -125,7 +126,7 @@ impl BookkeepingService {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let account = Self::account_in_tx(&tx, account_id)?;
-        ensure_stock_account(&account)?;
+        ensure_investment_funding_account(&account)?;
         let (shares0, cost0) = existing_position(&tx, account_id, &symbol)?
             .ok_or_else(|| KokuError::InvalidInput(format!("no holding for symbol {symbol}")))?;
         if shares0 < shares {
@@ -179,10 +180,13 @@ impl BookkeepingService {
     }
 }
 
-fn ensure_stock_account(account: &crate::domain::Account) -> Result<()> {
-    if account.account_type != AccountType::Stock {
+fn ensure_investment_funding_account(account: &crate::domain::Account) -> Result<()> {
+    if !matches!(
+        account.account_type,
+        AccountType::Cash | AccountType::Savings | AccountType::Stock
+    ) {
         return Err(KokuError::InvalidInput(
-            "stock trades require a stock account".to_owned(),
+            "stock trades require a cash, savings, or stock account".to_owned(),
         ));
     }
     Ok(())

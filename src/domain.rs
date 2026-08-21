@@ -499,7 +499,7 @@ pub struct CategorySuggestion {
     pub confidence: Decimal,
 }
 
-/// 股票账户的一只持仓：股数、总成本、可选市价与摊薄成本。
+/// 一只持仓：由买入时的资金账户归属，记录股数、总成本、可选市价与摊薄成本。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Holding {
     pub id: i64,

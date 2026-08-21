@@ -29,9 +29,10 @@ export function TradeModal({
     };
   }) => Promise<void>;
 }) {
-  const stockAccounts = accounts.filter((account) => account.account_type === "stock");
+  // 持仓由买入交易创建；无需先建股票账户。保留股票账户兼容独立管理券商余额的用户。
+  const fundingAccounts = accounts.filter((account) => account.account_type !== "credit");
   const [side, setSide] = useState<"buy" | "sell">(initialSide);
-  const [accountId, setAccountId] = useState(stockAccounts[0]?.id ?? 0);
+  const [accountId, setAccountId] = useState(fundingAccounts[0]?.id ?? 0);
   const [symbol, setSymbol] = useState(initialSymbol);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
@@ -72,14 +73,15 @@ export function TradeModal({
           ))}
         </div>
         <div className="form-grid">
-          <label><span>{t("modals.trade.stockAccount")}</span>
+          <label><span>{t("modals.trade.fundingAccount")}</span>
             <select required value={accountId} onChange={(event) => setAccountId(Number(event.target.value))}>
-              {stockAccounts.length === 0 && <option value={0} disabled>{t("modals.trade.noStockAccount")}</option>}
-              {stockAccounts.map((account) => (
+              {fundingAccounts.length === 0 && <option value={0} disabled>{t("modals.trade.noFundingAccount")}</option>}
+              {fundingAccounts.map((account) => (
                 <option key={account.id} value={account.id}>{account.name}（{account.currency}）</option>
               ))}
             </select>
           </label>
+          <p className="fx-hint span-two">{t("modals.trade.fundingHint")}</p>
           <label><span>{t("modals.trade.symbol")}</span><input required autoFocus value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t("modals.trade.symbolPlaceholder")} /></label>
           <label><span>{t("modals.trade.shares")}</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
           <label><span>{t("modals.trade.price")}</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
