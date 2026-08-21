@@ -18,7 +18,7 @@ export interface Account {
   due_day: number | null;
 }
 
-/** 信用卡账单摘要（v1 按现有交易动态计算）。 */
+/** 信用卡账单摘要（已出账周期使用不可变快照）。 */
 export interface CreditCardSummary {
   account_id: number;
   currency: string;

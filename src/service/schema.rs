@@ -145,6 +145,20 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             note                      TEXT NOT NULL DEFAULT ''
         );
 
+        -- 已出账信用卡账单的不可变快照。amount 是出账当日该周期的消费额；
+        -- 还款仍以账户余额的 FIFO 口径估算，避免伪造一笔还款的精确归属。
+        CREATE TABLE IF NOT EXISTS credit_card_statements (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id     INTEGER NOT NULL REFERENCES accounts(id),
+            statement_date TEXT NOT NULL,
+            due_at         TEXT,
+            amount         TEXT NOT NULL,
+            created_at     TEXT NOT NULL,
+            UNIQUE(account_id, statement_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_credit_card_statements_due
+            ON credit_card_statements(due_at);
+
         CREATE TABLE IF NOT EXISTS payees (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL UNIQUE,

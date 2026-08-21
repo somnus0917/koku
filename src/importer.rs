@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{KokuError, Result};
 
+/// 导入在进入格式解析前的资源限制；配合 API body 上限，避免单行字段或超长账单
+/// 让解析结果/错误列表无限增长。
+pub const MAX_IMPORT_LINES: usize = 100_000;
+pub const MAX_IMPORT_LINE_BYTES: usize = 16 * 1024;
+
 /// 支持的导入格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +104,20 @@ type ParseOutcome = (Vec<ImportRow>, Vec<ParseIssue>);
 
 /// 按格式分发解析。
 pub fn parse(input: &str, format: ImportFormat) -> Result<ParseOutcome> {
+    let mut lines = 0_usize;
+    for line in input.lines() {
+        lines += 1;
+        if lines > MAX_IMPORT_LINES {
+            return Err(KokuError::InvalidInput(format!(
+                "import exceeds the {MAX_IMPORT_LINES} line limit"
+            )));
+        }
+        if line.len() > MAX_IMPORT_LINE_BYTES {
+            return Err(KokuError::InvalidInput(format!(
+                "import contains a line larger than {MAX_IMPORT_LINE_BYTES} bytes"
+            )));
+        }
+    }
     match format {
         ImportFormat::Csv => parse_csv(input),
         ImportFormat::Qif => parse_qif(input),

@@ -43,6 +43,21 @@ pub use state::AppState;
 
 use state::{lock_auth, AuthenticatedUser};
 
+/// 备份和恢复自身需要取得维护写锁，不能在本中间件持读锁，否则会自锁。
+fn maintenance_operation(path: &str) -> bool {
+    path == "/api/admin/backup"
+        || path.ends_with("/restore")
+        || path.starts_with("/api/admin/r2/restore/")
+}
+
+async fn maintenance_gate(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if maintenance_operation(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let _guard = state.maintenance.read().await;
+    next.run(request).await
+}
+
 async fn require_auth(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let Some(token) = session_token(request.headers()) else {
         return KokuError::Unauthorized.into_response();
@@ -114,7 +129,30 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         None => router,
     };
     // 通用限流：除健康检查外，所有 /api 请求按客户端计数（防 Cookie 泄露后被刷）。
-    let router = router.layer(middleware::from_fn_with_state(state, rate_limit));
+    let router = router
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            maintenance_gate,
+        ))
+        .layer(middleware::from_fn_with_state(state, rate_limit));
     // 请求级 tracing（方法/路径/状态码/耗时），配合 tracing_subscriber 输出。
     router.layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::maintenance_operation;
+
+    #[test]
+    fn maintenance_gate_skips_only_operations_that_take_the_write_lock() {
+        assert!(maintenance_operation("/api/admin/backup"));
+        assert!(maintenance_operation(
+            "/api/admin/backups/20260821-010203/restore"
+        ));
+        assert!(maintenance_operation(
+            "/api/admin/r2/restore/20260821-010203"
+        ));
+        assert!(!maintenance_operation("/api/admin/backups"));
+        assert!(!maintenance_operation("/api/transactions"));
+    }
 }

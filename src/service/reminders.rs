@@ -1,8 +1,4 @@
-//! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款与借款。
-//!
-//! 说明：信用卡账单 v1 暂不提供可靠的跨账期逾期提醒（账单为动态计算，
-//! 无快照表；跨账期后旧欠款会移出「最近一期」导致提醒消失）。待未来引入
-//! 正式账单快照/结算模型后再恢复，本轮不提供可能给出错误结果的提醒。
+//! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款、借款与信用卡账单。
 
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
@@ -16,7 +12,7 @@ use crate::service::BookkeepingService;
 /// 一条到期提醒。
 #[derive(Debug, Clone, Serialize)]
 pub struct ReminderItem {
-    /// "deposit" | "loan"
+    /// "deposit" | "loan" | "credit_card"
     pub kind: String,
     pub id: i64,
     /// 展示标题：定存为备注（或占位文案），借款为往来方。
@@ -32,7 +28,7 @@ pub struct ReminderItem {
 
 impl BookkeepingService {
     /// 未来 `days` 天内到期（含已逾期）的定存与借款。
-    pub fn due_reminders(&self, days: i64) -> Result<Vec<ReminderItem>> {
+    pub fn due_reminders(&mut self, days: i64) -> Result<Vec<ReminderItem>> {
         let now = Utc::now();
         let horizon = now + Duration::days(days);
         let mut items = Vec::new();
@@ -110,6 +106,21 @@ impl BookkeepingService {
                     due_at,
                 });
             }
+        }
+
+        // 信用卡：只提示已出账快照中、按账户余额 FIFO 口径仍未还清的部分。
+        for statement in self.due_credit_card_statements(now, horizon)? {
+            let due_at = statement.due_at;
+            items.push(ReminderItem {
+                kind: "credit_card".to_owned(),
+                id: statement.account_id,
+                title: format!("信用卡 {}", statement.account_name),
+                amount: statement.amount,
+                currency: statement.currency,
+                overdue: due_at < now,
+                days_left: (due_at - now).num_days(),
+                due_at,
+            });
         }
 
         items.sort_by_key(|item| item.due_at);
@@ -241,6 +252,35 @@ mod tests {
         assert_eq!(reminders.len(), 1);
         assert!(reminders[0].overdue);
         assert!(reminders[0].days_left < 0);
+        Ok(())
+    }
+
+    #[test]
+    fn includes_unpaid_credit_card_statement_snapshots() -> Result<()> {
+        let mut service = test_service()?;
+        let credit = service.create_account("信用卡", AccountType::Credit, "CNY", Decimal::ZERO)?;
+        service.set_statement_day(credit.id, Some(10))?;
+        let now = Utc::now();
+        service.conn.execute(
+            "UPDATE accounts SET balance = '200' WHERE id = ?1",
+            [credit.id],
+        )?;
+        service.conn.execute(
+            "INSERT INTO credit_card_statements (account_id, statement_date, due_at, amount, created_at)
+             VALUES (?1, ?2, ?3, '200', ?4)",
+            rusqlite::params![
+                credit.id,
+                now.date_naive().to_string(),
+                timestamp(now + Duration::days(5)),
+                timestamp(now),
+            ],
+        )?;
+
+        let reminders = service.due_reminders(30)?;
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(reminders[0].kind, "credit_card");
+        assert_eq!(reminders[0].title, "信用卡 信用卡");
+        assert_eq!(reminders[0].amount, Decimal::from(200_u32));
         Ok(())
     }
 }

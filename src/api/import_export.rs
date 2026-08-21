@@ -15,6 +15,11 @@ use crate::service::ImportResult;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 
+/// 上传体、UTF-8 文本和解析结果会同时短暂存在内存中，限制为 16 MiB 可把峰值
+/// 控制在普通自托管实例可承受的范围内。
+const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_IMPORT_ISSUES: usize = 500;
+
 #[derive(Debug, Deserialize)]
 struct ExportQuery {
     year: Option<i32>,
@@ -188,6 +193,11 @@ async fn api_import_transactions(
     let file_bytes = file_bytes.ok_or_else(|| {
         KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
     })?;
+    if file_bytes.len() > MAX_IMPORT_BYTES {
+        return Err(KokuError::InvalidInput(format!(
+            "import file exceeds the {MAX_IMPORT_BYTES} byte limit"
+        )));
+    }
     let account_id = account_id.ok_or_else(|| {
         KokuError::InvalidInput("multipart field \"account_id\" is required".to_owned())
     })?;
@@ -220,7 +230,12 @@ async fn api_import_transactions(
     // 解析阶段跳过/失败的行（缺日期、缺金额、非收支类型等）并入结果。
     let parse_failures = parsed.2.len();
     result.failed += parse_failures;
-    result.issues.extend(parsed.2);
+    result.issues.extend(
+        parsed
+            .2
+            .into_iter()
+            .take(MAX_IMPORT_ISSUES.saturating_sub(result.issues.len())),
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(result))))
 }
 
@@ -229,7 +244,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/transactions/export", get(api_export_transactions))
         .route(
             "/api/transactions/import",
-            post(api_import_transactions).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+            post(api_import_transactions).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
         )
 }
 

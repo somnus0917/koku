@@ -139,6 +139,22 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
     if !table_has_column(conn, "accounts", "due_day")? {
         conn.execute("ALTER TABLE accounts ADD COLUMN due_day INTEGER", [])?;
     }
+    // 已出账信用卡账单快照：新库由 schema 初始化创建，旧库在此补齐。
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS credit_card_statements (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id     INTEGER NOT NULL REFERENCES accounts(id),
+            statement_date TEXT NOT NULL,
+            due_at         TEXT,
+            amount         TEXT NOT NULL,
+            created_at     TEXT NOT NULL,
+            UNIQUE(account_id, statement_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_credit_card_statements_due
+            ON credit_card_statements(due_at);
+        "#,
+    )?;
     // —— 分类图标：用户自选 lucide 图标 key（自定义分类展示用）——
     if !table_has_column(conn, "categories", "icon")? {
         conn.execute("ALTER TABLE categories ADD COLUMN icon TEXT", [])?;

@@ -6,8 +6,9 @@
 //! 已打开的连接是安全的——旧连接继续写旧 inode，新连接自动打开新文件。
 //! 调用方应在恢复后重新打开共享库连接并清空账本连接缓存（见 API 层）。
 
-use std::fs;
-use std::io::{Cursor, Write};
+use std::collections::HashSet;
+use std::fs::{self, File};
+use std::io::{copy, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{SecondsFormat, Utc};
@@ -15,6 +16,11 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::error::{KokuError, Result};
+
+/// 恢复包的防护上限。正常 SQLite 账本远小于该值；这些限制用于拒绝 ZIP bomb。
+const MAX_RESTORE_ENTRIES: usize = 10_000;
+const MAX_RESTORE_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_RESTORE_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 /// 备份目录：数据库文件同级的 `backups/`（与部署脚本约定一致）。
 pub fn backup_dir(db_path: &Path) -> PathBuf {
@@ -129,25 +135,32 @@ pub fn create_backup(db_path: &Path, ledger_dir: &Path, keep: usize) -> Result<B
         archive_files.push(relative.clone());
     }
 
-    let mut buffer = Vec::new();
-    {
-        let mut writer = zip::ZipWriter::new(Cursor::new(&mut buffer));
+    // 直接写临时文件，避免在内存中同时持有整份 ZIP 与每个快照。
+    let archive_tmp_path = dir.join(format!(".archive-{id}-{}.zip", std::process::id()));
+    let write_result = (|| -> Result<()> {
+        let file = File::create(&archive_tmp_path)?;
+        let mut writer = zip::ZipWriter::new(BufWriter::new(file));
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
         for (snapshot, relative) in &snapshots {
             writer
                 .start_file(relative.as_str(), options)
                 .map_err(|error| KokuError::InvalidInput(format!("zip write failed: {error}")))?;
-            writer
-                .write_all(&fs::read(snapshot)?)
-                .map_err(|error| KokuError::InvalidInput(format!("zip write failed: {error}")))?;
+            let mut source = BufReader::new(File::open(snapshot)?);
+            copy(&mut source, &mut writer)?;
         }
         writer
             .finish()
             .map_err(|error| KokuError::InvalidInput(format!("zip finish failed: {error}")))?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&archive_tmp_path);
+        let _ = fs::remove_dir_all(&snapshot_dir);
+        return Err(error);
     }
-    let size_bytes = buffer.len() as u64;
-    fs::write(&archive_path, buffer)?;
+    let size_bytes = fs::metadata(&archive_tmp_path)?.len();
+    fs::rename(&archive_tmp_path, &archive_path)?;
     let _ = fs::remove_dir_all(&snapshot_dir);
 
     if keep > 0 {
@@ -186,10 +199,10 @@ pub fn list_backups(db_path: &Path) -> Result<Vec<BackupMeta>> {
             continue;
         };
         let size_bytes = entry.metadata()?.len();
-        // 打开 zip 读包内文件清单（备份数量通常很少，开销可忽略）。
+        // 流式打开 zip 读包内文件清单，避免管理页为元数据读取整份备份到内存。
         let mut files = Vec::new();
-        if let Ok(bytes) = fs::read(&path) {
-            if let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(bytes)) {
+        if let Ok(file) = File::open(&path) {
+            if let Ok(mut archive) = zip::ZipArchive::new(BufReader::new(file)) {
                 for index in 0..archive.len() {
                     if let Ok(entry) = archive.by_index(index) {
                         files.push(entry.name().to_owned());
@@ -269,10 +282,15 @@ pub fn restore_backup(db_path: &Path, ledger_dir: &Path, id: &str) -> Result<()>
     validate_backup_id(id)?;
     let dir = backup_dir(db_path);
     let archive_path = dir.join(format!("koku-{id}.zip"));
-    let bytes = fs::read(&archive_path)
+    let file = File::open(&archive_path)
         .map_err(|error| KokuError::InvalidInput(format!("backup not found: {error}")))?;
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let mut archive = zip::ZipArchive::new(BufReader::new(file))
         .map_err(|error| KokuError::InvalidInput(format!("invalid backup archive: {error}")))?;
+    if archive.len() > MAX_RESTORE_ENTRIES {
+        return Err(KokuError::InvalidInput(
+            "backup contains too many files".to_owned(),
+        ));
+    }
 
     // 先全部解压到备份目录内的临时目录，确认无 zip-slip 路径后再逐个覆盖。
     let staging = dir.join(format!(".restore-{id}-{}", std::process::id()));
@@ -286,6 +304,8 @@ pub fn restore_backup(db_path: &Path, ledger_dir: &Path, id: &str) -> Result<()>
         staged: PathBuf,
     }
     let mut restores: Vec<RestoreFile> = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut targets = HashSet::new();
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -304,17 +324,58 @@ pub fn restore_backup(db_path: &Path, ledger_dir: &Path, id: &str) -> Result<()>
         let target = if relative == "koku.db" {
             db_path.to_path_buf()
         } else if let Some(ledger_name) = relative.strip_prefix("ledgers/") {
-            ledger_dir.join(ledger_name)
+            let Some(ledger_id) = ledger_name
+                .strip_prefix("ledger-")
+                .and_then(|name| name.strip_suffix(".db"))
+            else {
+                return Err(KokuError::InvalidInput(format!(
+                    "unknown file in backup: {relative}"
+                )));
+            };
+            if !ledger_id.is_empty()
+                && ledger_id.bytes().all(|byte| byte.is_ascii_digit())
+                && !ledger_name.contains(['/', '\\'])
+            {
+                ledger_dir.join(ledger_name)
+            } else {
+                return Err(KokuError::InvalidInput(format!(
+                    "unknown file in backup: {relative}"
+                )));
+            }
         } else {
             return Err(KokuError::InvalidInput(format!(
                 "unknown file in backup: {relative}"
             )));
         };
+        let entry_bytes = entry.size();
+        if entry_bytes > MAX_RESTORE_FILE_BYTES {
+            return Err(KokuError::InvalidInput(
+                "backup file exceeds restore limit".to_owned(),
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(entry_bytes)
+            .ok_or_else(|| KokuError::InvalidInput("backup size overflow".to_owned()))?;
+        if total_bytes > MAX_RESTORE_TOTAL_BYTES {
+            return Err(KokuError::InvalidInput(
+                "backup exceeds restore limit".to_owned(),
+            ));
+        }
+        if !targets.insert(target.clone()) {
+            return Err(KokuError::InvalidInput(
+                "backup contains duplicate files".to_owned(),
+            ));
+        }
         let staged = staging.join(relative.replace('/', "__"));
-        let mut buffer = Vec::with_capacity(entry.size() as usize);
-        std::io::Read::read_to_end(&mut entry, &mut buffer)?;
-        fs::write(&staged, buffer)?;
+        let mut destination = BufWriter::new(File::create(&staged)?);
+        copy(&mut entry, &mut destination)?;
+        destination.flush()?;
         restores.push(RestoreFile { target, staged });
+    }
+    if !targets.contains(db_path) {
+        return Err(KokuError::InvalidInput(
+            "backup is missing koku.db".to_owned(),
+        ));
     }
 
     // 逐个原子覆盖，并清理旧 WAL/SHM（防止残留 WAL 与新文件错配）。

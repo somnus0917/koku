@@ -70,6 +70,7 @@ async fn run_server() -> Result<()> {
     )?;
 
     let state = AppState {
+        maintenance: Arc::new(tokio::sync::RwLock::new(())),
         auth: Arc::new(Mutex::new(auth_service)),
         ledgers: Arc::new(Mutex::new(HashMap::new())),
         ledger_dir: ledger_dir.clone(),
@@ -112,6 +113,7 @@ async fn run_server() -> Result<()> {
         let backup_db_path = state.db_path.clone();
         let backup_ledger_dir = state.ledger_dir.clone();
         let backup_r2 = state.r2.clone();
+        let backup_maintenance = state.maintenance.clone();
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(backup_interval_hours * 3600));
@@ -119,7 +121,11 @@ async fn run_server() -> Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                match backup::create_backup(&backup_db_path, &backup_ledger_dir, backup_keep) {
+                let created = {
+                    let _maintenance = backup_maintenance.write().await;
+                    backup::create_backup(&backup_db_path, &backup_ledger_dir, backup_keep)
+                };
+                match created {
                     Ok(meta) => {
                         // 配置了 R2 时上传本次备份并清理超出保留份数的旧对象。
                         if let Some(r2) = &backup_r2 {
@@ -170,7 +176,7 @@ async fn run_server() -> Result<()> {
             loop {
                 interval.tick().await;
                 let result: Result<()> = async {
-                    let ledger = BookkeepingService::open(
+                    let mut ledger = BookkeepingService::open(
                         smtp_ledger_dir.join(format!("ledger-{smtp_admin_id}.db")),
                     )?;
                     let items = ledger.due_reminders(30)?;

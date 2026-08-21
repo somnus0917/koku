@@ -1,4 +1,4 @@
-//! 信用卡账单模型 v1：额度占用、账单周期与出账/未出账金额。
+//! 信用卡账单模型：额度占用、账单快照与出账/未出账金额。
 //!
 //! # 核心语义
 //! - 消费 = Credit 账户上的 Expense（正常支出）；
@@ -7,13 +7,14 @@
 //!   语义维护：支出增、还款减；期初余额、余额调整、收入/退款等合法操作一并计入），
 //!   `used_credit = max(0, account.balance)`，溢缴（余额为负）按 0 计。
 //!
-//! # 账单口径（v1，可解释近似，无快照表，按现有交易动态计算）
+//! # 账单口径
 //! - 消费：该账户上未撤销的 Expense，按 `settled_amount`（账户币种结算额）计，
 //!   金额以 TEXT 从 SQLite 原样读出后用 `Decimal` 在 Rust 中精确求和
 //!   （全程不使用 REAL/f64 做账务计算，如 0.10+0.20+0.30 精确等于 0.60）；
 //! - 账单周期：`(上一账单日, 最近账单日]`，即 `[上一账单日次日 00:00,
 //!   最近账单日次日 00:00)`——账单日当天的消费计入本期已出账；
-//! - `current_statement_amount` = 最近一期已出账周期中未被冲抵的消费；
+//! - 每个已经结束的账单周期首次被读取时，都会固化为不可变账单快照；
+//! - `current_statement_amount` = 最近一期已出账快照中未被冲抵的消费；
 //! - `unbilled_amount` = 最近账单日次日 00:00 之后、截至 as_of 的未出账消费；
 //! - 冲抵口径：`tracked = old + current + unbilled`，
 //!   `tracked_unpaid = min(used_credit, tracked)`，差额 `tracked − tracked_unpaid`
@@ -41,7 +42,7 @@ impl BookkeepingService {
     /// 仅对 Credit 账户有效；非 Credit 账户返回明确错误。`statement_day` /
     /// `due_day` 未设置时返回部分字段为 `None` 的部分摘要（不 panic）。
     pub fn credit_card_summary(
-        &self,
+        &mut self,
         account_id: i64,
         as_of: DateTime<Utc>,
     ) -> Result<CreditCardSummary> {
@@ -59,17 +60,18 @@ impl BookkeepingService {
             Some(day) => {
                 let as_of_date = as_of.date_naive();
                 let recent = recent_statement_date(as_of_date, day);
-                let prev = previous_statement_date(recent, day);
-                // 周期边界：(上一账单日, 最近账单日]；账单日当天消费计入本期已出账。
-                let current_start = midnight_utc(prev + Duration::days(1));
+                self.sync_credit_card_statements(&account, recent, as_of)?;
+                let statements = self.credit_card_statements(account_id)?;
+                let old = statements
+                    .iter()
+                    .filter(|item| item.statement_date < recent)
+                    .map(|item| item.amount)
+                    .sum();
+                let current = statements
+                    .iter()
+                    .find(|item| item.statement_date == recent)
+                    .map_or(Decimal::ZERO, |item| item.amount);
                 let current_end = midnight_utc(recent + Duration::days(1));
-                let old = self.sum_expenses(account_id, &as_of, None, Some(&current_start))?;
-                let current = self.sum_expenses(
-                    account_id,
-                    &as_of,
-                    Some(&current_start),
-                    Some(&current_end),
-                )?;
                 let unbilled = self.sum_expenses(account_id, &as_of, Some(&current_end), None)?;
                 let (current_unpaid, unbilled_unpaid) =
                     apply_fifo_cap(old, current, unbilled, used_credit);
@@ -129,6 +131,145 @@ impl BookkeepingService {
         }
         Ok(total)
     }
+
+    /// 把所有已经结束、尚未快照的信用卡账单周期固化下来。
+    ///
+    /// 快照只会 `INSERT OR IGNORE` 一次；之后即使录入一笔追溯日期的交易，也
+    /// 不会悄悄改写历史账单。这符合对账单可追溯性的预期。
+    fn sync_credit_card_statements(
+        &mut self,
+        account: &crate::domain::Account,
+        recent_statement: NaiveDate,
+        as_of: DateTime<Utc>,
+    ) -> Result<()> {
+        let Some(statement_day) = account.statement_day else {
+            return Ok(());
+        };
+        let first_expense: Option<String> = self.conn.query_row(
+            "SELECT MIN(occurred_at) FROM transactions
+             WHERE account_id = ?1 AND kind = 'expense' AND voided_at IS NULL AND occurred_at <= ?2",
+            rusqlite::params![account.id, timestamp(as_of)],
+            |row| row.get(0),
+        )?;
+        let Some(first_expense) = first_expense else {
+            return Ok(());
+        };
+        let first_date = parse_timestamp(&first_expense)?.date_naive();
+        let mut statement_date = statement_on_or_after(first_date, statement_day);
+        while statement_date <= recent_statement {
+            let previous = previous_statement_date(statement_date, statement_day);
+            let start = midnight_utc(previous + Duration::days(1));
+            let end = midnight_utc(statement_date + Duration::days(1));
+            let amount = self.sum_expenses(account.id, &as_of, Some(&start), Some(&end))?;
+            let due_at = account.due_day.map(|due_day| {
+                timestamp(midnight_utc(due_date_for_statement(
+                    statement_date,
+                    due_day,
+                )))
+            });
+            self.conn.execute(
+                "INSERT OR IGNORE INTO credit_card_statements
+                 (account_id, statement_date, due_at, amount, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    account.id,
+                    statement_date.to_string(),
+                    due_at,
+                    amount.to_string(),
+                    timestamp(as_of),
+                ],
+            )?;
+            statement_date = next_statement_date(statement_date, statement_day);
+        }
+        Ok(())
+    }
+
+    fn credit_card_statements(&self, account_id: i64) -> Result<Vec<CreditCardStatement>> {
+        let mut statement = self.conn.prepare(
+            "SELECT statement_date, due_at, amount
+             FROM credit_card_statements WHERE account_id = ?1 ORDER BY statement_date",
+        )?;
+        let rows = statement.query_map([account_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (statement_date, due_at, amount) = row?;
+            Ok(CreditCardStatement {
+                statement_date: NaiveDate::parse_from_str(&statement_date, "%Y-%m-%d").map_err(
+                    |error| {
+                        KokuError::InvalidInput(format!(
+                            "invalid credit card statement date {statement_date}: {error}"
+                        ))
+                    },
+                )?,
+                due_at: due_at.as_deref().map(parse_timestamp).transpose()?,
+                amount: decimal_from_db(&amount)?,
+            })
+        })
+        .collect()
+    }
+
+    /// 为到期提醒准备所有信用卡的账单快照，再返回按账期排序的未还金额。
+    pub(super) fn due_credit_card_statements(
+        &mut self,
+        now: DateTime<Utc>,
+        horizon: DateTime<Utc>,
+    ) -> Result<Vec<CreditCardStatementReminder>> {
+        let accounts = self.accounts()?;
+        let mut reminders = Vec::new();
+        for account in accounts
+            .into_iter()
+            .filter(|account| account.account_type == AccountType::Credit)
+        {
+            let Some(statement_day) = account.statement_day else {
+                continue;
+            };
+            self.sync_credit_card_statements(
+                &account,
+                recent_statement_date(now.date_naive(), statement_day),
+                now,
+            )?;
+            let statements = self.credit_card_statements(account.id)?;
+            let tracked: Decimal = statements.iter().map(|item| item.amount).sum();
+            let mut paid_or_credited = tracked - account.balance.max(Decimal::ZERO).min(tracked);
+            for item in statements {
+                let outstanding = (item.amount - paid_or_credited).max(Decimal::ZERO);
+                paid_or_credited = (paid_or_credited - item.amount).max(Decimal::ZERO);
+                if let Some(due_at) = item.due_at.filter(|due_at| *due_at <= horizon) {
+                    if outstanding > Decimal::ZERO {
+                        reminders.push(CreditCardStatementReminder {
+                            account_id: account.id,
+                            account_name: account.name.clone(),
+                            amount: outstanding,
+                            currency: account.currency.clone(),
+                            due_at,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(reminders)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CreditCardStatement {
+    statement_date: NaiveDate,
+    due_at: Option<DateTime<Utc>>,
+    amount: Decimal,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CreditCardStatementReminder {
+    pub(super) account_id: i64,
+    pub(super) account_name: String,
+    pub(super) amount: Decimal,
+    pub(super) currency: String,
+    pub(super) due_at: DateTime<Utc>,
 }
 
 /// FIFO + 上限口径：把「可归因的还款/贷项」按 最早桶 → 最近桶 依次冲抵，
@@ -210,6 +351,16 @@ fn midnight_utc(date: NaiveDate) -> DateTime<Utc> {
     date.and_time(NaiveTime::MIN).and_utc()
 }
 
+/// 账单日所在月若不早于交易日，返回该月账单日；否则返回下月账单日。
+fn statement_on_or_after(date: NaiveDate, statement_day: u32) -> NaiveDate {
+    let current = day_in_month(date.year(), date.month(), statement_day);
+    if current >= date {
+        current
+    } else {
+        next_statement_date(date, statement_day)
+    }
+}
+
 /// 最近一次（`<= as_of`）的账单日。
 pub(super) fn recent_statement_date(as_of: NaiveDate, statement_day: u32) -> NaiveDate {
     let current = day_in_month(as_of.year(), as_of.month(), statement_day);
@@ -240,9 +391,7 @@ pub(super) fn next_statement_date(as_of: NaiveDate, statement_day: u32) -> Naive
 
 /// 某期账单的还款日：严格晚于账单日的最早 due_day 日期（跨月或月底回退）。
 ///
-/// 摘要中的 `next_due_date` 使用 [`next_due_date`]；本 helper 保留作为可测试的
-/// 语义定义（当前仅测试引用，未来恢复还款提醒时使用）。
-#[allow(dead_code)]
+/// 摘要中的 `next_due_date` 使用 [`next_due_date`]。
 pub(super) fn due_date_for_statement(statement: NaiveDate, due_day: u32) -> NaiveDate {
     let current = day_in_month(statement.year(), statement.month(), due_day);
     if current > statement {
@@ -378,7 +527,7 @@ mod tests {
 
     #[test]
     fn summary_is_rejected_for_non_credit_account() -> Result<()> {
-        let (service, _, cash, _) = seeded()?;
+        let (mut service, _, cash, _) = seeded()?;
         let error = service.credit_card_summary(cash, as_of(2026, 8, 18));
         assert!(error.is_err());
         let message = format!("{error:?}");
@@ -920,6 +1069,32 @@ mod tests {
             Some(Decimal::from(100_u32))
         );
         assert_eq!(summary.unbilled_amount, Some(Decimal::ZERO));
+        Ok(())
+    }
+
+    #[test]
+    fn closed_statement_snapshot_is_not_rewritten_by_late_entries() -> Result<()> {
+        let (mut service, credit, _, food) = seeded()?;
+        service.set_statement_day(credit.id, Some(10))?;
+        expense(&mut service, credit.id, food, "300.00", as_of(2026, 8, 5))?;
+        service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+
+        let initial: String = service.conn.query_row(
+            "SELECT amount FROM credit_card_statements WHERE account_id = ?1 AND statement_date = '2026-08-10'",
+            [credit.id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(initial, "300");
+
+        // 账单已经固化后录入的追溯交易不能悄悄改写历史账单。
+        expense(&mut service, credit.id, food, "100.00", as_of(2026, 8, 7))?;
+        service.credit_card_summary(credit.id, as_of(2026, 8, 18))?;
+        let persisted: String = service.conn.query_row(
+            "SELECT amount FROM credit_card_statements WHERE account_id = ?1 AND statement_date = '2026-08-10'",
+            [credit.id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(persisted, "300");
         Ok(())
     }
 }

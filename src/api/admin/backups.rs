@@ -34,7 +34,10 @@ async fn api_create_backup(
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(14);
-    let mut meta = backup::create_backup(&state.db_path, &state.ledger_dir, keep)?;
+    let mut meta = {
+        let _maintenance = state.maintenance.write().await;
+        backup::create_backup(&state.db_path, &state.ledger_dir, keep)?
+    };
     // 配置了 R2 时自动上传本次备份，并清理超出保留份数的旧对象。
     if let Some(r2) = &state.r2 {
         upload_backup_to_r2(r2, &mut meta, &state).await?;
@@ -163,16 +166,7 @@ async fn api_r2_restore(
     let dir = backup::backup_dir(&state.db_path);
     std::fs::write(dir.join(&meta.filename), bytes)?;
     // 与本地恢复走同一逻辑：覆盖文件、重开共享库、清空账本缓存。
-    backup::restore_backup(&state.db_path, &state.ledger_dir, &backup_id)?;
-    state
-        .ledgers
-        .lock()
-        .map_err(|_| KokuError::InvalidInput("ledger cache lock was poisoned".to_owned()))?
-        .clear();
-    {
-        let mut guard = lock_auth(&state)?;
-        *guard = BookkeepingService::open(&state.db_path)?;
-    }
+    restore_under_maintenance(&state, &backup_id).await?;
     tracing::info!(target: "auth", "admin {} restored backup {} from R2", user.username, backup_id);
     Ok(Json(ApiResponse::new(
         serde_json::json!({ "restored": true, "source": "r2" }),
@@ -212,22 +206,26 @@ async fn api_restore_backup(
     AxumPath(backup_id): AxumPath<String>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     user.require_admin()?;
-    backup::restore_backup(&state.db_path, &state.ledger_dir, &backup_id)?;
-    // 关闭全部账本连接缓存：下一次访问会基于恢复后的文件重新打开。
+    restore_under_maintenance(&state, &backup_id).await?;
+    tracing::info!(target: "auth", "admin {} restored backup {}", user.username, backup_id);
+    Ok(Json(ApiResponse::new(
+        serde_json::json!({ "restored": true }),
+    )))
+}
+
+/// 在独占维护窗口内恢复文件并丢弃全部旧连接。普通请求被中间件读锁阻塞，
+/// 因此不存在恢复后旧 ledger 连接继续写入已替换 inode 的窗口。
+async fn restore_under_maintenance(state: &AppState, backup_id: &str) -> Result<()> {
+    let _maintenance = state.maintenance.write().await;
+    backup::restore_backup(&state.db_path, &state.ledger_dir, backup_id)?;
     state
         .ledgers
         .lock()
         .map_err(|_| KokuError::InvalidInput("ledger cache lock was poisoned".to_owned()))?
         .clear();
-    // 重开共享库：替换运行中的连接（旧连接随之关闭），所有会话从新库读取后失效。
-    {
-        let mut guard = lock_auth(&state)?;
-        *guard = BookkeepingService::open(&state.db_path)?;
-    }
-    tracing::info!(target: "auth", "admin {} restored backup {}", user.username, backup_id);
-    Ok(Json(ApiResponse::new(
-        serde_json::json!({ "restored": true }),
-    )))
+    let mut guard = lock_auth(state)?;
+    *guard = BookkeepingService::open(&state.db_path)?;
+    Ok(())
 }
 
 pub(super) fn router() -> Router<AppState> {

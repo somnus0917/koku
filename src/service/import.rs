@@ -13,6 +13,9 @@ use crate::error::{KokuError, Result};
 use crate::importer::{ImportFormat, ImportRow, ParseIssue};
 use crate::service::BookkeepingService;
 
+/// 导入报告只保留有限条失败明细与分类建议，计数仍完整，避免坏账单把响应撑爆。
+const MAX_IMPORT_REPORT_ITEMS: usize = 500;
+
 /// 一次导入的统计结果。
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportResult {
@@ -89,7 +92,9 @@ impl BookkeepingService {
                         }
                         if let Some(suggestion) = outcome.suggestion {
                             category_suggestion_count += 1;
-                            category_suggestions.push(suggestion);
+                            if category_suggestions.len() < MAX_IMPORT_REPORT_ITEMS {
+                                category_suggestions.push(suggestion);
+                            }
                         }
                     } else {
                         skipped_duplicates += 1;
@@ -97,10 +102,12 @@ impl BookkeepingService {
                 }
                 Err(error) => {
                     failed += 1;
-                    issues.push(ParseIssue {
-                        line: row.line,
-                        message: error.to_string(),
-                    });
+                    if issues.len() < MAX_IMPORT_REPORT_ITEMS {
+                        issues.push(ParseIssue {
+                            line: row.line,
+                            message: error.to_string(),
+                        });
+                    }
                 }
             }
         }

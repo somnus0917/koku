@@ -246,7 +246,7 @@ pub struct Account {
     pub due_day: Option<u32>,
 }
 
-/// 信用卡账单摘要（v1：按现有交易动态计算，无账单快照表）。
+/// 信用卡账单摘要：已出账周期使用不可变快照，未出账部分按交易动态计算。
 ///
 /// 口径说明见 [`crate::service::credit_cards`]；金额均为账户结算币种。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

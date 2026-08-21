@@ -17,16 +17,15 @@ struct RemindersQuery {
     days: Option<i64>,
 }
 
-/// 到期提醒：未来 `days` 天内到期（含已逾期）的定存与借款。
+/// 到期提醒：未来 `days` 天内到期（含已逾期）的定存、借款与信用卡账单。
 async fn api_reminders(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     Query(query): Query<RemindersQuery>,
 ) -> Result<Json<ApiResponse<Vec<ReminderItem>>>> {
     let days = query.days.unwrap_or(30).clamp(1, 365);
-    let items = lock_ledger(&state, user.user_id)
-        .await?
-        .due_reminders(days)?;
+    let mut ledger = lock_ledger(&state, user.user_id).await?;
+    let items = ledger.due_reminders(days)?;
     Ok(Json(ApiResponse::new(items)))
 }
 
@@ -39,7 +38,8 @@ async fn api_send_reminder_digest(
     let config = mailer::MailerConfig::from_env()?.ok_or_else(|| {
         KokuError::InvalidInput("SMTP 未配置：请设置 KOKU_SMTP_HOST/FROM/TO 环境变量".to_owned())
     })?;
-    let items = lock_ledger(&state, user.user_id).await?.due_reminders(30)?;
+    let mut ledger = lock_ledger(&state, user.user_id).await?;
+    let items = ledger.due_reminders(30)?;
     let subject = if items.is_empty() {
         "Koku 到期提醒：暂无".to_owned()
     } else {

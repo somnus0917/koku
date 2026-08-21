@@ -18,6 +18,8 @@ use crate::throttle::LoginThrottle;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// 全局维护闸门：普通 API 请求持读锁；备份/恢复持写锁，避免恢复时旧连接继续写入。
+    pub maintenance: Arc<tokio::sync::RwLock<()>>,
     /// 共享库（users / 会话 / 设置）。
     pub auth: Arc<Mutex<BookkeepingService>>,
     /// 每用户账本连接缓存（按 user_id；打开后复用，同一用户串行访问）。
@@ -145,6 +147,7 @@ mod send_check {
         is_send::<LedgerGuard>();
         is_send::<AppState>();
         let state = AppState {
+            maintenance: Arc::new(tokio::sync::RwLock::new(())),
             auth: Arc::new(Mutex::new(BookkeepingService::in_memory().unwrap())),
             ledgers: Arc::new(Mutex::new(HashMap::new())),
             ledger_dir: std::env::temp_dir(),
