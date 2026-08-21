@@ -132,6 +132,25 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_transaction_rules_priority
             ON transaction_rules(enabled, priority, id);
+        CREATE TABLE IF NOT EXISTS import_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            format TEXT NOT NULL CHECK (format IN ('auto', 'csv', 'qif', 'ofx')),
+            account_id INTEGER REFERENCES accounts(id), category_id INTEGER REFERENCES categories(id),
+            currency TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS bills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            account_id INTEGER NOT NULL REFERENCES accounts(id), category_id INTEGER NOT NULL REFERENCES categories(id),
+            amount TEXT NOT NULL, due_day INTEGER NOT NULL CHECK (due_day BETWEEN 1 AND 31),
+            active INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS savings_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+            account_id INTEGER REFERENCES accounts(id), target_amount TEXT NOT NULL,
+            current_amount TEXT NOT NULL DEFAULT '0', target_date TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
         "#,
     )?;
     migrate_deposit_accounts(conn)?;

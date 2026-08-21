@@ -350,6 +350,9 @@ pub async fn prune_old_objects(r2: &R2Client, db_path: &std::path::Path, keep: u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static R2_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn test_client() -> R2Client {
         R2Client::new(R2Config {
@@ -384,6 +387,7 @@ mod tests {
 
     #[test]
     fn config_is_disabled_without_account_id() -> Result<()> {
+        let _guard = R2_ENV_LOCK.lock().expect("r2 test env lock");
         std::env::remove_var("KOKU_R2_ACCOUNT_ID");
         assert!(R2Config::from_env()?.is_none());
         Ok(())
@@ -391,6 +395,7 @@ mod tests {
 
     #[test]
     fn config_requires_full_credentials_when_enabled() {
+        let _guard = R2_ENV_LOCK.lock().expect("r2 test env lock");
         std::env::set_var("KOKU_R2_ACCOUNT_ID", "abc");
         std::env::remove_var("KOKU_R2_ACCESS_KEY_ID");
         std::env::remove_var("KOKU_R2_SECRET_ACCESS_KEY");

@@ -562,6 +562,44 @@ pub struct TransactionRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportProfile {
+    pub id: i64,
+    pub name: String,
+    pub format: String,
+    pub account_id: Option<i64>,
+    pub category_id: Option<i64>,
+    pub currency: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bill {
+    pub id: i64,
+    pub name: String,
+    pub account_id: i64,
+    pub category_id: i64,
+    pub amount: Decimal,
+    pub due_day: u32,
+    pub active: bool,
+    pub note: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavingsGoal {
+    pub id: i64,
+    pub name: String,
+    pub account_id: Option<i64>,
+    pub target_amount: Decimal,
+    pub current_amount: Decimal,
+    pub target_date: Option<NaiveDate>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonthlySummary {
     pub year: i32,
     pub month: u32,

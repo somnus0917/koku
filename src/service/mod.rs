@@ -27,6 +27,7 @@ mod import;
 mod loans;
 mod migrations;
 mod payees;
+mod planning;
 mod rates;
 mod receipts;
 mod reconciliations;
