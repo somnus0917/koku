@@ -6,7 +6,7 @@ export interface HoldingQuote {
   symbol: string;
   price: string;
   date: string;
-  source: "stooq" | "yahoo_finance";
+  source: "stooq" | "nasdaq" | "yahoo_finance";
   market: Holding["market"];
 }
 

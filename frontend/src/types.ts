@@ -193,7 +193,7 @@ export interface Holding {
   cost_basis: string;
   last_price: string | null;
   market: "us" | "hk" | "cn_sh" | "cn_sz" | "cn_star" | "unknown";
-  price_source: "stooq" | "yahoo_finance" | "manual" | "trade" | null;
+  price_source: "stooq" | "nasdaq" | "yahoo_finance" | "manual" | "trade" | null;
   price_as_of: string | null;
   average_cost: string;
   market_value: string | null;

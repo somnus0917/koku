@@ -403,7 +403,7 @@ export const zh = {
         sourceLabel: " · 来源：{{source}}",
         asOf: " · 价格日期 {{date}}",
         market: { us: "美股", hk: "港股", cn_sh: "A股·沪市", cn_sz: "A股·深市", cn_star: "科创板", unknown: "未识别市场" },
-        source: { stooq: "Stooq", yahoo_finance: "Yahoo Finance", manual: "手动", trade: "成交价" },
+        source: { stooq: "Stooq", nasdaq: "Nasdaq", yahoo_finance: "Yahoo Finance", manual: "手动", trade: "成交价" },
         updatedAt: " · 更新于 {{date}}",
         pricePlaceholder: "市价",
         savePrice: "保存市价",

@@ -403,7 +403,7 @@ export const en = {
         sourceLabel: " · source: {{source}}",
         asOf: " · as of {{date}}",
         market: { us: "US", hk: "Hong Kong", cn_sh: "China A · Shanghai", cn_sz: "China A · Shenzhen", cn_star: "STAR Market", unknown: "Unknown market" },
-        source: { stooq: "Stooq", yahoo_finance: "Yahoo Finance", manual: "Manual", trade: "Trade price" },
+        source: { stooq: "Stooq", nasdaq: "Nasdaq", yahoo_finance: "Yahoo Finance", manual: "Manual", trade: "Trade price" },
         updatedAt: " · updated {{date}}",
         pricePlaceholder: "Price",
         savePrice: "Save price",

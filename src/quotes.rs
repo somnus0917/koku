@@ -135,6 +135,7 @@ pub struct QuoteClient {
     client: reqwest::Client,
     stooq_base: String,
     yahoo_base: String,
+    nasdaq_base: String,
     next_request_at: Arc<Mutex<Instant>>,
 }
 
@@ -155,11 +156,12 @@ impl QuoteClient {
                 .expect("failed to build quote http client"),
             stooq_base: "https://stooq.com/q/l".to_owned(),
             yahoo_base: "https://query1.finance.yahoo.com/v8/finance/chart".to_owned(),
+            nasdaq_base: "https://api.nasdaq.com/api/quote".to_owned(),
             next_request_at: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
-    /// 每轮先 Stooq 后 Yahoo Finance，最多三轮；任一源成功即返回。
+    /// 每轮先 Stooq；美股再尝试 Nasdaq，随后回退 Yahoo Finance，最多三轮。
     pub async fn fetch(&self, symbol: &str) -> Result<Quote> {
         let market = detect_market(symbol);
         let stooq_symbol = stooq_symbol(symbol, market);
@@ -169,6 +171,12 @@ impl QuoteClient {
             match self.fetch_stooq(symbol, &stooq_symbol, market).await {
                 Ok(quote) => return Ok(quote),
                 Err(error) => errors.push(format!("stooq: {error}")),
+            }
+            if market == Market::Us {
+                match self.fetch_nasdaq(symbol, market).await {
+                    Ok(quote) => return Ok(quote),
+                    Err(error) => errors.push(format!("nasdaq: {error}")),
+                }
             }
             match self.fetch_yahoo(symbol, &yahoo_symbol, market).await {
                 Ok(quote) => return Ok(quote),
@@ -237,6 +245,29 @@ impl QuoteClient {
             KokuError::RateSource(format!("could not read yahoo payload: {error}"))
         })?;
         parse_yahoo_payload(&payload, requested, market)
+    }
+
+    async fn fetch_nasdaq(&self, requested: &str, market: Market) -> Result<Quote> {
+        self.throttle().await;
+        let code = provider_code(requested);
+        let url = format!("{}/{code}/info?assetclass=stocks", self.nasdaq_base);
+        let response = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|error| KokuError::RateSource(format!("nasdaq request failed: {error}")))?;
+        if !response.status().is_success() {
+            return Err(KokuError::RateSource(format!(
+                "nasdaq returned HTTP {}",
+                response.status()
+            )));
+        }
+        let payload: serde_json::Value = response.json().await.map_err(|error| {
+            KokuError::RateSource(format!("could not read nasdaq payload: {error}"))
+        })?;
+        parse_nasdaq_payload(&payload, requested, market)
     }
 
     async fn throttle(&self) {
@@ -356,6 +387,33 @@ fn parse_yahoo_payload(
     })
 }
 
+fn parse_nasdaq_payload(
+    payload: &serde_json::Value,
+    requested_symbol: &str,
+    market: Market,
+) -> Result<Quote> {
+    let value = payload
+        .pointer("/data/primaryData/lastSalePrice")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| KokuError::RateSource("nasdaq returned no market price".to_owned()))?;
+    let normalized = value.trim().trim_start_matches('$').replace(',', "");
+    let price = Decimal::from_str(&normalized).map_err(|error| {
+        KokuError::RateSource(format!("invalid nasdaq price {value:?}: {error}"))
+    })?;
+    if price <= Decimal::ZERO {
+        return Err(KokuError::RateSource(
+            "nasdaq price must be positive".to_owned(),
+        ));
+    }
+    Ok(Quote {
+        symbol: requested_symbol.to_owned(),
+        price,
+        date: Utc::now().date_naive().to_string(),
+        source: "nasdaq".to_owned(),
+        market,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +441,14 @@ mod tests {
         let quote = parse_yahoo_payload(&payload, "AAPL", Market::Us).unwrap();
         assert_eq!(quote.price, Decimal::from(173_u32));
         assert_eq!(quote.source, "yahoo_finance");
+    }
+
+    #[test]
+    fn parses_nasdaq_us_quote() {
+        let payload = serde_json::json!({"data":{"primaryData":{"lastSalePrice":"$215.18"}}});
+        let quote = parse_nasdaq_payload(&payload, "NVDA", Market::Us).unwrap();
+        assert_eq!(quote.price, Decimal::from_str_exact("215.18").unwrap());
+        assert_eq!(quote.source, "nasdaq");
     }
 
     #[test]
