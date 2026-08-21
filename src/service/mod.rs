@@ -1042,9 +1042,9 @@ mod tests {
         assert!(!expense.has_receipt);
         assert!(service.receipt(expense.id).is_err());
 
-        let bytes = vec![0_u8, 1, 2, 255, 254];
+        let bytes = b"\x89PNG\r\n\x1a\n\0\x01\x02\xff\xfe".to_vec();
         let receipt = service.attach_receipt(expense.id, "image/png".to_owned(), bytes.clone())?;
-        assert_eq!(receipt.byte_length, 5);
+        assert_eq!(receipt.byte_length, bytes.len());
         assert_eq!(receipt.content_type, "image/png");
 
         assert!(service.transaction(expense.id)?.has_receipt);
@@ -1066,17 +1066,23 @@ mod tests {
             .and_utc();
         let expense =
             service.record_expense(cash.id, food.id, Decimal::from(10_u32), at, "餐费")?;
-        let bytes = vec![1_u8, 2, 3];
+        let jpeg = vec![0xff, 0xd8, 0xff, 0xdb];
+        let png = b"\x89PNG\r\n\x1a\n".to_vec();
 
         // 白名单内（含大小写与参数）放行并归一化。
-        service.attach_receipt(expense.id, "image/jpeg".to_owned(), bytes.clone())?;
+        service.attach_receipt(expense.id, "image/jpeg".to_owned(), jpeg)?;
         assert_eq!(service.receipt(expense.id)?.content_type, "image/jpeg");
         service.attach_receipt(
             expense.id,
             "Image/PNG; charset=binary".to_owned(),
-            bytes.clone(),
+            png.clone(),
         )?;
         assert_eq!(service.receipt(expense.id)?.content_type, "image/png");
+
+        // 声明为图片但内容不是相应格式时也必须拒绝。
+        assert!(service
+            .attach_receipt(expense.id, "image/jpeg".to_owned(), png.clone())
+            .is_err());
 
         // 可携带脚本的类型与未知类型一律拒绝。
         for bad in [
@@ -1087,7 +1093,7 @@ mod tests {
         ] {
             assert!(
                 service
-                    .attach_receipt(expense.id, bad.to_owned(), bytes.clone())
+                    .attach_receipt(expense.id, bad.to_owned(), png.clone())
                     .is_err(),
                 "should reject {bad}"
             );
@@ -2747,7 +2753,11 @@ mod tests {
         service.void_transaction(expense.id)?;
 
         // 挂一张小票和标签，确认随流水一起删除
-        service.attach_receipt(expense.id, "image/png".to_owned(), vec![1, 2, 3])?;
+        service.attach_receipt(
+            expense.id,
+            "image/png".to_owned(),
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+        )?;
         service.set_transaction_tags(expense.id, vec!["出差".to_owned()])?;
 
         service.delete_transaction(expense.id)?;

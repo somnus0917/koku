@@ -335,6 +335,16 @@ async fn api_get_receipt(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, header_value);
+    // 即使 API 被独立暴露、没有经过生产 Caddy 的安全响应头，也不允许浏览器
+    // 对用户上传的附件进行 MIME 嗅探或缓存敏感票据。
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
     Ok(response)
 }
 

@@ -28,6 +28,16 @@ struct SetUserEnabledRequest {
     enabled: bool,
 }
 
+fn deletes_last_enabled_admin(target: &User, users: &[User]) -> bool {
+    target.role == UserRole::Admin
+        && target.enabled
+        && users
+            .iter()
+            .filter(|item| item.role == UserRole::Admin && item.enabled)
+            .count()
+            <= 1
+}
+
 async fn api_users(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -120,11 +130,13 @@ async fn api_delete_user(
         ));
     }
     let target = lock_auth(&state)?.user(user_id)?;
-    if target.role == UserRole::Admin {
-        let admins = lock_auth(&state)?.users()?.len();
-        if admins <= 1 {
+    if target.role == UserRole::Admin && target.enabled {
+        // 与停用操作保持同一不变量：删除启用中的管理员后，仍须至少保留一名
+        // 启用的管理员。不能用 users().len()，成员账号不能满足这个条件。
+        let users = lock_auth(&state)?.users()?;
+        if deletes_last_enabled_admin(&target, &users) {
             return Err(KokuError::InvalidInput(
-                "cannot delete the last admin".to_owned(),
+                "cannot delete the last enabled admin".to_owned(),
             ));
         }
     }
@@ -155,4 +167,41 @@ pub(super) fn router() -> Router<AppState> {
         )
         .route("/api/users/{user_id}/enabled", post(api_set_user_enabled))
         .route("/api/users/{user_id}", delete(api_delete_user))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn user(id: i64, role: UserRole, enabled: bool) -> User {
+        User {
+            id,
+            username: format!("user-{id}"),
+            password_hash: "hash".to_owned(),
+            role,
+            enabled,
+            created_at: Utc::now(),
+            totp_enabled: false,
+        }
+    }
+
+    #[test]
+    fn deleting_admin_requires_another_enabled_admin() {
+        let users = [
+            user(1, UserRole::Admin, true),
+            user(2, UserRole::Member, true),
+            user(3, UserRole::Member, true),
+        ];
+        assert!(deletes_last_enabled_admin(&users[0], &users));
+
+        let two_admins = [
+            user(1, UserRole::Admin, true),
+            user(2, UserRole::Admin, true),
+            user(3, UserRole::Member, true),
+        ];
+        assert!(!deletes_last_enabled_admin(&two_admins[0], &two_admins));
+        let disabled_admin = user(4, UserRole::Admin, false);
+        assert!(!deletes_last_enabled_admin(&disabled_admin, &users));
+    }
 }

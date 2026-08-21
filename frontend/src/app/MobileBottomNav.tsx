@@ -2,15 +2,18 @@
 import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { NAV_ITEMS, type View } from "./nav";
-import type { UserRole } from "../types";
+
+// 底栏只保留四个高频账本入口；管理员页面仍可从移动端左上角菜单进入。
+// 这避免管理员的第 5、6 项在固定高度的底栏中换行。
+const MOBILE_NAV_ITEMS = NAV_ITEMS.filter(
+  (item) => item.id === "dashboard" || item.id === "accounts" || item.id === "transactions" || item.id === "insights"
+);
 
 export function MobileBottomNav({
-  role,
   activeView,
   onNavigate,
   onQuickAdd
 }: {
-  role: UserRole;
   activeView: View;
   onNavigate: (view: View) => void;
   onQuickAdd: () => void;
@@ -18,7 +21,7 @@ export function MobileBottomNav({
   const { t } = useTranslation();
   return (
     <nav className="mobile-bottom-nav" aria-label={t("nav.mobile")}>
-      {NAV_ITEMS.filter((item) => role === "admin" || (item.id !== "users" && item.id !== "system")).map(({ id, icon: Icon }) => (
+      {MOBILE_NAV_ITEMS.map(({ id, icon: Icon }) => (
         <button key={id} className={activeView === id ? "active" : ""} onClick={() => onNavigate(id)}>
           <Icon size={20} />
           <span>{t(`nav.${id}`)}</span>

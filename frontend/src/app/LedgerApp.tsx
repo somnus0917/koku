@@ -420,7 +420,6 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         {content}
       </main>
       <MobileBottomNav
-        role={role}
         activeView={activeView}
         onNavigate={setActiveView}
         onQuickAdd={() => setModal("transaction")}

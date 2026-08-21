@@ -15,7 +15,8 @@ pub const MAX_RECEIPT_BYTES: usize = 12 * 1024 * 1024;
 ///
 /// 取图接口会把该值原样设成响应头，且前端以整页导航打开；如果放行
 /// `text/html` / `image/svg+xml` 这类可携带脚本的类型，可能被当作同源页面
-/// 渲染执行（存储型 XSS）。这里只允许无脚本能力的图片与 PDF。
+/// 渲染执行（存储型 XSS）。这里只允许图片与 PDF；随后还会按文件签名校验，
+/// 取回响应也会设置 `nosniff`，避免浏览器将伪造内容当作 HTML 执行。
 const ALLOWED_RECEIPT_CONTENT_TYPES: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -39,6 +40,7 @@ impl BookkeepingService {
             )));
         }
         let content_type = normalize_receipt_content_type(&content_type)?;
+        validate_receipt_content(&content_type, &data)?;
         self.transaction(transaction_id)?;
         self.conn.execute(
             "INSERT INTO receipts(transaction_id, content_type, data, created_at)
@@ -112,5 +114,41 @@ fn normalize_receipt_content_type(value: &str) -> Result<String> {
         Err(KokuError::InvalidInput(format!(
             "unsupported receipt content type: {value}"
         )))
+    }
+}
+
+/// MIME 头由浏览器客户端提供，不能作为文件类型的唯一依据。这里只做轻量的
+/// 魔数校验，以阻止把 HTML/脚本伪装成白名单类型后由取图接口同源返回。
+fn validate_receipt_content(content_type: &str, data: &[u8]) -> Result<()> {
+    let matches_type = match content_type {
+        "image/jpeg" => data.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/png" => data.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/webp" => data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP",
+        // HEIC 属于 ISO Base Media File Format；文件类型盒必须位于文件开头。
+        "image/heic" => data.len() >= 12 && &data[4..8] == b"ftyp",
+        "application/pdf" => data.starts_with(b"%PDF-"),
+        _ => false,
+    };
+    if matches_type {
+        Ok(())
+    } else {
+        Err(KokuError::InvalidInput(
+            "receipt content does not match its declared content type".to_owned(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_receipt_magic_bytes() {
+        assert!(validate_receipt_content("image/png", b"\x89PNG\r\n\x1a\nbody").is_ok());
+        assert!(validate_receipt_content("application/pdf", b"%PDF-1.7\n").is_ok());
+        assert!(validate_receipt_content("image/webp", b"RIFF1234WEBPbody").is_ok());
+        assert!(validate_receipt_content("image/heic", b"0000ftypheic").is_ok());
+        assert!(validate_receipt_content("image/jpeg", b"<script>alert(1)</script>").is_err());
+        assert!(validate_receipt_content("application/pdf", b"<html></html>").is_err());
     }
 }
