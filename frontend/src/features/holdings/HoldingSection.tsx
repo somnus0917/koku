@@ -1,7 +1,7 @@
 //! 持仓区块（账户页）：市值、买卖与市价刷新。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Plus, RefreshCcw, TrendingUp, X } from "lucide-react";
+import { Check, Landmark, MoreHorizontal, Plus, RefreshCcw, TrendingUp, X } from "lucide-react";
 import { EmptyState } from "../../components/EmptyState";
 import { convertedMoney } from "../../components/accountDisplay";
 import { formatDate, formatMoney } from "../../lib";
@@ -16,7 +16,9 @@ export function HoldingSection({
   onSell,
   onSetPrice,
   onRefreshHoldings,
-  onRefreshHolding
+  onRefreshHolding,
+  onEditBrokerAccount,
+  onReconcileBrokerAccount
 }: {
   holdings: Holding[];
   accounts: Account[];
@@ -29,8 +31,12 @@ export function HoldingSection({
   onRefreshHoldings: () => void;
   /** 强制刷新单只持仓市价（可选）。 */
   onRefreshHolding?: (holdingId: number) => void;
+  /** 券商账户只记录可用现金，收进投资区块以避免和持仓重复。 */
+  onEditBrokerAccount?: (account: Account) => void;
+  onReconcileBrokerAccount?: (account: Account) => void;
 }) {
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
+  const brokerAccounts = useMemo(() => accounts.filter((account) => account.account_type === "stock"), [accounts]);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const { t } = useTranslation();
@@ -52,7 +58,7 @@ export function HoldingSection({
   return (
     <section className="section-block account-group">
       <div className="section-heading compact-heading">
-        <div><span>HOLDINGS</span><h2>{t("holdings.title")}</h2></div>
+        <div><span>INVESTMENTS</span><h2>{t("holdings.title")}</h2></div>
         <div className="holding-actions">
           <button className="text-button" onClick={() => void onRefreshHoldings()} title={t("holdings.refreshStaleTitle")} aria-label={t("holdings.refreshAria")}><RefreshCcw size={14} /> {t("holdings.refresh")}</button>
           <button className="text-button" onClick={() => onBuy()}><Plus size={16} /> {t("holdings.buy")}</button>
@@ -109,6 +115,25 @@ export function HoldingSection({
         })}
         {holdings.length === 0 && <EmptyState title={t("holdings.emptyTitle")} detail={t("holdings.emptyDetail")} />}
       </div>
+      {brokerAccounts.length > 0 && (
+        <div className="broker-cash-section">
+          <div className="broker-cash-heading"><div><span>BROKER CASH</span><h3>{t("holdings.brokerAccounts")}</h3></div><p>{t("holdings.brokerHint")}</p></div>
+          <div className="account-grid">
+            {brokerAccounts.map((account) => {
+              const shown = convertedMoney(account.balance, account.currency, display, rates) ?? { amount: account.balance, currency: account.currency };
+              return <article className="account-detail-card broker-cash-card" key={account.id}>
+                <span className="large-account-icon tone-3"><Landmark size={23} /></span>
+                <div className="account-detail-copy"><h3>{account.name}</h3><span>{t("holdings.brokerCash")}</span></div>
+                <strong>{formatMoney(shown.amount, shown.currency)}</strong>
+                <div className="account-card-actions">
+                  {onReconcileBrokerAccount && <button className="text-button" onClick={() => onReconcileBrokerAccount(account)}>{t("reconcile.start")}</button>}
+                  {onEditBrokerAccount && <button className="bare-button" onClick={() => onEditBrokerAccount(account)} aria-label={t("accounts.editAria", { name: account.name })}><MoreHorizontal size={19} /></button>}
+                </div>
+              </article>;
+            })}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

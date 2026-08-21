@@ -147,13 +147,13 @@ export const zh = {
         type: {
           cash: "零钱",
           savings: "储蓄",
-          stock: "股票",
+          stock: "券商资金",
           credit: "信用"
         },
         typeCard: {
           cash: "零钱账户",
           savings: "储蓄账户",
-          stock: "股票账户",
+          stock: "券商现金账户",
           credit: "信用账户"
         },
         accountCount: "{{count}} 个账户",
@@ -389,7 +389,7 @@ export const zh = {
         }
       },
       holdings: {
-        title: "股票持仓",
+        title: "投资",
         refreshStaleTitle: "刷新过期/缺失市价",
         refreshAria: "刷新市价",
         refresh: "刷新市价",
@@ -411,7 +411,10 @@ export const zh = {
         emptyDetail: "从任意现金或储蓄账户买入第一笔，即可追踪持仓与成本。",
         updated: "市价已更新",
         buyRecorded: "买入已记录",
-        sellRecorded: "卖出已记录"
+        sellRecorded: "卖出已记录",
+        brokerAccounts: "券商资金账户",
+        brokerHint: "仅在你单独记录券商内可用现金时使用；买入持仓不需要创建它。",
+        brokerCash: "券商可用现金"
       },
       modals: {
         rate: {

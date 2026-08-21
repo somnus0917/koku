@@ -2,14 +2,13 @@
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { MoreHorizontal, Plus, SlidersHorizontal } from "lucide-react";
-import { BillSection } from "../bills/BillSection";
 import { PageTitle } from "../../components/PageTitle";
 import { EmptyState } from "../../components/EmptyState";
 import { SummaryCard } from "../../components/SummaryCard";
 import { accountIcon, convertedMoney, useConversionRates } from "../../components/accountDisplay";
 import { DepositSection } from "../deposits/DepositSection";
 import { LoansSection } from "../loans/LoansSection";
-import { RecurringSection } from "../recurring/RecurringSection";
+import { PlannedCashflowSection } from "../planning/PlannedCashflowSection";
 import { HoldingSection } from "../holdings/HoldingSection";
 import { CreditCardSection } from "./CreditCardSection";
 import { formatMoney } from "../../lib";
@@ -60,7 +59,6 @@ export function AccountsPage({
   const group = (type: AccountType) => data.accounts.filter((account) => account.account_type === type);
   const cash = group("cash");
   const savings = group("savings");
-  const stock = group("stock");
   const credit = group("credit");
   const display = data.monthly.currency;
   const rateCurrencies = useMemo(
@@ -96,7 +94,6 @@ export function AccountsPage({
         onDeposit={onDeposit}
         onSettle={onSettle}
       />
-      <AccountGroup title={t("accounts.type.stock")} subtitle={t("accounts.accountCount", { count: stock.length })} accounts={stock} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <AccountGroup title={t("accounts.type.credit")} subtitle={t("accounts.accountCount", { count: credit.length })} accounts={credit} onEdit={onEdit} onReconcile={onReconcile} display={display} rates={rates} />
       <CreditCardSection accounts={credit} display={display} rates={rates} data={data} />
       <LoansSection
@@ -107,16 +104,15 @@ export function AccountsPage({
         onCreateLoan={onCreateLoan}
         onRepay={onRepay}
       />
-      <RecurringSection
+      <PlannedCashflowSection
         rules={data.recurring}
         accounts={data.accounts}
         categories={data.categories}
-        onCreate={onCreateRecurring}
-        onDelete={onDeleteRecurring}
-        onEdit={onEditRecurring}
-        onTogglePaused={onToggleRecurringPaused}
+        onCreateRecurring={onCreateRecurring}
+        onDeleteRecurring={onDeleteRecurring}
+        onEditRecurring={onEditRecurring}
+        onToggleRecurringPaused={onToggleRecurringPaused}
       />
-      <BillSection accounts={data.accounts} categories={data.categories} />
       <HoldingSection
         holdings={data.holdings}
         accounts={data.accounts}
@@ -127,6 +123,8 @@ export function AccountsPage({
         onSetPrice={onSetHoldingPrice}
         onRefreshHoldings={onRefreshHoldings}
         onRefreshHolding={onRefreshHolding}
+        onEditBrokerAccount={onEdit}
+        onReconcileBrokerAccount={onReconcile}
       />
     </div>
   );

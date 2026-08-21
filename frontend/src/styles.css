@@ -3883,3 +3883,18 @@ button:disabled {
 .goals-overview { margin-top: 18px; }.goal-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .goal-card, .goal-empty { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: var(--surface); min-height: 154px; }.goal-card-heading { display: flex; align-items: center; justify-content: space-between; color: var(--accent); }.goal-card h3 { font-size: 14px; margin: 10px 0 6px; }.goal-card > strong { font-size: 15px; }.goal-card > strong small { color: var(--text-soft); font-size: 11px; font-weight: 500; }.goal-track { height: 6px; background: var(--border); border-radius: 99px; overflow: hidden; margin: 13px 0 8px; }.goal-track i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }.goal-card footer { display: flex; justify-content: space-between; color: var(--text-soft); font-size: 10px; }.goal-delete { color: var(--text-faint); padding: 0; margin-top: 8px; font-size: 10px; }.goal-empty { display: flex; gap: 10px; align-items: center; color: var(--text-soft); }.goal-empty div { display: grid; gap: 4px; }.goal-empty strong { color: var(--text); font-size: 13px; }.goal-empty span { font-size: 11px; line-height: 1.5; }
 @media (max-width: 680px) { .planning-row { align-items: flex-start; flex-direction: column; } .planning-row .row-buttons { align-self: flex-end; } }
+
+/* —— 账户页：计划收支与投资区块 —— */
+.section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.section-hint { margin: -3px 0 12px; color: var(--text-soft); font-size: 11px; line-height: 1.5; }
+.planned-card .account-detail-copy h3 { margin-top: 4px; }
+.planned-card em { color: var(--text-faint); font-size: 10px; font-style: normal; font-weight: 500; margin-left: 6px; }
+.planned-badge { display: inline-flex; width: max-content; border-radius: 999px; padding: 2px 7px; font-size: 9px; font-weight: 700; }
+.planned-badge.automatic { color: var(--income); background: var(--income-soft); }
+.planned-badge.reminder { color: var(--accent); background: var(--surface); border: 1px solid var(--border); }
+.broker-cash-section { margin-top: 18px; padding-top: 15px; border-top: 1px dashed var(--border); }
+.broker-cash-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 9px; }
+.broker-cash-heading span { color: var(--text-faint); font-size: 9px; letter-spacing: .08em; }
+.broker-cash-heading h3 { margin: 3px 0 0; font-size: 13px; }
+.broker-cash-heading p { margin: 0; color: var(--text-soft); font-size: 10px; max-width: 390px; text-align: right; line-height: 1.5; }
+@media (max-width: 680px) { .broker-cash-heading { align-items: flex-start; flex-direction: column; gap: 4px; } .broker-cash-heading p { text-align: left; } }

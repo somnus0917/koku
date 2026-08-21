@@ -147,13 +147,13 @@ export const en = {
         type: {
           cash: "Cash",
           savings: "Savings",
-          stock: "Stocks",
+          stock: "Broker cash",
           credit: "Credit"
         },
         typeCard: {
           cash: "Cash account",
           savings: "Savings account",
-          stock: "Stock account",
+          stock: "Broker cash account",
           credit: "Credit account"
         },
         accountCount: "{{count}} accounts",
@@ -389,7 +389,7 @@ export const en = {
         }
       },
       holdings: {
-        title: "Stock holdings",
+        title: "Investments",
         refreshStaleTitle: "Refresh stale or missing prices",
         refreshAria: "Refresh prices",
         refresh: "Refresh prices",
@@ -411,7 +411,10 @@ export const en = {
         emptyDetail: "Buy your first position from a cash or savings account to track holdings and cost.",
         updated: "Prices updated",
         buyRecorded: "Buy recorded",
-        sellRecorded: "Sell recorded"
+        sellRecorded: "Sell recorded",
+        brokerAccounts: "Broker cash accounts",
+        brokerHint: "Use these only when you track cash held at a broker separately; buying a holding does not require one.",
+        brokerCash: "Available cash at broker"
       },
       modals: {
         rate: {
