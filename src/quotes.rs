@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike, Timelike, Utc, Weekday};
+use chrono_tz::{America::New_York, Asia::Hong_Kong, Asia::Shanghai};
 use rust_decimal::Decimal;
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -45,17 +46,22 @@ impl Market {
             _ => Self::Unknown,
         }
     }
-    /// A 股/港股在 UTC 09:00（当地 17:00）后；美股统一 UTC 22:00 后，覆盖冬夏令时最晚常规收盘。
+    /// 以交易所当地时区判断常规收盘，纽约时区会自动处理夏令时。
     pub fn close_has_passed(self, now: DateTime<Utc>) -> bool {
-        if matches!(now.weekday(), Weekday::Sat | Weekday::Sun) {
-            return false;
-        }
         match self {
-            Self::CnSh | Self::CnSz | Self::CnStar | Self::Hk => now.hour() >= 9,
-            Self::Us => now.hour() >= 22,
+            Self::CnSh | Self::CnSz | Self::CnStar => {
+                close_in_local_time(now.with_timezone(&Shanghai), 15, 10)
+            }
+            Self::Hk => close_in_local_time(now.with_timezone(&Hong_Kong), 16, 10),
+            Self::Us => close_in_local_time(now.with_timezone(&New_York), 16, 10),
             Self::Unknown => false,
         }
     }
+}
+
+fn close_in_local_time<Tz: chrono::TimeZone>(now: DateTime<Tz>, hour: u32, minute: u32) -> bool {
+    !matches!(now.weekday(), Weekday::Sat | Weekday::Sun)
+        && (now.hour(), now.minute()) >= (hour, minute)
 }
 
 /// 收盘后的自动刷新只做一次；非可识别市场由用户通过手动价格兜底。
@@ -395,6 +401,10 @@ mod tests {
             None,
             after_asia_close
         ));
+        let after_us_close = chrono::DateTime::parse_from_rfc3339("2026-08-21T20:15:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(should_refresh_after_close("us", None, after_us_close));
         assert!(!should_refresh_after_close(
             "hk",
             Some(after_asia_close),

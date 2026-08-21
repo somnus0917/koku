@@ -11,6 +11,7 @@ default-run = "koku"
 axum = { version = "0.8", features = ["multipart"] }
 bcrypt = "0.19"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 csv = "1"
 getrandom = "0.4"
 hmac = "0.12"
