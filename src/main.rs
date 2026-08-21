@@ -143,9 +143,9 @@ async fn run_server() -> Result<()> {
         });
     }
 
-    // 定时备份：KOKU_BACKUP_INTERVAL_HOURS > 0 时启用（0 表示关闭，仅手动触发）。
+    // 定时备份：默认每天运行；显式设为 0 可关闭（仅手动触发）。
     let backup_interval_hours = std::env::var("KOKU_BACKUP_INTERVAL_HOURS")
-        .unwrap_or_else(|_| "0".to_owned())
+        .unwrap_or_else(|_| "24".to_owned())
         .parse::<u64>()
         .map_err(|error| {
             KokuError::InvalidInput(format!(

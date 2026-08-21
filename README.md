@@ -259,7 +259,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_SESSION_TTL_DAYS` | `30` | 会话有效天数，范围 1–365 |
 | `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
 | `KOKU_RATE_LIMIT_PER_MINUTE` | `300` | 通用 API 限流：每客户端每分钟请求上限；`0` 关闭 |
-| `KOKU_BACKUP_INTERVAL_HOURS` | `0` | 定时备份间隔（小时）；`0` 关闭（仅管理员手动触发） |
+| `KOKU_BACKUP_INTERVAL_HOURS` | `24` | 定时备份间隔（小时）；`0` 关闭（仅管理员手动触发） |
 | `KOKU_JOBS_INTERVAL_MINUTES` | `60` | 服务端周期交易生成与预算结转检查间隔（分钟，1–1440） |
 | `KOKU_BACKUP_KEEP` | `14` | 保留最近多少份备份，超出的自动清理 |
 | `KOKU_QUOTE_TTL_HOURS` | `24` | 持仓市价缓存有效期（小时），超过视为过期并在刷新时重新拉取 |
@@ -371,7 +371,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 
 ### 备份/恢复
 
-管理员在「系统」页可查看备份列表、立即备份、下载 zip、恢复。备份用 `VACUUM INTO` 在线一致性快照共享库与全部用户账本后打包；恢复会覆盖全部数据并使所有会话失效（恢复后需重新登录）。定时备份通过 `KOKU_BACKUP_INTERVAL_HOURS` 启用，`KOKU_BACKUP_KEEP` 控制保留份数。
+管理员在「系统」页可查看备份列表、立即备份、下载 zip、恢复。备份用 `VACUUM INTO` 在线一致性快照共享库与全部用户账本后打包；恢复会覆盖全部数据并使所有会话失效（恢复后需重新登录）。生产环境默认每天备份一次；可通过 `KOKU_BACKUP_INTERVAL_HOURS=0` 关闭，`KOKU_BACKUP_KEEP` 控制保留份数。配置 R2 后每次备份会自动上传异地副本。
 
 ### 持仓市价
 
