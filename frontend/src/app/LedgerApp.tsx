@@ -52,7 +52,7 @@ import { DepositModal } from "../features/deposits/DepositModal";
 import { SettleDepositModal } from "../features/deposits/SettleDepositModal";
 import { TradeModal } from "../features/holdings/TradeModal";
 import { InsightsPage } from "../features/insights/InsightsPage";
-import { PlanningPage } from "../features/planning/PlanningPage";
+import { LedgerSettingsModal } from "../features/settings/LedgerSettingsModal";
 import { LoanModal } from "../features/loans/LoanModal";
 import { LoansSection } from "../features/loans/LoansSection";
 import { RepayModal } from "../features/loans/RepayModal";
@@ -91,6 +91,7 @@ type Modal =
   | "totp"
   | "reconcile"
   | "settings"
+  | "ledger-settings"
   | null;
 
 /** 「全部月份」模式下的分页大小；单月模式一次性取上限（单月很少超过）。 */
@@ -271,6 +272,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               setModal("repay");
             }}
             onCreateRecurring={() => { setEditRecurring(null); setModal("recurring"); }}
+            onOpenLedgerSettings={() => setModal("ledger-settings")}
             onDeleteRecurring={(id) =>
               void mutate(() => deleteRecurringRule(id), t("accounts.recurringDeleted"))
             }
@@ -362,8 +364,6 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             }
           />
         );
-      case "planning":
-        return <PlanningPage accounts={data.accounts} categories={data.categories} />;
       case "users":
         return <UsersAdminPage currentUserId={userId} />;
       case "system":
@@ -461,6 +461,9 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           onClose={() => setModal(null)}
           onSubmit={(input) => mutate(() => createAccount(input), t("accounts.created"))}
         />
+      )}
+      {modal === "ledger-settings" && data && (
+        <LedgerSettingsModal accounts={data.accounts} categories={data.categories} onClose={() => setModal(null)} />
       )}
       {modal === "edit-account" && data && editAccount && (
         <EditAccountModal

@@ -6,7 +6,6 @@ export const zh = {
         dashboard: "总览",
         accounts: "账户",
         transactions: "交易",
-        planning: "自动化",
         insights: "分析",
         users: "用户",
         system: "系统",

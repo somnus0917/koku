@@ -3870,4 +3870,16 @@ button:disabled {
 .holding-gain { display: block; margin-top: -8px; font-size: 10px; font-weight: 650; text-align: right; }
 .holding-gain.positive { color: var(--income); }
 .holding-gain.negative { color: var(--expense); }
+
+/* —— 设置、固定账单和总览目标：把“自动化”拆回日常使用场景 —— */
+.settings-intro { display: flex; align-items: flex-start; gap: 9px; color: var(--text-soft); font-size: 12px; line-height: 1.6; margin-bottom: 14px; }
+.settings-intro p { margin: 0; }
+.settings-rule-list { max-height: 250px; overflow: auto; border-top: 1px solid var(--border); }
+.settings-rule-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.settings-rule-row > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.settings-rule-row strong { font-size: 12px; }.settings-rule-row em { color: var(--text-faint); font-style: normal; margin-left: 6px; font-weight: 500; }.settings-rule-row span { color: var(--text-soft); font-size: 10px; overflow-wrap: anywhere; }.settings-rule-row > div:last-child { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.settings-add { margin-top: 10px; }.settings-rule-form { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.bill-card em { color: var(--text-faint); font-size: 10px; font-style: normal; font-weight: 500; margin-left: 6px; }
+.goals-overview { margin-top: 18px; }.goal-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.goal-card, .goal-empty { border: 1px solid var(--border); border-radius: 14px; padding: 14px; background: var(--surface); min-height: 154px; }.goal-card-heading { display: flex; align-items: center; justify-content: space-between; color: var(--accent); }.goal-card h3 { font-size: 14px; margin: 10px 0 6px; }.goal-card > strong { font-size: 15px; }.goal-card > strong small { color: var(--text-soft); font-size: 11px; font-weight: 500; }.goal-track { height: 6px; background: var(--border); border-radius: 99px; overflow: hidden; margin: 13px 0 8px; }.goal-track i { display: block; height: 100%; background: var(--accent); border-radius: inherit; }.goal-card footer { display: flex; justify-content: space-between; color: var(--text-soft); font-size: 10px; }.goal-delete { color: var(--text-faint); padding: 0; margin-top: 8px; font-size: 10px; }.goal-empty { display: flex; gap: 10px; align-items: center; color: var(--text-soft); }.goal-empty div { display: grid; gap: 4px; }.goal-empty strong { color: var(--text); font-size: 13px; }.goal-empty span { font-size: 11px; line-height: 1.5; }
 @media (max-width: 680px) { .planning-row { align-items: flex-start; flex-direction: column; } .planning-row .row-buttons { align-self: flex-end; } }

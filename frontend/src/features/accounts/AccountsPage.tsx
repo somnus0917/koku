@@ -1,7 +1,8 @@
 //! 账户页：资产/负债汇总、账户分组与定存/借款/周期/持仓区块。
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { MoreHorizontal, Plus } from "lucide-react";
+import { MoreHorizontal, Plus, SlidersHorizontal } from "lucide-react";
+import { BillSection } from "../bills/BillSection";
 import { PageTitle } from "../../components/PageTitle";
 import { EmptyState } from "../../components/EmptyState";
 import { SummaryCard } from "../../components/SummaryCard";
@@ -23,6 +24,7 @@ export function AccountsPage({
   onCreateLoan,
   onRepay,
   onCreateRecurring,
+  onOpenLedgerSettings,
   onDeleteRecurring,
   onEditRecurring,
   onToggleRecurringPaused,
@@ -41,6 +43,7 @@ export function AccountsPage({
   onCreateLoan: () => void;
   onRepay: (loan: Loan) => void;
   onCreateRecurring: () => void;
+  onOpenLedgerSettings: () => void;
   onDeleteRecurring: (id: number) => void;
   onEditRecurring: (rule: RecurringRule) => void;
   onToggleRecurringPaused: (rule: RecurringRule) => void;
@@ -76,7 +79,7 @@ export function AccountsPage({
       <PageTitle
         eyebrow="ACCOUNTS"
         title={t("nav.accounts")}
-        actions={<button className="primary-button" onClick={onAddAccount}><Plus size={18} /> {t("accounts.newAccount")}</button>}
+        actions={<><button className="secondary-button" onClick={onOpenLedgerSettings}><SlidersHorizontal size={16} /> 账本设置</button><button className="primary-button" onClick={onAddAccount}><Plus size={18} /> {t("accounts.newAccount")}</button></>}
       />
       <section className="balance-summary-row">
         <SummaryCard label={t("accounts.totalAssets")} value={data.balance.total_assets} currency={data.balance.currency} tone="green" />
@@ -113,6 +116,7 @@ export function AccountsPage({
         onEdit={onEditRecurring}
         onTogglePaused={onToggleRecurringPaused}
       />
+      <BillSection accounts={data.accounts} categories={data.categories} />
       <HoldingSection
         holdings={data.holdings}
         accounts={data.accounts}

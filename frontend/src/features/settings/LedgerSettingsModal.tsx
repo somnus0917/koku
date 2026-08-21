@@ -1,0 +1,33 @@
+//! 账本设置：将全局交易规则留在设置入口，而不是独立的专业化工作台。
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Check, LoaderCircle, Plus, Trash2, WandSparkles } from "lucide-react";
+import { applyTransactionRule, createTransactionRule, deleteTransactionRule, getTransactionRules, updateTransactionRule, type TransactionRuleInput } from "../../api";
+import { ModalShell } from "../../components/ModalShell";
+import type { Account, Category, TransactionRule } from "../../types";
+
+const blank = (): TransactionRuleInput => ({ name: "", enabled: true, priority: 0, description_contains: null, account_id: null, kind: "expense", min_amount: null, max_amount: null, category_id: null, payee_name: null, tag_names: [] });
+const optional = (value: string) => value.trim() || null;
+
+export function LedgerSettingsModal({ accounts, categories, onClose }: { accounts: Account[]; categories: Category[]; onClose: () => void }) {
+  const [rules, setRules] = useState<TransactionRule[]>([]);
+  const [draft, setDraft] = useState(blank);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const load = useCallback(async () => { try { setRules(await getTransactionRules()); } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取分类规则"); } }, []);
+  useEffect(() => { void load(); }, [load]);
+  const reset = () => { setEditing(null); setDraft(blank()); };
+  const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setMessage(null); try { if (editing) await updateTransactionRule(editing, draft); else await createTransactionRule(draft); await load(); reset(); setMessage("规则已保存"); } catch (error) { setMessage(error instanceof Error ? error.message : "保存失败"); } finally { setBusy(false); } };
+  const edit = (item: TransactionRule) => { setEditing(item.id); setDraft({ name: item.name, enabled: item.enabled, priority: item.priority, description_contains: item.description_contains, account_id: item.account_id, kind: item.kind as "expense" | "income" | null, min_amount: item.min_amount, max_amount: item.max_amount, category_id: item.category_id, payee_name: item.payee_name, tag_names: item.tag_names }); };
+  const remove = async (id: number) => { if (!window.confirm("确认删除这条规则？")) return; setBusy(true); try { await deleteTransactionRule(id); await load(); if (editing === id) reset(); } catch (error) { setMessage(error instanceof Error ? error.message : "删除失败"); } finally { setBusy(false); } };
+  const apply = async (id: number) => { setBusy(true); try { const result = await applyTransactionRule(id); setMessage(`已检查并应用到 ${result.applied} 笔历史交易`); } catch (error) { setMessage(error instanceof Error ? error.message : "应用失败"); } finally { setBusy(false); } };
+  return <ModalShell eyebrow="LEDGER SETTINGS" title="账本设置" onClose={onClose}>
+    <div className="settings-intro"><WandSparkles size={17} /><p>分类规则会在导入交易时自动执行；需要时也可手动回填历史交易。</p></div>
+    {message && <div className="totp-notice" role="status"><Check size={14} /> {message}</div>}
+    <div className="settings-rule-list">{rules.map((item) => <article key={item.id} className="settings-rule-row"><div><strong>{item.name}{!item.enabled && <em>已停用</em>}</strong><span>{item.description_contains ? `描述含“${item.description_contains}”` : "所有交易"}{item.category_id ? ` · 分类为 ${categoryMap.get(item.category_id)}` : ""}{item.payee_name ? ` · 商户为 ${item.payee_name}` : ""}</span></div><div><button className="text-button" disabled={busy} onClick={() => void apply(item.id)}>回填</button><button className="text-button" disabled={busy} onClick={() => edit(item)}>编辑</button><button className="row-action danger" disabled={busy} onClick={() => void remove(item.id)} aria-label="删除规则"><Trash2 size={16} /></button></div></article>)}</div>
+    {!editing && <button className="text-button settings-add" onClick={() => setEditing(-1)}><Plus size={16} /> 新建分类规则</button>}
+    {editing !== null && <form className="entry-form settings-rule-form" onSubmit={(event) => void save(event)}><div className="form-grid"><label><span>规则名称</span><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="例如：滴滴归为通勤" /></label><label><span>描述包含</span><input value={draft.description_contains ?? ""} onChange={(e) => setDraft({ ...draft, description_contains: optional(e.target.value) })} placeholder="滴滴" /></label><label><span>账户范围</span><select value={draft.account_id ?? ""} onChange={(e) => setDraft({ ...draft, account_id: e.target.value ? Number(e.target.value) : null })}><option value="">所有账户</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>交易类型</span><select value={draft.kind ?? ""} onChange={(e) => setDraft({ ...draft, kind: e.target.value ? e.target.value as "expense" | "income" : null })}><option value="">不限</option><option value="expense">支出</option><option value="income">收入</option></select></label><label><span>套用分类</span><select value={draft.category_id ?? ""} onChange={(e) => setDraft({ ...draft, category_id: e.target.value ? Number(e.target.value) : null })}><option value="">不修改</option>{categories.filter((item) => !draft.kind || item.kind === draft.kind).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label><span>商户名称</span><input value={draft.payee_name ?? ""} onChange={(e) => setDraft({ ...draft, payee_name: optional(e.target.value) })} /></label><label><span>标签（逗号分隔）</span><input value={draft.tag_names.join(", ")} onChange={(e) => setDraft({ ...draft, tag_names: e.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} /></label><label className="checkbox-label"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} /> 启用此规则</label></div><div className="modal-actions"><button className="secondary-button" type="button" onClick={reset}>取消</button><button className="primary-button" disabled={busy}>{busy && <LoaderCircle className="spin" size={16} />}{editing > 0 ? "保存修改" : "保存规则"}</button></div></form>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>完成</button></div>
+  </ModalShell>;
+}
