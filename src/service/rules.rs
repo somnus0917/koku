@@ -134,10 +134,10 @@ impl BookkeepingService {
     pub fn apply_transaction_rule_to_existing(&mut self, rule_id: i64) -> Result<usize> {
         let rule = self.transaction_rule(rule_id)?;
         let ids: Vec<i64> = self
-            .transactions(1000, 0)?
-            .into_iter()
-            .map(|item| item.id)
-            .collect();
+            .conn
+            .prepare("SELECT id FROM transactions ORDER BY id")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
         let mut changed = 0;
         for id in ids {
             let transaction = self.transaction(id)?;

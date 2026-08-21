@@ -6,6 +6,7 @@ export const en = {
         dashboard: "Dashboard",
         accounts: "Accounts",
         transactions: "Transactions",
+        planning: "Automation",
         insights: "Insights",
         users: "Users",
         system: "System",

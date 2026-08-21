@@ -16,3 +16,5 @@ export * from "./summaries";
 export * from "./rates";
 export * from "./reminders";
 export * from "./admin";
+export * from "./planning";
+export * from "./rules";

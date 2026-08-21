@@ -1,10 +1,10 @@
 //! 批量导入交易弹窗：选择账单文件与目标账户，展示导入结果。
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle, Upload } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
-import { importTransactions, previewImportTransactions, undoImportBatch, updateTransaction } from "../../api";
-import type { Account, Category, CategorySuggestion, ImportPreview, ImportResult } from "../../types";
+import { getImportProfiles, importTransactions, previewImportTransactions, undoImportBatch, updateTransaction } from "../../api";
+import type { Account, Category, CategorySuggestion, ImportPreview, ImportProfile, ImportResult } from "../../types";
 
 /** 批量导入交易：选择账单文件与目标账户，导入后展示结果摘要（成功/重复/失败 + 问题行）。
  *  表单提交由本弹窗直接调用 API 以拿到 ImportResult 展示；「完成」时调用父级 onComplete
@@ -30,7 +30,18 @@ export function ImportModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
+  const [profiles, setProfiles] = useState<ImportProfile[]>([]);
   const { t } = useTranslation();
+
+  useEffect(() => { void getImportProfiles().then(setProfiles).catch(() => undefined); }, []);
+  const applyProfile = (id: string) => {
+    const selected = profiles.find((item) => item.id === Number(id));
+    if (!selected) return;
+    setAccountId(selected.account_id?.toString() ?? "");
+    setFormat(selected.format);
+    setCategoryId(selected.category_id?.toString() ?? "");
+    setCurrency(selected.currency ?? "");
+  };
 
   const input = (): { format?: string; account_id: number; category_id?: number; currency?: string } => ({
     format: format === "auto" ? undefined : format,
@@ -182,6 +193,12 @@ export function ImportModal({
             <p>{t("modals.import.intro")}</p>
           </div>
           <div className="form-grid">
+            {profiles.length > 0 && <label className="span-two"><span>导入模板</span>
+              <select defaultValue="" onChange={(e) => applyProfile(e.target.value)}>
+                <option value="">不使用模板</option>
+                {profiles.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </label>}
             <label><span>{t("modals.import.account")}</span>
               <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
                 <option value="" disabled>{t("common.selectAccount")}</option>

@@ -509,6 +509,11 @@ pub struct Holding {
     pub cost_basis: Decimal,
     pub last_price: Option<Decimal>,
     pub average_cost: Decimal,
+    /// 按最近市价计算的持仓市值；未取得市价时为空，避免把成本误报为市值。
+    pub market_value: Option<Decimal>,
+    /// 未实现盈亏及收益率只在有最新市价时计算。
+    pub unrealized_gain: Option<Decimal>,
+    pub unrealized_return_percent: Option<Decimal>,
     /// 市价最近更新时间（手动设置或行情拉取）；从未设置过为 None。
     pub updated_at: Option<DateTime<Utc>>,
 }

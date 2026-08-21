@@ -193,8 +193,63 @@ export interface Holding {
   cost_basis: string;
   last_price: string | null;
   average_cost: string;
+  market_value: string | null;
+  unrealized_gain: string | null;
+  unrealized_return_percent: string | null;
   /** 最近一次市价刷新时间（RFC3339）；从未刷新过为 null。 */
   updated_at: string | null;
+}
+
+export interface TransactionRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  description_contains: string | null;
+  account_id: number | null;
+  kind: "expense" | "income" | null;
+  min_amount: string | null;
+  max_amount: string | null;
+  category_id: number | null;
+  payee_name: string | null;
+  tag_names: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ImportProfile {
+  id: number;
+  name: string;
+  format: "auto" | "csv" | "qif" | "ofx";
+  account_id: number | null;
+  category_id: number | null;
+  currency: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Bill {
+  id: number;
+  name: string;
+  account_id: number;
+  category_id: number;
+  amount: string;
+  due_day: number;
+  active: boolean;
+  note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SavingsGoal {
+  id: number;
+  name: string;
+  account_id: number | null;
+  target_amount: string;
+  current_amount: string;
+  target_date: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MonthlySummary {

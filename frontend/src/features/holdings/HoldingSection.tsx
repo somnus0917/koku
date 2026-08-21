@@ -80,6 +80,12 @@ export function HoldingSection({
                 </span>
               </div>
               <strong>{formatMoney(shown.amount, shown.currency)}</strong>
+              {holding.unrealized_gain !== null && (
+                <span className={Number(holding.unrealized_gain) >= 0 ? "holding-gain positive" : "holding-gain negative"}>
+                  {Number(holding.unrealized_gain) >= 0 ? "+" : ""}{formatMoney(holding.unrealized_gain, currency)}
+                  {holding.unrealized_return_percent !== null ? ` (${Number(holding.unrealized_return_percent) >= 0 ? "+" : ""}${holding.unrealized_return_percent}%)` : ""}
+                </span>
+              )}
               <div className="account-card-actions">
                 {editing ? (
                   <>

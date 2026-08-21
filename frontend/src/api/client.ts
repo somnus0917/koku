@@ -20,6 +20,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers
     }
   });
+  if (response.status === 204) return undefined as T;
   const payload = (await response.json().catch(() => ({}))) as Partial<Envelope<T>> & {
     error?: string;
   };

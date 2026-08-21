@@ -1,6 +1,6 @@
 //! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款、借款与信用卡账单。
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -123,9 +123,63 @@ impl BookkeepingService {
             });
         }
 
+        // 固定账单：账单是每月重复提醒，当前月份到期日已过时保留为逾期；否则提示本月即将到期。
+        {
+            let mut statement = self.conn.prepare(
+                "SELECT b.id, b.name, b.amount, b.due_day, a.currency
+                 FROM bills b JOIN accounts a ON a.id = b.account_id
+                 WHERE b.active = 1 ORDER BY b.due_day, b.name",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, amount, due_day, currency) = row?;
+                let due_at = bill_due_at(now, due_day)?;
+                if due_at <= horizon {
+                    items.push(ReminderItem {
+                        kind: "bill".to_owned(),
+                        id,
+                        title: name,
+                        amount: decimal_from_db(&amount)?,
+                        currency,
+                        overdue: due_at < now,
+                        days_left: (due_at - now).num_days(),
+                        due_at,
+                    });
+                }
+            }
+        }
+
         items.sort_by_key(|item| item.due_at);
         Ok(items)
     }
+}
+
+fn bill_due_at(now: DateTime<Utc>, day: u32) -> Result<DateTime<Utc>> {
+    let first = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid current date".into()))?;
+    let next_month = if now.month() == 12 {
+        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
+    }
+    .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid current date".into()))?;
+    let last_day = (next_month - Duration::days(1)).day();
+    let date = first
+        .with_day(day.min(last_day))
+        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due day".into()))?;
+    Ok(DateTime::from_naive_utc_and_offset(
+        date.and_hms_opt(9, 0, 0)
+            .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due time".into()))?,
+        Utc,
+    ))
 }
 
 /// 把到期提醒格式化为纯文本摘要（邮件正文用）。

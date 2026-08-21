@@ -3849,3 +3849,25 @@ button:disabled {
   grid-column: 1 / -1;
   margin-top: -6px;
 }
+
+/* —— 自动化与规划中心 —— */
+.planning-page .page-heading { align-items: flex-start; }
+.planning-page .page-heading p { color: var(--text-soft); margin: 6px 0 0; font-size: 13px; }
+.compact-form { margin: 0 0 14px; }
+.planning-list { display: grid; gap: 8px; }
+.planning-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); }
+.planning-row > div:first-child { min-width: 0; display: grid; gap: 4px; }
+.planning-row strong { font-size: 13px; }
+.planning-row span { color: var(--text-soft); font-size: 11px; overflow-wrap: anywhere; }
+.planning-row em { color: var(--text-faint); font-size: 10px; font-style: normal; font-weight: 500; }
+.row-buttons { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.row-action.danger { color: var(--expense); }
+.checkbox-label { display: flex; align-items: center; gap: 8px; min-height: 40px; }
+.checkbox-label input { width: auto; }
+.goal-row { align-items: flex-start; }
+.goal-progress { width: min(360px, 100%); height: 5px; background: var(--surface); border-radius: 999px; overflow: hidden; margin-top: 3px; }
+.goal-progress i { display: block; height: 100%; background: var(--green); border-radius: inherit; }
+.holding-gain { display: block; margin-top: -8px; font-size: 10px; font-weight: 650; text-align: right; }
+.holding-gain.positive { color: var(--income); }
+.holding-gain.negative { color: var(--expense); }
+@media (max-width: 680px) { .planning-row { align-items: flex-start; flex-direction: column; } .planning-row .row-buttons { align-self: flex-end; } }

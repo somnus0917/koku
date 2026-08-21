@@ -288,6 +288,12 @@ fn holding_from_row(row: HoldingRow) -> Result<Holding> {
     } else {
         cost_basis / shares
     };
+    let market_value = last_price.map(|price| (shares * price).round_dp(2));
+    let unrealized_gain = market_value.map(|value| (value - cost_basis).round_dp(2));
+    let unrealized_return_percent = market_value.and_then(|value| {
+        (!cost_basis.is_zero())
+            .then(|| ((value - cost_basis) / cost_basis * Decimal::from(100_u32)).round_dp(2))
+    });
     Ok(Holding {
         id: row.0,
         account_id: row.1,
@@ -296,6 +302,9 @@ fn holding_from_row(row: HoldingRow) -> Result<Holding> {
         cost_basis,
         last_price,
         average_cost,
+        market_value,
+        unrealized_gain,
+        unrealized_return_percent,
         updated_at,
     })
 }
