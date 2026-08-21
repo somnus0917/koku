@@ -1,8 +1,11 @@
 # Add this block to the existing edge Caddy configuration on tencent-cloud.
-# Replace the domain before reloading Caddy. Authentication is enforced by
-# Koku itself, so the login page remains publicly reachable.
-koku.example.com {
+# Authentication is enforced by Koku itself, so the login page remains publicly
+# reachable. DNS for this name must point at the Tencent Cloud CVM before Caddy
+# can obtain its certificate.
+koku.somnus.wiki {
 	header {
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; form-action 'self'"
+		Permissions-Policy "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"

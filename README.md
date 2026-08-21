@@ -175,7 +175,7 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 
 编辑 `~/koku/.env`：
 
-- `KOKU_DOMAIN`：已解析到这台 CVM 的域名。
+- `KOKU_DOMAIN`：已解析到这台 CVM 的域名；本部署为 `koku.somnus.wiki`。
 - `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
 - `KOKU_AUTH_USERNAME` / `KOKU_AUTH_PASSWORD_HASH`：多用户引导凭据。首次启动时以该用户名+密码创建 **管理员** 账号（应用内改过密码则优先用持久化的哈希）；此后登录全部走 `users` 表，这两个变量只影响全新初始化。
 - 多用户模型：每个用户拥有**完全独立的账本**（账户/分类/交易/标签/预算/借款/持仓/定期/小票等全部隔离），数据存放在 `data/ledgers/ledger-<id>.db`；共享库 `data/koku.db` 只保存用户与会话。**不开放注册**，新用户只能由管理员在「用户」页创建；管理员可重置密码、启用/停用（立即作废其会话）、删除用户（连带其账本文件）。
@@ -190,7 +190,7 @@ docker run --rm caddy:2-alpine caddy hash-password --plaintext '换成一个强�
 chmod 600 ~/koku/data/auth-password.hash
 ```
 
-参考 [Caddy 站点模板](deploy/Caddyfile.example)，把替换好域名的站点块加入现有的 `~/caddy/Caddyfile`。随后验证并无中断重载现有入口：
+将 [Caddy 站点块](deploy/Caddyfile.example) 加入现有的 `~/caddy/Caddyfile`（模板已配置 `koku.somnus.wiki`）。随后验证并无中断重载现有入口：
 
 ```bash
 docker exec edge-caddy caddy validate --config /etc/caddy/Caddyfile
