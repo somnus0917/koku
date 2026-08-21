@@ -209,6 +209,26 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             undone_at  TEXT
         );
 
+        -- 用户可见的导入/记账自动规则；条件为空表示不限制该字段。
+        CREATE TABLE IF NOT EXISTS transaction_rules (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                 TEXT NOT NULL UNIQUE,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            priority             INTEGER NOT NULL DEFAULT 0,
+            description_contains TEXT,
+            account_id           INTEGER REFERENCES accounts(id),
+            kind                 TEXT CHECK (kind IN ('expense', 'income')),
+            min_amount           TEXT,
+            max_amount           TEXT,
+            category_id          INTEGER REFERENCES categories(id),
+            payee_name           TEXT,
+            tag_names            TEXT NOT NULL DEFAULT '[]',
+            created_at           TEXT NOT NULL,
+            updated_at           TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_transaction_rules_priority
+            ON transaction_rules(enabled, priority, id);
+
         CREATE TABLE IF NOT EXISTS merchant_aliases (
             id                     INTEGER PRIMARY KEY AUTOINCREMENT,
             normalized_description TEXT NOT NULL UNIQUE,

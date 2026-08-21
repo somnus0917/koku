@@ -34,6 +34,7 @@ mod recurring;
 mod reimbursements;
 mod reminders;
 mod rows;
+pub(crate) mod rules;
 mod schema;
 mod settings;
 mod splits;

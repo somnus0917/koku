@@ -542,6 +542,25 @@ pub struct RecurringOccurrence {
     pub due_at: DateTime<Utc>,
 }
 
+/// 可解释的交易自动规则：按顺序匹配，命中后可设置分类、商户与标签。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransactionRule {
+    pub id: i64,
+    pub name: String,
+    pub enabled: bool,
+    pub priority: i64,
+    pub description_contains: Option<String>,
+    pub account_id: Option<i64>,
+    pub kind: Option<TransactionKind>,
+    pub min_amount: Option<Decimal>,
+    pub max_amount: Option<Decimal>,
+    pub category_id: Option<i64>,
+    pub payee_name: Option<String>,
+    pub tag_names: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MonthlySummary {
     pub year: i32,

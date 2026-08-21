@@ -112,6 +112,28 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             ON transactions(currency, occurred_at, voided_at);
         "#,
     )?;
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS transaction_rules (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                 TEXT NOT NULL UNIQUE,
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            priority             INTEGER NOT NULL DEFAULT 0,
+            description_contains TEXT,
+            account_id           INTEGER REFERENCES accounts(id),
+            kind                 TEXT CHECK (kind IN ('expense', 'income')),
+            min_amount           TEXT,
+            max_amount           TEXT,
+            category_id          INTEGER REFERENCES categories(id),
+            payee_name           TEXT,
+            tag_names            TEXT NOT NULL DEFAULT '[]',
+            created_at           TEXT NOT NULL,
+            updated_at           TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_transaction_rules_priority
+            ON transaction_rules(enabled, priority, id);
+        "#,
+    )?;
     migrate_deposit_accounts(conn)?;
     // —— Payee 自动学习：交易关联商户与原始描述（放在整表重建之后，避免重建丢失新列）——
     if !table_has_column(conn, "transactions", "payee_id")? {

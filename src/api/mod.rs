@@ -35,6 +35,7 @@ mod reconciliations;
 mod recurring;
 mod reimbursements;
 mod reminders;
+mod rules;
 mod state;
 mod summaries;
 mod transactions;
@@ -99,6 +100,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .merge(reimbursements::router())
         .merge(budgets::router())
         .merge(recurring::router())
+        .merge(rules::router())
         .merge(holdings::router())
         .merge(reconciliations::router())
         .merge(reminders::router())

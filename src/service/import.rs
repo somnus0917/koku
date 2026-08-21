@@ -414,6 +414,7 @@ impl BookkeepingService {
                     payee_id,
                     row.external_id.as_deref(),
                 )?;
+                self.apply_rules_to_transaction(tx.id)?;
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
@@ -435,6 +436,7 @@ impl BookkeepingService {
                     payee_id,
                     row.external_id.as_deref(),
                 )?;
+                self.apply_rules_to_transaction(tx.id)?;
                 if let Some(s) = suggestion.as_mut() {
                     s.transaction_id = tx.id;
                 }
