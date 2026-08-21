@@ -161,22 +161,22 @@ impl QuoteClient {
         }
     }
 
-    /// 每轮先 Stooq；美股再尝试 Nasdaq，随后回退 Yahoo Finance，最多三轮。
+    /// 美股优先 Nasdaq（避免 Stooq 对部分代码的慢失败）；其他市场优先 Stooq，最后均回退 Yahoo Finance。
     pub async fn fetch(&self, symbol: &str) -> Result<Quote> {
         let market = detect_market(symbol);
         let stooq_symbol = stooq_symbol(symbol, market);
         let yahoo_symbol = yahoo_symbol(symbol, market);
         let mut errors = Vec::new();
         for attempt in 0..3 {
-            match self.fetch_stooq(symbol, &stooq_symbol, market).await {
-                Ok(quote) => return Ok(quote),
-                Err(error) => errors.push(format!("stooq: {error}")),
-            }
             if market == Market::Us {
                 match self.fetch_nasdaq(symbol, market).await {
                     Ok(quote) => return Ok(quote),
                     Err(error) => errors.push(format!("nasdaq: {error}")),
                 }
+            }
+            match self.fetch_stooq(symbol, &stooq_symbol, market).await {
+                Ok(quote) => return Ok(quote),
+                Err(error) => errors.push(format!("stooq: {error}")),
             }
             match self.fetch_yahoo(symbol, &yahoo_symbol, market).await {
                 Ok(quote) => return Ok(quote),
