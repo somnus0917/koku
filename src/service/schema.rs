@@ -84,6 +84,9 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             shares     TEXT NOT NULL,
             cost_basis TEXT NOT NULL,
             last_price TEXT,
+            market     TEXT NOT NULL DEFAULT 'unknown',
+            price_source TEXT,
+            price_as_of TEXT,
             updated_at TEXT NOT NULL,
             UNIQUE(account_id, symbol)
         );

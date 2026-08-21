@@ -1213,6 +1213,7 @@ mod tests {
             "AAPL".to_owned(),
             Decimal::from(10_u32),
             Decimal::from(150_u32),
+            Decimal::ZERO,
             at,
             "".to_owned(),
         )?;
@@ -1239,6 +1240,7 @@ mod tests {
             "AAPL".to_owned(),
             Decimal::from(4_u32),
             Decimal::from(200_u32),
+            Decimal::ZERO,
             at,
             "".to_owned(),
         )?;
@@ -1254,6 +1256,7 @@ mod tests {
             "AAPL".to_owned(),
             Decimal::from(6_u32),
             Decimal::from(200_u32),
+            Decimal::ZERO,
             at,
             "".to_owned(),
         )?;
@@ -1273,6 +1276,7 @@ mod tests {
             "MSFT".to_owned(),
             Decimal::from(2_u32),
             Decimal::from(100_u32),
+            Decimal::ZERO,
             at,
             "首次建仓".to_owned(),
         )?;
@@ -1289,6 +1293,44 @@ mod tests {
             service.balance_summary("CNY")?.total_assets,
             Decimal::from(1000_u32)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn stock_trade_fees_adjust_cash_and_cost_basis() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account(
+            "证券资金",
+            AccountType::Cash,
+            "CNY",
+            Decimal::from(1000_u32),
+        )?;
+        let at = Utc::now();
+
+        service.buy_stock(
+            cash.id,
+            "600519".to_owned(),
+            Decimal::from(2_u32),
+            Decimal::from(100_u32),
+            Decimal::from(3_u32),
+            at,
+            "".to_owned(),
+        )?;
+        let holding = service.holdings()?.pop().expect("holding is created");
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(797_u32));
+        assert_eq!(holding.cost_basis, Decimal::from(203_u32));
+        assert_eq!(holding.market, "cn_sh");
+
+        service.sell_stock(
+            cash.id,
+            "600519".to_owned(),
+            Decimal::from(1_u32),
+            Decimal::from(110_u32),
+            Decimal::from(2_u32),
+            at,
+            "".to_owned(),
+        )?;
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(905_u32));
         Ok(())
     }
 

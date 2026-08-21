@@ -39,7 +39,7 @@ use crate::auth::AuthConfig;
 use crate::config::{configured_origin, env_bool};
 use crate::demo::seed_demo_data;
 use crate::error::{KokuError, Result};
-use crate::quotes::QuoteClient;
+use crate::quotes::{should_refresh_after_close, QuoteClient};
 use crate::r2::{R2Client, R2Config};
 use crate::ratelimit::ApiRateLimiter;
 use crate::rates::RateClient;
@@ -109,6 +109,7 @@ async fn run_server() -> Result<()> {
             "KOKU_JOBS_INTERVAL_MINUTES must be between 1 and 1440".to_owned(),
         ));
     }
+    let quote_auto_refresh = env_bool("KOKU_QUOTE_AUTO_REFRESH", true)?;
     {
         let jobs_state = state.clone();
         tokio::spawn(async move {
@@ -132,6 +133,48 @@ async fn run_server() -> Result<()> {
                             }
                             if let Err(error) = ledger.rollover_budgets_once(chrono::Utc::now()) {
                                 tracing::error!(target: "jobs", user_id = user.id, error = %error, "budget rollover failed");
+                            }
+                            if quote_auto_refresh {
+                                let now = chrono::Utc::now();
+                                let due = match ledger.holdings() {
+                                    Ok(holdings) => holdings
+                                        .into_iter()
+                                        .filter(|holding| {
+                                            should_refresh_after_close(
+                                                &holding.market,
+                                                holding.updated_at,
+                                                now,
+                                            )
+                                        })
+                                        .map(|holding| (holding.id, holding.symbol))
+                                        .collect::<Vec<_>>(),
+                                    Err(error) => {
+                                        tracing::error!(target: "jobs", user_id = user.id, error = %error, "could not list holdings for quote refresh");
+                                        Vec::new()
+                                    }
+                                };
+                                drop(ledger);
+                                for (holding_id, symbol) in due {
+                                    match jobs_state.quotes.fetch(&symbol).await {
+                                        Ok(quote) => {
+                                            match lock_ledger(&jobs_state, user.id).await {
+                                                Ok(mut ledger) => {
+                                                    if let Err(error) =
+                                                        ledger.set_holding_quote(holding_id, &quote)
+                                                    {
+                                                        tracing::warn!(target: "jobs", user_id = user.id, holding_id, error = %error, "could not save scheduled quote")
+                                                    }
+                                                }
+                                                Err(error) => {
+                                                    tracing::warn!(target: "jobs", user_id = user.id, holding_id, error = %error, "could not open ledger to save scheduled quote")
+                                                }
+                                            }
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(target: "jobs", user_id = user.id, symbol = %symbol, error = %error, "scheduled quote refresh failed; retaining last valid price")
+                                        }
+                                    }
+                                }
                             }
                         }
                         Err(error) => {

@@ -2,11 +2,20 @@
 import { request } from "./client";
 import type { Holding, Transaction } from "../types";
 
+export interface HoldingQuote {
+  symbol: string;
+  price: string;
+  date: string;
+  source: "stooq" | "yahoo_finance";
+  market: Holding["market"];
+}
+
 export function buyStock(input: {
   account_id: number;
   symbol: string;
   shares: string;
   price: string;
+  fee?: string;
   occurred_at?: string;
   note?: string;
 }): Promise<Transaction> {
@@ -20,6 +29,7 @@ export function sellStock(input: {
   symbol: string;
   shares: string;
   price: string;
+  fee?: string;
   occurred_at?: string;
   note?: string;
 }): Promise<Transaction> {
@@ -27,6 +37,10 @@ export function sellStock(input: {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+/** 按代码查询当前参考价；未覆盖的标的可继续手动输入价格。 */
+export function getHoldingQuote(symbol: string): Promise<HoldingQuote> {
+  return request(`/api/holdings/quote?symbol=${encodeURIComponent(symbol)}`);
 }
 export function setHoldingPrice(holdingId: number, price: string): Promise<Holding> {
   return request(`/api/holdings/${holdingId}/price`, {

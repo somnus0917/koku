@@ -1,6 +1,6 @@
 //! 持仓 API：持仓列表、买卖股票、市价刷新与手动改价。
 
-use axum::extract::{Extension, Path as AxumPath, State};
+use axum::extract::{Extension, Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::domain::{Holding, Transaction};
 use crate::error::{KokuError, Result};
+use crate::quotes::Quote;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 
@@ -19,6 +20,8 @@ struct TradeRequest {
     symbol: String,
     shares: Decimal,
     price: Decimal,
+    #[serde(default)]
+    fee: Decimal,
     occurred_at: Option<DateTime<Utc>>,
     #[serde(default)]
     note: String,
@@ -27,6 +30,11 @@ struct TradeRequest {
 #[derive(Debug, Deserialize)]
 struct SetPriceRequest {
     price: Decimal,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuoteQuery {
+    symbol: String,
 }
 
 /// 市价新鲜度阈值（小时）；`KOKU_QUOTE_TTL_HOURS` 可覆盖，默认 24。
@@ -56,6 +64,7 @@ async fn api_buy_stock(
         request.symbol,
         request.shares,
         request.price,
+        request.fee,
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
@@ -72,10 +81,26 @@ async fn api_sell_stock(
         request.symbol,
         request.shares,
         request.price,
+        request.fee,
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
+}
+
+/// 供买入表单按证券代码查询参考价；失败时前端仍可由用户输入手动价格。
+async fn api_quote(
+    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Query(query): Query<QuoteQuery>,
+) -> Result<Json<ApiResponse<Quote>>> {
+    let symbol = query.symbol.trim();
+    if symbol.is_empty() {
+        return Err(KokuError::InvalidInput(
+            "stock symbol cannot be empty".to_owned(),
+        ));
+    }
+    Ok(Json(ApiResponse::new(state.quotes.fetch(symbol).await?)))
 }
 
 async fn api_set_holding_price(
@@ -128,7 +153,7 @@ async fn api_refresh_holdings(
             Ok(quote) => {
                 lock_ledger(&state, user.user_id)
                     .await?
-                    .set_holding_price(holding_id, quote.price)?;
+                    .set_holding_quote(holding_id, &quote)?;
                 refreshed += 1;
             }
             Err(error) => failed.push(serde_json::json!({
@@ -158,13 +183,14 @@ async fn api_refresh_holding(
     let quote = state.quotes.fetch(&symbol).await?;
     let holding = lock_ledger(&state, user.user_id)
         .await?
-        .set_holding_price(holding_id, quote.price)?;
+        .set_holding_quote(holding_id, &quote)?;
     Ok(Json(ApiResponse::new(holding)))
 }
 
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/holdings", get(api_holdings))
+        .route("/api/holdings/quote", get(api_quote))
         .route("/api/holdings/refresh", post(api_refresh_holdings))
         .route("/api/holdings/buy", post(api_buy_stock))
         .route("/api/holdings/sell", post(api_sell_stock))

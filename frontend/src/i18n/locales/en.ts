@@ -399,6 +399,11 @@ export const en = {
         meta: "{{shares}} shares · cost {{cost}}",
         metaPrice: " · price {{price}}",
         noPrice: " · no price",
+        marketLabel: " · {{market}}",
+        sourceLabel: " · source: {{source}}",
+        asOf: " · as of {{date}}",
+        market: { us: "US", hk: "Hong Kong", cn_sh: "China A · Shanghai", cn_sz: "China A · Shenzhen", cn_star: "STAR Market", unknown: "Unknown market" },
+        source: { stooq: "Stooq", yahoo_finance: "Yahoo Finance", manual: "Manual", trade: "Trade price" },
         updatedAt: " · updated {{date}}",
         pricePlaceholder: "Price",
         savePrice: "Save price",
@@ -574,7 +579,11 @@ export const en = {
           symbol: "Symbol",
           symbolPlaceholder: "e.g. AAPL",
           shares: "Shares",
-          price: "Price per share"
+          price: "Price per share",
+          fee: "Fee",
+          fetchQuote: "Look up price",
+          quoteFound: "{{market}} · {{source}} · {{date}} · {{price}}",
+          quoteFailed: "Could not look up a quote; enter a price manually"
         },
         password: {
           title: "Change password",

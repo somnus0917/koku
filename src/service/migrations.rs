@@ -7,6 +7,19 @@ use crate::error::Result;
 
 /// 迁移入口：仅在 [`super::schema::initialize`] 建表之后运行。
 pub(super) fn run(conn: &Connection) -> Result<()> {
+    // —— 持仓行情元数据：保留可追溯的数据源、日期与市场归属 ——
+    if !table_has_column(conn, "holdings", "market")? {
+        conn.execute(
+            "ALTER TABLE holdings ADD COLUMN market TEXT NOT NULL DEFAULT 'unknown'",
+            [],
+        )?;
+    }
+    if !table_has_column(conn, "holdings", "price_source")? {
+        conn.execute("ALTER TABLE holdings ADD COLUMN price_source TEXT", [])?;
+    }
+    if !table_has_column(conn, "holdings", "price_as_of")? {
+        conn.execute("ALTER TABLE holdings ADD COLUMN price_as_of TEXT", [])?;
+    }
     if !table_has_column(conn, "transactions", "currency")? {
         conn.execute("ALTER TABLE transactions ADD COLUMN currency TEXT", [])?;
     }

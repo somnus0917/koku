@@ -2471,6 +2471,15 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.quote-lookup {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-text);
+  font-size: 0.82rem;
+}
+
 .category-input {
   display: grid;
   grid-template-columns: 32px 1fr;

@@ -5,6 +5,7 @@ import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { localDateTimeValue } from "../../lib";
 import type { Account } from "../../types";
+import { getHoldingQuote, type HoldingQuote } from "../../api/holdings";
 
 export function TradeModal({
   accounts,
@@ -24,6 +25,7 @@ export function TradeModal({
       symbol: string;
       shares: string;
       price: string;
+      fee?: string;
       occurred_at?: string;
       note?: string;
     };
@@ -36,6 +38,9 @@ export function TradeModal({
   const [symbol, setSymbol] = useState(initialSymbol);
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
+  const [fee, setFee] = useState("0");
+  const [quote, setQuote] = useState<HoldingQuote | null>(null);
+  const [quoting, setQuoting] = useState(false);
   const [note, setNote] = useState("");
   const [occurredAt, setOccurredAt] = useState(localDateTimeValue);
   const [submitting, setSubmitting] = useState(false);
@@ -53,6 +58,7 @@ export function TradeModal({
           symbol,
           shares,
           price,
+          fee: fee || "0",
           occurred_at: new Date(occurredAt).toISOString(),
           note: note || undefined
         }
@@ -60,6 +66,21 @@ export function TradeModal({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("common.opFailed"));
       setSubmitting(false);
+    }
+  };
+  const lookupQuote = async () => {
+    if (!symbol.trim()) return;
+    setQuoting(true);
+    setError(null);
+    try {
+      const result = await getHoldingQuote(symbol.trim());
+      setQuote(result);
+      setPrice(result.price);
+    } catch (reason) {
+      setQuote(null);
+      setError(reason instanceof Error ? reason.message : t("modals.trade.quoteFailed"));
+    } finally {
+      setQuoting(false);
     }
   };
   return (
@@ -82,9 +103,11 @@ export function TradeModal({
             </select>
           </label>
           <p className="fx-hint span-two">{t("modals.trade.fundingHint")}</p>
-          <label><span>{t("modals.trade.symbol")}</span><input required autoFocus value={symbol} onChange={(event) => setSymbol(event.target.value)} placeholder={t("modals.trade.symbolPlaceholder")} /></label>
+          <label><span>{t("modals.trade.symbol")}</span><input required autoFocus value={symbol} onChange={(event) => { setSymbol(event.target.value); setQuote(null); }} onBlur={() => void lookupQuote()} placeholder={t("modals.trade.symbolPlaceholder")} /></label>
           <label><span>{t("modals.trade.shares")}</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
           <label><span>{t("modals.trade.price")}</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("modals.trade.fee")}</span><input required min="0" step="0.01" inputMode="decimal" value={fee} onChange={(event) => setFee(event.target.value)} placeholder="0.00" /></label>
+          <div className="span-two quote-lookup"><button type="button" className="secondary-button" disabled={quoting || !symbol.trim()} onClick={() => void lookupQuote()}>{quoting && <LoaderCircle className="spin" size={15} />}{t("modals.trade.fetchQuote")}</button>{quote && <span>{t("modals.trade.quoteFound", { price: quote.price, source: quote.source, market: t(`holdings.market.${quote.market}`), date: quote.date })}</span>}</div>
           <label><span>{t("common.time")}</span><input type="datetime-local" value={occurredAt} onChange={(event) => setOccurredAt(event.target.value)} /></label>
           <label className="span-two"><span>{t("common.note")}</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder={t("common.optional")} /></label>
         </div>

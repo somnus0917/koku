@@ -9,12 +9,13 @@ use rust_decimal::Decimal;
 use super::*;
 use crate::domain::{AccountType, Holding, Transaction};
 use crate::error::{KokuError, Result};
+use crate::quotes::{detect_market, Quote};
 use crate::service::BookkeepingService;
 
 impl BookkeepingService {
     pub fn holdings(&self) -> Result<Vec<Holding>> {
         let mut statement = self.conn.prepare(
-            "SELECT id, account_id, symbol, shares, cost_basis, last_price, updated_at
+            "SELECT id, account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at
              FROM holdings ORDER BY symbol, account_id",
         )?;
         let rows = statement.query_map([], holding_row)?;
@@ -25,7 +26,7 @@ impl BookkeepingService {
         let row = self
             .conn
             .query_row(
-                "SELECT id, account_id, symbol, shares, cost_basis, last_price, updated_at FROM holdings WHERE id = ?1",
+                "SELECT id, account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at FROM holdings WHERE id = ?1",
                 [id],
                 holding_row,
             )
@@ -39,9 +40,34 @@ impl BookkeepingService {
 
     pub fn set_holding_price(&mut self, holding_id: i64, price: Decimal) -> Result<Holding> {
         positive_amount(price)?;
+        let market = detect_market(&self.holding(holding_id)?.symbol)
+            .as_str()
+            .to_owned();
         let changed = self.conn.execute(
-            "UPDATE holdings SET last_price = ?1, updated_at = ?2 WHERE id = ?3",
-            params![decimal_to_db(price), timestamp(Utc::now()), holding_id],
+            "UPDATE holdings SET last_price = ?1, market = ?2, price_source = 'manual', price_as_of = ?3, updated_at = ?4 WHERE id = ?5",
+            params![decimal_to_db(price), market, Utc::now().date_naive().to_string(), timestamp(Utc::now()), holding_id],
+        )?;
+        if changed != 1 {
+            return Err(KokuError::NotFound {
+                entity: "holding",
+                id: holding_id,
+            });
+        }
+        self.holding(holding_id)
+    }
+
+    /// 写入外部行情。只有成功返回的报价会进入这里，因此拉取失败时最后有效价格不变。
+    pub fn set_holding_quote(&mut self, holding_id: i64, quote: &Quote) -> Result<Holding> {
+        let changed = self.conn.execute(
+            "UPDATE holdings SET last_price = ?1, market = ?2, price_source = ?3, price_as_of = ?4, updated_at = ?5 WHERE id = ?6",
+            params![
+                decimal_to_db(quote.price),
+                quote.market.as_str(),
+                quote.source,
+                quote.date,
+                timestamp(Utc::now()),
+                holding_id,
+            ],
         )?;
         if changed != 1 {
             return Err(KokuError::NotFound {
@@ -61,14 +87,18 @@ impl BookkeepingService {
         symbol: String,
         shares: Decimal,
         price: Decimal,
+        fee: Decimal,
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
         positive_amount(shares)?;
         positive_amount(price)?;
+        non_negative_fee(fee)?;
         let symbol = normalize_symbol(&symbol)?;
-        let cash = (shares * price).round_dp(2);
-        let description = format!("买入 {symbol} {shares} 股 @ {price}");
+        let investment = (shares * price).round_dp(2);
+        let cash = (investment + fee).round_dp(2);
+        let description = trade_description("买入", &symbol, shares, price, fee);
+        let market = detect_market(&symbol).as_str().to_owned();
 
         let tx = self
             .conn
@@ -85,11 +115,11 @@ impl BookkeepingService {
             .map(|(shares0, cost0)| (shares0 + shares, cost0 + cash))
             .unwrap_or((shares, cash));
         tx.execute(
-            "INSERT INTO holdings(account_id, symbol, shares, cost_basis, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO holdings(account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'trade', ?7, ?8)
              ON CONFLICT(account_id, symbol)
-             DO UPDATE SET shares = excluded.shares, cost_basis = excluded.cost_basis, updated_at = excluded.updated_at",
-            params![account_id, symbol, decimal_to_db(new_shares), decimal_to_db(new_cost), timestamp(Utc::now())],
+             DO UPDATE SET shares = excluded.shares, cost_basis = excluded.cost_basis, market = excluded.market, updated_at = excluded.updated_at",
+            params![account_id, symbol, decimal_to_db(new_shares), decimal_to_db(new_cost), decimal_to_db(price), market, occurred_at.date_naive().to_string(), timestamp(Utc::now())],
         )?;
         insert_trade_transaction(
             &tx,
@@ -113,14 +143,22 @@ impl BookkeepingService {
         symbol: String,
         shares: Decimal,
         price: Decimal,
+        fee: Decimal,
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
         positive_amount(shares)?;
         positive_amount(price)?;
+        non_negative_fee(fee)?;
         let symbol = normalize_symbol(&symbol)?;
-        let cash = (shares * price).round_dp(2);
-        let description = format!("卖出 {symbol} {shares} 股 @ {price}");
+        let gross_cash = (shares * price).round_dp(2);
+        if fee > gross_cash {
+            return Err(KokuError::InvalidInput(
+                "stock sale fee cannot exceed proceeds".to_owned(),
+            ));
+        }
+        let cash = (gross_cash - fee).round_dp(2);
+        let description = trade_description("卖出", &symbol, shares, price, fee);
 
         let tx = self
             .conn
@@ -190,6 +228,29 @@ fn ensure_investment_funding_account(account: &crate::domain::Account) -> Result
         ));
     }
     Ok(())
+}
+
+fn non_negative_fee(fee: Decimal) -> Result<()> {
+    if fee < Decimal::ZERO {
+        return Err(KokuError::InvalidInput(
+            "stock trade fee cannot be negative".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn trade_description(
+    side: &str,
+    symbol: &str,
+    shares: Decimal,
+    price: Decimal,
+    fee: Decimal,
+) -> String {
+    if fee.is_zero() {
+        format!("{side} {symbol} {shares} 股 @ {price}")
+    } else {
+        format!("{side} {symbol} {shares} 股 @ {price}（手续费 {fee}）")
+    }
 }
 
 fn existing_position(
@@ -267,6 +328,9 @@ type HoldingRow = (
     String,
     String,
     Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
     Option<String>,
 );
 
@@ -279,14 +343,22 @@ fn holding_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HoldingRow> {
         row.get(4)?,
         row.get(5)?,
         row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+        row.get(9)?,
     ))
 }
 
 fn holding_from_row(row: HoldingRow) -> Result<Holding> {
+    let market = if row.6 == "unknown" || row.6.is_empty() {
+        detect_market(&row.2).as_str().to_owned()
+    } else {
+        row.6.clone()
+    };
     let shares = decimal_from_db(&row.3)?;
     let cost_basis = decimal_from_db(&row.4)?;
     let last_price = row.5.as_deref().map(decimal_from_db).transpose()?;
-    let updated_at = row.6.as_deref().map(parse_timestamp).transpose()?;
+    let updated_at = row.9.as_deref().map(parse_timestamp).transpose()?;
     let average_cost = if shares.is_zero() {
         Decimal::ZERO
     } else {
@@ -305,6 +377,9 @@ fn holding_from_row(row: HoldingRow) -> Result<Holding> {
         shares,
         cost_basis,
         last_price,
+        market,
+        price_source: row.7,
+        price_as_of: row.8,
         average_cost,
         market_value,
         unrealized_gain,

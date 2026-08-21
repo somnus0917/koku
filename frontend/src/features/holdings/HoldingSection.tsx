@@ -82,6 +82,9 @@ export function HoldingSection({
                 <span>
                   {t("holdings.meta", { shares, cost: formatMoney(holding.average_cost, currency) })}
                   {lastPrice !== null ? t("holdings.metaPrice", { price: formatMoney(holding.last_price!, currency) }) : t("holdings.noPrice")}
+                  {t("holdings.marketLabel", { market: t(`holdings.market.${holding.market}`) })}
+                  {holding.price_source ? t("holdings.sourceLabel", { source: t(`holdings.source.${holding.price_source}`) }) : ""}
+                  {holding.price_as_of ? t("holdings.asOf", { date: holding.price_as_of }) : ""}
                   {holding.updated_at ? t("holdings.updatedAt", { date: formatDate(holding.updated_at) }) : ""}
                 </span>
               </div>

@@ -23,7 +23,7 @@ Koku 是一个隐私优先、可私有部署且前后端分离的个人记账应
 - 周期交易：房租/订阅等固定收支按月/周自动生成（请求驱动，无后台任务）
 - CSV 导出：全部或按月的交易流水，浏览器直接下载
 - 标签：跨类目聚合（多对多），表单自由输入 + 列表筛选
-- 股票持仓：买入/卖出（摊薄成本）、市价更新，持仓市值计入净资产；支持一键从 Stooq 拉取市价（可配置缓存有效期，Dashboard 加载时自动懒刷新）
+- 股票持仓：买入/卖出（含手续费、摊薄成本）、市价更新，持仓市值计入净资产；按代码识别 A 股/科创板/港股/美股，优先 Stooq、失败回退 Yahoo Finance，并显示价格来源与日期
 - 账户对账：以对账单余额为目标余额，完成时自动生成可审计的调整流水（撤销即回滚）
 - 信用卡账单：信用账户可设账单日/还款日（1~31，无对应日期自动落到月末），账户页展示额度/已用/可用、本期已出账与未出账金额、下次账单与还款日及近期账单历史；消费 = Credit 账户上的支出，还款 = 储蓄 → 信用卡的转账（**还款不是支出**，不会重复统计）；每个结束的账单周期在首次读取时固化为不可变快照，未出账部分按 `occurred_at` 动态计算；还款/贷项按 FIFO 冲抵最早账单（可解释近似，不追踪「某次还款具体还哪一期」）；金额全程 `Decimal` 精确求和，不使用浮点
 - 到期提醒：API 返回未来 N 天内到期（含逾期）的定存、借款与未还信用卡账单；可选 SMTP 每日邮件摘要
@@ -73,7 +73,7 @@ koku/
 ├── src/totp.rs         # TOTP 密钥生成/校验/otpauth URI
 ├── src/backup.rs       # 备份/恢复：VACUUM INTO 快照 + zip 打包
 ├── src/importer.rs     # CSV/QIF/OFX 账单解析
-├── src/quotes.rs       # Stooq 行情客户端
+├── src/quotes.rs       # 多源行情客户端（Stooq → Yahoo Finance）
 ├── src/mailer.rs       # 可选 SMTP 邮件发送
 ├── src/ratelimit.rs    # 通用 API 限流（固定窗口按客户端）
 ├── src/config.rs       # 环境变量解析
@@ -260,9 +260,10 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_COOKIE_SECURE` | `true` | 是否只允许 HTTPS 发送会话 Cookie；本地 HTTP 开发设为 `false` |
 | `KOKU_RATE_LIMIT_PER_MINUTE` | `300` | 通用 API 限流：每客户端每分钟请求上限；`0` 关闭 |
 | `KOKU_BACKUP_INTERVAL_HOURS` | `24` | 定时备份间隔（小时）；`0` 关闭（仅管理员手动触发） |
-| `KOKU_JOBS_INTERVAL_MINUTES` | `60` | 服务端周期交易生成与预算结转检查间隔（分钟，1–1440） |
+| `KOKU_JOBS_INTERVAL_MINUTES` | `60` | 服务端周期交易、预算结转与收盘后行情刷新检查间隔（分钟，1–1440） |
 | `KOKU_BACKUP_KEEP` | `14` | 保留最近多少份备份，超出的自动清理 |
 | `KOKU_QUOTE_TTL_HOURS` | `24` | 持仓市价缓存有效期（小时），超过视为过期并在刷新时重新拉取 |
+| `KOKU_QUOTE_AUTO_REFRESH` | `true` | 是否在各识别市场收盘后自动刷新当日未更新的持仓行情 |
 | `KOKU_SMTP_HOST` | 未设置 | SMTP 服务器（设置后启用到期提醒邮件；不设置则仅应用内提醒） |
 | `KOKU_SMTP_PORT` | `587` | SMTP 端口 |
 | `KOKU_SMTP_TLS` | `starttls` | SMTP 加密方式：`starttls` / `implicit`（465）/ `none` |
@@ -319,8 +320,9 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/recurring/{id}/paused` | 暂停或恢复周期交易（`{"paused": true|false}`） |
 | `GET` | `/api/recurring/{id}/preview` | 预览接下来三次发生日期 |
 | `GET/POST` | `/api/holdings` | 查询股票持仓 |
-| `POST` | `/api/holdings/refresh` | 刷新全部过期/缺失市价（Stooq，并发拉取），返回逐标的明细 |
-| `POST` | `/api/holdings/buy` / `/api/holdings/sell` | 买入/卖出股票（现金与持仓联动） |
+| `GET` | `/api/holdings/quote?symbol=...` | 按证券代码查询参考价（Stooq → Yahoo Finance） |
+| `POST` | `/api/holdings/refresh` | 刷新全部过期/缺失市价（Stooq → Yahoo Finance），返回逐标的明细 |
+| `POST` | `/api/holdings/buy` / `/api/holdings/sell` | 买入/卖出股票（现金与持仓联动，支持 `fee` 手续费） |
 | `PUT` | `/api/holdings/{id}/price` | 更新持仓市价 |
 | `POST` | `/api/holdings/{id}/refresh` | 强制刷新单只持仓市价 |
 | `POST` | `/api/deposits` | 储蓄转定期（利率 + 期限） |
@@ -375,7 +377,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 
 ### 持仓市价
 
-「账户」页持仓区有「刷新市价」按钮：仅拉取过期（默认 24 小时，`KOKU_QUOTE_TTL_HOURS` 可调）或从未更新过的持仓，并发查询 Stooq 后写回；Dashboard 加载时会自动懒刷新过期市价。标的需要带 Stooq 后缀，如美股 `AAPL.US`、A 股 `600519.SS`、港股 `0700.HK`。单个标的可在「更新市价」处手动输入或强制刷新。
+「账户」页持仓区会显示市场、价格来源与价格日期；输入代码后买入窗可直接查询每股参考价。代码可用裸代码或交易所后缀：`600519`/`600519.SS` 为沪市 A 股，`000001`/`000001.SZ` 为深市 A 股，`688981` 为科创板，`0700`/`0700.HK` 为港股，`AAPL`/`AAPL.US` 为美股。行情优先 Stooq，覆盖不足时自动回退 Yahoo Finance；仍未覆盖的标的可手动填写市价，失败不会覆盖上一次有效价格。服务器会在 A 股/港股收盘后、以及美股收盘后按 `KOKU_JOBS_INTERVAL_MINUTES` 检查并刷新当天尚未更新的持仓，可用 `KOKU_QUOTE_AUTO_REFRESH=false` 关闭。买入和卖出窗均支持手续费：买入手续费计入持仓成本，卖出手续费从到账金额中扣除。
 
 ### R2 异地备份
 

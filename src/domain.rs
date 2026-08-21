@@ -508,6 +508,12 @@ pub struct Holding {
     pub shares: Decimal,
     pub cost_basis: Decimal,
     pub last_price: Option<Decimal>,
+    /// 代码所属市场，由后端按代码/交易所后缀识别。
+    pub market: String,
+    /// 最近市价的来源（Stooq、Yahoo Finance、手动或交易价）。
+    pub price_source: Option<String>,
+    /// 行情源所给的价格日期；手动价格使用设置当日。
+    pub price_as_of: Option<String>,
     pub average_cost: Decimal,
     /// 按最近市价计算的持仓市值；未取得市价时为空，避免把成本误报为市值。
     pub market_value: Option<Decimal>,
