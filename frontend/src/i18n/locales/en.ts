@@ -578,6 +578,8 @@ export const en = {
           fundingHint: "Buying moves funds from this account and creates the holding automatically; a stock account is optional.",
           symbol: "Symbol",
           symbolPlaceholder: "e.g. AAPL",
+          market: "Market",
+          marketAuto: "Auto-detect (recommended)",
           shares: "Shares",
           price: "Price per share",
           fee: "Fee",

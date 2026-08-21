@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { localDateTimeValue } from "../../lib";
-import type { Account } from "../../types";
+import type { Account, Holding } from "../../types";
 import { getHoldingQuote, type HoldingQuote } from "../../api/holdings";
 
 export function TradeModal({
@@ -23,6 +23,7 @@ export function TradeModal({
     payload: {
       account_id: number;
       symbol: string;
+      market?: Holding["market"];
       shares: string;
       price: string;
       fee?: string;
@@ -36,6 +37,7 @@ export function TradeModal({
   const [side, setSide] = useState<"buy" | "sell">(initialSide);
   const [accountId, setAccountId] = useState(fundingAccounts[0]?.id ?? 0);
   const [symbol, setSymbol] = useState(initialSymbol);
+  const [market, setMarket] = useState<"auto" | Holding["market"]>("auto");
   const [shares, setShares] = useState("");
   const [price, setPrice] = useState("");
   const [fee, setFee] = useState("0");
@@ -56,6 +58,7 @@ export function TradeModal({
         payload: {
           account_id: Number(accountId),
           symbol,
+          market: market === "auto" ? undefined : market,
           shares,
           price,
           fee: fee || "0",
@@ -73,7 +76,7 @@ export function TradeModal({
     setQuoting(true);
     setError(null);
     try {
-      const result = await getHoldingQuote(symbol.trim());
+      const result = await getHoldingQuote(symbol.trim(), market === "auto" ? undefined : market);
       setQuote(result);
       setPrice(result.price);
     } catch (reason) {
@@ -104,6 +107,7 @@ export function TradeModal({
           </label>
           <p className="fx-hint span-two">{t("modals.trade.fundingHint")}</p>
           <label><span>{t("modals.trade.symbol")}</span><input required autoFocus value={symbol} onChange={(event) => { setSymbol(event.target.value); setQuote(null); }} onBlur={() => void lookupQuote()} placeholder={t("modals.trade.symbolPlaceholder")} /></label>
+          <label><span>{t("modals.trade.market")}</span><select value={market} onChange={(event) => { setMarket(event.target.value as "auto" | Holding["market"]); setQuote(null); }}><option value="auto">{t("modals.trade.marketAuto")}</option><option value="cn_sh">{t("holdings.market.cn_sh")}</option><option value="cn_sz">{t("holdings.market.cn_sz")}</option><option value="cn_star">{t("holdings.market.cn_star")}</option><option value="hk">{t("holdings.market.hk")}</option><option value="us">{t("holdings.market.us")}</option></select></label>
           <label><span>{t("modals.trade.shares")}</span><input required min="0.0001" step="0.0001" inputMode="decimal" value={shares} onChange={(event) => setShares(event.target.value)} placeholder="0" /></label>
           <label><span>{t("modals.trade.price")}</span><input required min="0.01" step="0.01" inputMode="decimal" value={price} onChange={(event) => setPrice(event.target.value)} placeholder="0.00" /></label>
           <label><span>{t("modals.trade.fee")}</span><input required min="0" step="0.01" inputMode="decimal" value={fee} onChange={(event) => setFee(event.target.value)} placeholder="0.00" /></label>

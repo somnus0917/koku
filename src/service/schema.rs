@@ -88,7 +88,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             price_source TEXT,
             price_as_of TEXT,
             updated_at TEXT NOT NULL,
-            UNIQUE(account_id, symbol)
+            UNIQUE(account_id, market, symbol)
         );
 
         CREATE TABLE IF NOT EXISTS deposits (

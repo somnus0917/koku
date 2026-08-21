@@ -1,9 +1,13 @@
 //! 旧数据库兼容迁移：补列、整表重建与数据修复（幂等）。
 
-use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::BTreeMap;
 
-use super::parse_timestamp;
+use rusqlite::{params, Connection, OptionalExtension};
+use rust_decimal::Decimal;
+
+use super::{decimal_from_db, parse_timestamp};
 use crate::error::Result;
+use crate::quotes::{canonical_symbol, detect_market, Market};
 
 /// 迁移入口：仅在 [`super::schema::initialize`] 建表之后运行。
 pub(super) fn run(conn: &Connection) -> Result<()> {
@@ -19,6 +23,11 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
     }
     if !table_has_column(conn, "holdings", "price_as_of")? {
         conn.execute("ALTER TABLE holdings ADD COLUMN price_as_of TEXT", [])?;
+    }
+    // 旧版以用户原始输入的 symbol 唯一，`NVDA` 与 `NVDA.US` 会拆成两笔。
+    // 新版使用 (account_id, market, symbol) 唯一，并在重建时合并同一规范标的。
+    if !table_sql_contains(conn, "holdings", "UNIQUE(account_id, market, symbol)")? {
+        rebuild_holdings_market_identity(conn)?;
     }
     if !table_has_column(conn, "transactions", "currency")? {
         conn.execute("ALTER TABLE transactions ADD COLUMN currency TEXT", [])?;
@@ -255,6 +264,123 @@ fn table_sql_contains(conn: &Connection, table: &str, needle: &str) -> Result<bo
         .optional()?
         .unwrap_or_default();
     Ok(sql.contains(needle))
+}
+
+#[derive(Debug, Clone)]
+struct LegacyHolding {
+    id: i64,
+    account_id: i64,
+    symbol: String,
+    shares: Decimal,
+    cost_basis: Decimal,
+    last_price: Option<String>,
+    market: String,
+    price_source: Option<String>,
+    price_as_of: Option<String>,
+    updated_at: String,
+}
+
+/// 重建 holdings 的唯一约束，并将同账户内同市场的不同代码写法合并。
+/// 没有其他表通过外键引用 holdings.id，因此可以安全保留每组最早的 id。
+pub(super) fn rebuild_holdings_market_identity(conn: &Connection) -> Result<()> {
+    let legacy = {
+        let mut statement = conn.prepare(
+            "SELECT id, account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at
+             FROM holdings ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(LegacyHolding {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                symbol: row.get(2)?,
+                shares: decimal_from_db(&row.get::<_, String>(3)?).map_err(to_sql_error)?,
+                cost_basis: decimal_from_db(&row.get::<_, String>(4)?).map_err(to_sql_error)?,
+                last_price: row.get(5)?,
+                market: row.get(6)?,
+                price_source: row.get(7)?,
+                price_as_of: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()?
+    };
+
+    let mut merged: BTreeMap<(i64, String, String), LegacyHolding> = BTreeMap::new();
+    for mut holding in legacy {
+        let detected = detect_market(&holding.symbol);
+        let market = match Market::from_db(&holding.market) {
+            Market::Unknown => detected,
+            stored => stored,
+        };
+        holding.market = market.as_str().to_owned();
+        holding.symbol = canonical_symbol(&holding.symbol, market);
+        let key = (
+            holding.account_id,
+            holding.market.clone(),
+            holding.symbol.clone(),
+        );
+        if let Some(current) = merged.get_mut(&key) {
+            current.shares += holding.shares;
+            current.cost_basis += holding.cost_basis;
+            // 最新一次行情元数据优先；若其没有价格，不丢弃此前的有效价格。
+            if holding.updated_at > current.updated_at {
+                let keep_old_price = holding.last_price.is_none() && current.last_price.is_some();
+                current.updated_at = holding.updated_at;
+                if !keep_old_price {
+                    current.last_price = holding.last_price;
+                    current.price_source = holding.price_source;
+                    current.price_as_of = holding.price_as_of;
+                }
+            }
+        } else {
+            merged.insert(key, holding);
+        }
+    }
+
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE holdings_new (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id   INTEGER NOT NULL REFERENCES accounts(id),
+            symbol       TEXT NOT NULL,
+            shares       TEXT NOT NULL,
+            cost_basis   TEXT NOT NULL,
+            last_price   TEXT,
+            market       TEXT NOT NULL DEFAULT 'unknown',
+            price_source TEXT,
+            price_as_of  TEXT,
+            updated_at   TEXT NOT NULL,
+            UNIQUE(account_id, market, symbol)
+        );
+        "#,
+    )?;
+    for holding in merged.into_values() {
+        conn.execute(
+            "INSERT INTO holdings_new(id, account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                holding.id,
+                holding.account_id,
+                holding.symbol,
+                holding.shares.to_string(),
+                holding.cost_basis.to_string(),
+                holding.last_price,
+                holding.market,
+                holding.price_source,
+                holding.price_as_of,
+                holding.updated_at,
+            ],
+        )?;
+    }
+    conn.execute_batch(
+        "DROP TABLE holdings; ALTER TABLE holdings_new RENAME TO holdings; PRAGMA foreign_keys = ON;",
+    )?;
+    Ok(())
+}
+
+fn to_sql_error(error: crate::error::KokuError) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
 
 /// 重建 accounts 表：把旧的 asset/liability CHECK 换成四种新类型，并迁移旧值。

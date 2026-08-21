@@ -578,6 +578,8 @@ export const zh = {
           fundingHint: "买入会从此账户划出资金并自动创建持仓；不需要先建股票账户。",
           symbol: "代码",
           symbolPlaceholder: "例如 AAPL",
+          market: "市场",
+          marketAuto: "自动识别（推荐）",
           shares: "股数",
           price: "每股价格",
           fee: "手续费",

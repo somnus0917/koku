@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::domain::{Holding, Transaction};
 use crate::error::{KokuError, Result};
-use crate::quotes::Quote;
+use crate::quotes::{Market, Quote};
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 
@@ -20,6 +20,7 @@ struct TradeRequest {
     symbol: String,
     shares: Decimal,
     price: Decimal,
+    market: Option<String>,
     #[serde(default)]
     fee: Decimal,
     occurred_at: Option<DateTime<Utc>>,
@@ -35,6 +36,18 @@ struct SetPriceRequest {
 #[derive(Debug, Deserialize)]
 struct QuoteQuery {
     symbol: String,
+    market: Option<String>,
+}
+
+fn optional_market(value: Option<String>) -> Result<Option<Market>> {
+    value
+        .filter(|value| value != "auto")
+        .map(|value| {
+            Market::parse(&value).ok_or_else(|| {
+                KokuError::InvalidInput(format!("unsupported stock market: {value}"))
+            })
+        })
+        .transpose()
 }
 
 /// 市价新鲜度阈值（小时）；`KOKU_QUOTE_TTL_HOURS` 可覆盖，默认 24。
@@ -65,6 +78,7 @@ async fn api_buy_stock(
         request.shares,
         request.price,
         request.fee,
+        optional_market(request.market)?,
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
@@ -82,6 +96,7 @@ async fn api_sell_stock(
         request.shares,
         request.price,
         request.fee,
+        optional_market(request.market)?,
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
@@ -100,7 +115,16 @@ async fn api_quote(
             "stock symbol cannot be empty".to_owned(),
         ));
     }
-    Ok(Json(ApiResponse::new(state.quotes.fetch(symbol).await?)))
+    let market =
+        optional_market(query.market)?.unwrap_or_else(|| crate::quotes::detect_market(symbol));
+    if market == Market::Unknown {
+        return Err(KokuError::InvalidInput(
+            "could not detect market; choose a market explicitly".to_owned(),
+        ));
+    }
+    Ok(Json(ApiResponse::new(
+        state.quotes.fetch_for_market(symbol, market).await?,
+    )))
 }
 
 async fn api_set_holding_price(

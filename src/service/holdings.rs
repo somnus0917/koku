@@ -9,7 +9,7 @@ use rust_decimal::Decimal;
 use super::*;
 use crate::domain::{AccountType, Holding, Transaction};
 use crate::error::{KokuError, Result};
-use crate::quotes::{detect_market, Quote};
+use crate::quotes::{canonical_symbol, detect_market, Market, Quote};
 use crate::service::BookkeepingService;
 
 impl BookkeepingService {
@@ -40,9 +40,7 @@ impl BookkeepingService {
 
     pub fn set_holding_price(&mut self, holding_id: i64, price: Decimal) -> Result<Holding> {
         positive_amount(price)?;
-        let market = detect_market(&self.holding(holding_id)?.symbol)
-            .as_str()
-            .to_owned();
+        let market = self.holding(holding_id)?.market;
         let changed = self.conn.execute(
             "UPDATE holdings SET last_price = ?1, market = ?2, price_source = 'manual', price_as_of = ?3, updated_at = ?4 WHERE id = ?5",
             params![decimal_to_db(price), market, Utc::now().date_naive().to_string(), timestamp(Utc::now()), holding_id],
@@ -88,17 +86,17 @@ impl BookkeepingService {
         shares: Decimal,
         price: Decimal,
         fee: Decimal,
+        market: Option<Market>,
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
         positive_amount(shares)?;
         positive_amount(price)?;
         non_negative_fee(fee)?;
-        let symbol = normalize_symbol(&symbol)?;
+        let (market, symbol) = normalize_instrument(&symbol, market)?;
         let investment = (shares * price).round_dp(2);
         let cash = (investment + fee).round_dp(2);
         let description = trade_description("买入", &symbol, shares, price, fee);
-        let market = detect_market(&symbol).as_str().to_owned();
 
         let tx = self
             .conn
@@ -111,15 +109,15 @@ impl BookkeepingService {
             account.account_type.apply_outflow(account.balance, cash),
         )?;
 
-        let (new_shares, new_cost) = existing_position(&tx, account_id, &symbol)?
+        let (new_shares, new_cost) = existing_position(&tx, account_id, market, &symbol)?
             .map(|(shares0, cost0)| (shares0 + shares, cost0 + cash))
             .unwrap_or((shares, cash));
         tx.execute(
             "INSERT INTO holdings(account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'trade', ?7, ?8)
-             ON CONFLICT(account_id, symbol)
+             ON CONFLICT(account_id, market, symbol)
              DO UPDATE SET shares = excluded.shares, cost_basis = excluded.cost_basis, market = excluded.market, updated_at = excluded.updated_at",
-            params![account_id, symbol, decimal_to_db(new_shares), decimal_to_db(new_cost), decimal_to_db(price), market, occurred_at.date_naive().to_string(), timestamp(Utc::now())],
+            params![account_id, symbol, decimal_to_db(new_shares), decimal_to_db(new_cost), decimal_to_db(price), market.as_str(), occurred_at.date_naive().to_string(), timestamp(Utc::now())],
         )?;
         insert_trade_transaction(
             &tx,
@@ -144,13 +142,14 @@ impl BookkeepingService {
         shares: Decimal,
         price: Decimal,
         fee: Decimal,
+        market: Option<Market>,
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
         positive_amount(shares)?;
         positive_amount(price)?;
         non_negative_fee(fee)?;
-        let symbol = normalize_symbol(&symbol)?;
+        let (market, symbol) = normalize_instrument(&symbol, market)?;
         let gross_cash = (shares * price).round_dp(2);
         if fee > gross_cash {
             return Err(KokuError::InvalidInput(
@@ -165,7 +164,7 @@ impl BookkeepingService {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let account = Self::account_in_tx(&tx, account_id)?;
         ensure_investment_funding_account(&account)?;
-        let (shares0, cost0) = existing_position(&tx, account_id, &symbol)?
+        let (shares0, cost0) = existing_position(&tx, account_id, market, &symbol)?
             .ok_or_else(|| KokuError::InvalidInput(format!("no holding for symbol {symbol}")))?;
         if shares0 < shares {
             return Err(KokuError::InvalidInput(format!(
@@ -181,8 +180,8 @@ impl BookkeepingService {
         let new_shares = shares0 - shares;
         if new_shares.is_zero() {
             tx.execute(
-                "DELETE FROM holdings WHERE account_id = ?1 AND symbol = ?2",
-                params![account_id, symbol],
+                "DELETE FROM holdings WHERE account_id = ?1 AND market = ?2 AND symbol = ?3",
+                params![account_id, market.as_str(), symbol],
             )?;
         } else {
             let average_cost = if shares0.is_zero() {
@@ -193,12 +192,13 @@ impl BookkeepingService {
             let new_cost = cost0 - (average_cost * shares).round_dp(2);
             tx.execute(
                 "UPDATE holdings SET shares = ?1, cost_basis = ?2, updated_at = ?3
-                 WHERE account_id = ?4 AND symbol = ?5",
+                 WHERE account_id = ?4 AND market = ?5 AND symbol = ?6",
                 params![
                     decimal_to_db(new_shares),
                     decimal_to_db(new_cost),
                     timestamp(Utc::now()),
                     account_id,
+                    market.as_str(),
                     symbol
                 ],
             )?;
@@ -256,12 +256,13 @@ fn trade_description(
 fn existing_position(
     tx: &rusqlite::Transaction<'_>,
     account_id: i64,
+    market: Market,
     symbol: &str,
 ) -> Result<Option<(Decimal, Decimal)>> {
     let row = tx
         .query_row(
-            "SELECT shares, cost_basis FROM holdings WHERE account_id = ?1 AND symbol = ?2",
-            params![account_id, symbol],
+            "SELECT shares, cost_basis FROM holdings WHERE account_id = ?1 AND market = ?2 AND symbol = ?3",
+            params![account_id, market.as_str(), symbol],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?;
@@ -298,8 +299,15 @@ fn insert_trade_transaction(
     Ok(())
 }
 
-fn normalize_symbol(value: &str) -> Result<String> {
-    let symbol = value.trim().to_uppercase();
+fn normalize_instrument(value: &str, selected_market: Option<Market>) -> Result<(Market, String)> {
+    let input = value.trim().to_uppercase();
+    let market = selected_market.unwrap_or_else(|| detect_market(&input));
+    if market == Market::Unknown {
+        return Err(KokuError::InvalidInput(
+            "could not detect stock market; choose a market explicitly".to_owned(),
+        ));
+    }
+    let symbol = canonical_symbol(&input, market);
     if symbol.is_empty() {
         return Err(KokuError::InvalidInput(
             "stock symbol cannot be empty".to_owned(),
@@ -318,7 +326,25 @@ fn normalize_symbol(value: &str) -> Result<String> {
             "stock symbol must be alphanumeric (with . or -)".to_owned(),
         ));
     }
-    Ok(symbol)
+    match market {
+        Market::CnSh | Market::CnSz | Market::CnStar
+            if symbol.len() != 6 || !symbol.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            return Err(KokuError::InvalidInput(
+                "A-share symbols must be six digits".to_owned(),
+            ));
+        }
+        Market::Hk
+            if !(4..=5).contains(&symbol.len())
+                || !symbol.chars().all(|ch| ch.is_ascii_digit()) =>
+        {
+            return Err(KokuError::InvalidInput(
+                "Hong Kong stock symbols must be four or five digits".to_owned(),
+            ));
+        }
+        _ => {}
+    }
+    Ok((market, symbol))
 }
 
 type HoldingRow = (

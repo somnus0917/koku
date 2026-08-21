@@ -13,6 +13,7 @@ export interface HoldingQuote {
 export function buyStock(input: {
   account_id: number;
   symbol: string;
+  market?: Holding["market"];
   shares: string;
   price: string;
   fee?: string;
@@ -27,6 +28,7 @@ export function buyStock(input: {
 export function sellStock(input: {
   account_id: number;
   symbol: string;
+  market?: Holding["market"];
   shares: string;
   price: string;
   fee?: string;
@@ -39,8 +41,10 @@ export function sellStock(input: {
   });
 }
 /** 按代码查询当前参考价；未覆盖的标的可继续手动输入价格。 */
-export function getHoldingQuote(symbol: string): Promise<HoldingQuote> {
-  return request(`/api/holdings/quote?symbol=${encodeURIComponent(symbol)}`);
+export function getHoldingQuote(symbol: string, market?: Holding["market"]): Promise<HoldingQuote> {
+  const query = new URLSearchParams({ symbol });
+  if (market) query.set("market", market);
+  return request(`/api/holdings/quote?${query.toString()}`);
 }
 export function setHoldingPrice(holdingId: number, price: string): Promise<Holding> {
   return request(`/api/holdings/${holdingId}/price`, {

@@ -1214,6 +1214,7 @@ mod tests {
             Decimal::from(10_u32),
             Decimal::from(150_u32),
             Decimal::ZERO,
+            None,
             at,
             "".to_owned(),
         )?;
@@ -1241,6 +1242,7 @@ mod tests {
             Decimal::from(4_u32),
             Decimal::from(200_u32),
             Decimal::ZERO,
+            None,
             at,
             "".to_owned(),
         )?;
@@ -1257,6 +1259,7 @@ mod tests {
             Decimal::from(6_u32),
             Decimal::from(200_u32),
             Decimal::ZERO,
+            None,
             at,
             "".to_owned(),
         )?;
@@ -1277,6 +1280,7 @@ mod tests {
             Decimal::from(2_u32),
             Decimal::from(100_u32),
             Decimal::ZERO,
+            None,
             at,
             "首次建仓".to_owned(),
         )?;
@@ -1313,6 +1317,7 @@ mod tests {
             Decimal::from(2_u32),
             Decimal::from(100_u32),
             Decimal::from(3_u32),
+            None,
             at,
             "".to_owned(),
         )?;
@@ -1327,10 +1332,127 @@ mod tests {
             Decimal::from(1_u32),
             Decimal::from(110_u32),
             Decimal::from(2_u32),
+            None,
             at,
             "".to_owned(),
         )?;
         assert_eq!(service.account(cash.id)?.balance, Decimal::from(905_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn stock_positions_use_market_and_canonical_symbol_as_identity() -> Result<()> {
+        let mut service = test_service()?;
+        let cash = service.create_account(
+            "投资账户",
+            AccountType::Cash,
+            "USD",
+            Decimal::from(1000_u32),
+        )?;
+        let at = Utc::now();
+
+        service.buy_stock(
+            cash.id,
+            "NVDA".to_owned(),
+            Decimal::ONE,
+            Decimal::from(100_u32),
+            Decimal::ZERO,
+            None,
+            at,
+            "".to_owned(),
+        )?;
+        service.buy_stock(
+            cash.id,
+            "NVDA.US".to_owned(),
+            Decimal::ONE,
+            Decimal::from(110_u32),
+            Decimal::ZERO,
+            None,
+            at,
+            "".to_owned(),
+        )?;
+        // 同一美股的裸代码/后缀代码合并为一个持仓。
+        let holdings = service.holdings()?;
+        assert_eq!(holdings.len(), 1);
+        assert_eq!(holdings[0].symbol, "NVDA");
+        assert_eq!(holdings[0].market, "us");
+        assert_eq!(holdings[0].shares, Decimal::from(2_u32));
+
+        // 港股的补零与后缀写法也归并为同一标的；不同市场则独立存储。
+        service.buy_stock(
+            cash.id,
+            "700".to_owned(),
+            Decimal::ONE,
+            Decimal::from(120_u32),
+            Decimal::ZERO,
+            Some(crate::quotes::Market::Hk),
+            at,
+            "".to_owned(),
+        )?;
+        service.buy_stock(
+            cash.id,
+            "0700.HK".to_owned(),
+            Decimal::ONE,
+            Decimal::from(130_u32),
+            Decimal::ZERO,
+            None,
+            at,
+            "".to_owned(),
+        )?;
+        let holdings = service.holdings()?;
+        assert_eq!(holdings.len(), 2);
+        assert!(holdings.iter().any(|holding| holding.market == "us"));
+        assert!(holdings.iter().any(|holding| holding.market == "hk"
+            && holding.symbol == "0700"
+            && holding.shares == Decimal::from(2_u32)));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_duplicate_symbol_spellings_are_merged_during_migration() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT, account_type TEXT, currency TEXT, balance TEXT, created_at TEXT);
+            CREATE TABLE holdings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER NOT NULL REFERENCES accounts(id), symbol TEXT NOT NULL,
+                shares TEXT NOT NULL, cost_basis TEXT NOT NULL, last_price TEXT,
+                market TEXT NOT NULL DEFAULT 'unknown', price_source TEXT, price_as_of TEXT,
+                updated_at TEXT NOT NULL, UNIQUE(account_id, symbol)
+            );
+            INSERT INTO accounts VALUES (1, '现金', 'cash', 'USD', '0', '2026-01-01T00:00:00Z');
+            INSERT INTO holdings(account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at)
+                VALUES (1, 'NVDA', '1', '100', '100', 'unknown', 'trade', '2026-08-20', '2026-08-20T00:00:00Z');
+            INSERT INTO holdings(account_id, symbol, shares, cost_basis, last_price, market, price_source, price_as_of, updated_at)
+                VALUES (1, 'NVDA.US', '2', '220', '110', 'us', 'nasdaq', '2026-08-21', '2026-08-21T00:00:00Z');
+            "#,
+        )?;
+        super::migrations::rebuild_holdings_market_identity(&conn)?;
+        let (symbol, market, shares, cost, source): (String, String, String, String, String) = conn
+            .query_row(
+                "SELECT symbol, market, shares, cost_basis, price_source FROM holdings",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )?;
+        assert_eq!(
+            (symbol, market, shares, cost, source),
+            (
+                "NVDA".to_owned(),
+                "us".to_owned(),
+                "3".to_owned(),
+                "320".to_owned(),
+                "nasdaq".to_owned()
+            )
+        );
         Ok(())
     }
 

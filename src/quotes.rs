@@ -46,6 +46,16 @@ impl Market {
             _ => Self::Unknown,
         }
     }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "us" => Some(Self::Us),
+            "hk" => Some(Self::Hk),
+            "cn_sh" => Some(Self::CnSh),
+            "cn_sz" => Some(Self::CnSz),
+            "cn_star" => Some(Self::CnStar),
+            _ => None,
+        }
+    }
     /// 以交易所当地时区判断常规收盘，纽约时区会自动处理夏令时。
     pub fn close_has_passed(self, now: DateTime<Utc>) -> bool {
         match self {
@@ -121,6 +131,21 @@ pub fn detect_market(symbol: &str) -> Market {
     }
 }
 
+/// 移除交易所后缀并规范化代码；持仓的唯一标识始终是 `(market, symbol)`。
+/// 港股统一为至少四位，例如 `700` 与 `0700.HK` 都归为 `0700`。
+pub fn canonical_symbol(symbol: &str, market: Market) -> String {
+    let upper = symbol.trim().to_ascii_uppercase();
+    let code = [".US", ".HK", ".SS", ".SH", ".SZ"]
+        .iter()
+        .find_map(|suffix| upper.strip_suffix(suffix))
+        .unwrap_or(&upper);
+    if market == Market::Hk && code.chars().all(|ch| ch.is_ascii_digit()) {
+        format!("{code:0>4}")
+    } else {
+        code.to_owned()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Quote {
     pub symbol: String,
@@ -163,7 +188,12 @@ impl QuoteClient {
 
     /// 美股优先 Nasdaq（避免 Stooq 对部分代码的慢失败）；其他市场优先 Stooq，最后均回退 Yahoo Finance。
     pub async fn fetch(&self, symbol: &str) -> Result<Quote> {
-        let market = detect_market(symbol);
+        self.fetch_for_market(symbol, detect_market(symbol)).await
+    }
+
+    pub async fn fetch_for_market(&self, symbol: &str, market: Market) -> Result<Quote> {
+        let symbol = canonical_symbol(symbol, market);
+        let symbol = symbol.as_str();
         let stooq_symbol = stooq_symbol(symbol, market);
         let yahoo_symbol = yahoo_symbol(symbol, market);
         let mut errors = Vec::new();
