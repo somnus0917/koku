@@ -31,14 +31,25 @@ impl BookkeepingService {
         )?;
         let rows = statement.query_map([i64::from(limit.clamp(1, 200))], |row| {
             Ok((
-                row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })?;
         let mut events = Vec::new();
         for row in rows {
             let (id, action, entity_type, entity_id, summary, occurred_at) = row?;
-            events.push(ActivityEvent { id, action, entity_type, entity_id, summary, occurred_at: parse_timestamp(&occurred_at)? });
+            events.push(ActivityEvent {
+                id,
+                action,
+                entity_type,
+                entity_id,
+                summary,
+                occurred_at: parse_timestamp(&occurred_at)?,
+            });
         }
         Ok(events)
     }

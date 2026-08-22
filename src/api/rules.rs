@@ -113,7 +113,9 @@ async fn preview(
     AxumPath(id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Vec<TransactionRulePreview>>>> {
     Ok(Json(ApiResponse::new(
-        lock_ledger(&state, user.user_id).await?.preview_transaction_rule(id)?,
+        lock_ledger(&state, user.user_id)
+            .await?
+            .preview_transaction_rule(id)?,
     )))
 }
 pub(super) fn router() -> Router<AppState> {

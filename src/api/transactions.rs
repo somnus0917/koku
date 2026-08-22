@@ -191,7 +191,12 @@ async fn api_create_transaction(
         "transaction.created",
         "transaction",
         transaction.id,
-        format!("记录了{}：{} {}", transaction.kind.as_str(), transaction.amount, transaction.currency),
+        format!(
+            "记录了{}：{} {}",
+            transaction.kind.as_str(),
+            transaction.amount,
+            transaction.currency
+        ),
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
@@ -210,7 +215,15 @@ async fn api_create_transfer(
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
-    service.record_activity("transfer.created", "transaction", transaction.id, format!("记录了转账：{} {}", transaction.amount, transaction.currency))?;
+    service.record_activity(
+        "transfer.created",
+        "transaction",
+        transaction.id,
+        format!(
+            "记录了转账：{} {}",
+            transaction.amount, transaction.currency
+        ),
+    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -221,7 +234,15 @@ async fn api_void_transaction(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.void_transaction(transaction_id)?;
-    service.record_activity("transaction.voided", "transaction", transaction.id, format!("撤销了流水：{} {}", transaction.amount, transaction.currency))?;
+    service.record_activity(
+        "transaction.voided",
+        "transaction",
+        transaction.id,
+        format!(
+            "撤销了流水：{} {}",
+            transaction.amount, transaction.currency
+        ),
+    )?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -232,7 +253,15 @@ async fn api_restore_transaction(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.restore_transaction(transaction_id)?;
-    service.record_activity("transaction.restored", "transaction", transaction.id, format!("恢复了流水：{} {}", transaction.amount, transaction.currency))?;
+    service.record_activity(
+        "transaction.restored",
+        "transaction",
+        transaction.id,
+        format!(
+            "恢复了流水：{} {}",
+            transaction.amount, transaction.currency
+        ),
+    )?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -243,7 +272,12 @@ async fn api_delete_transaction(
 ) -> Result<StatusCode> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     service.delete_transaction(transaction_id)?;
-    service.record_activity("transaction.deleted", "transaction", transaction_id, "永久删除了一笔已撤销流水")?;
+    service.record_activity(
+        "transaction.deleted",
+        "transaction",
+        transaction_id,
+        "永久删除了一笔已撤销流水",
+    )?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -272,7 +306,15 @@ async fn api_update_transaction(
         request.tag_names.as_deref(),
         confirm_learning,
     )?;
-    service.record_activity("transaction.updated", "transaction", transaction.id, format!("修改了流水：{} {}", transaction.amount, transaction.currency))?;
+    service.record_activity(
+        "transaction.updated",
+        "transaction",
+        transaction.id,
+        format!(
+            "修改了流水：{} {}",
+            transaction.amount, transaction.currency
+        ),
+    )?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -342,7 +384,12 @@ async fn api_upload_receipt(
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
     let mut service = lock_ledger(&state, user.user_id).await?;
     let receipt = service.attach_receipt(transaction_id, content_type, data)?;
-    service.record_activity("receipt.attached", "transaction", transaction_id, "添加了交易凭证")?;
+    service.record_activity(
+        "receipt.attached",
+        "transaction",
+        transaction_id,
+        "添加了交易凭证",
+    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 

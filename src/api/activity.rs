@@ -11,7 +11,9 @@ use crate::error::Result;
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 
 #[derive(Debug, Deserialize)]
-struct ActivityQuery { limit: Option<u32> }
+struct ActivityQuery {
+    limit: Option<u32>,
+}
 
 async fn list(
     Extension(user): Extension<AuthenticatedUser>,
@@ -19,7 +21,9 @@ async fn list(
     Query(query): Query<ActivityQuery>,
 ) -> Result<Json<ApiResponse<Vec<ActivityEvent>>>> {
     Ok(Json(ApiResponse::new(
-        lock_ledger(&state, user.user_id).await?.activity_events(query.limit.unwrap_or(80))?,
+        lock_ledger(&state, user.user_id)
+            .await?
+            .activity_events(query.limit.unwrap_or(80))?,
     )))
 }
 

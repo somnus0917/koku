@@ -155,9 +155,16 @@ impl BookkeepingService {
                     current_category_id: transaction.category_id,
                     suggested_category_id: rule.category_id.or(transaction.category_id),
                     current_payee_name: transaction.payee_name.clone(),
-                    suggested_payee_name: rule.payee_name.clone().or(transaction.payee_name.clone()),
+                    suggested_payee_name: rule
+                        .payee_name
+                        .clone()
+                        .or(transaction.payee_name.clone()),
                     current_tags: transaction.tags.clone(),
-                    suggested_tags: if rule.tag_names.is_empty() { transaction.tags.clone() } else { rule.tag_names.clone() },
+                    suggested_tags: if rule.tag_names.is_empty() {
+                        transaction.tags.clone()
+                    } else {
+                        rule.tag_names.clone()
+                    },
                 });
             }
         }
@@ -165,7 +172,11 @@ impl BookkeepingService {
     }
 
     /// 应用预览中由用户确认的指定流水。过期或已不匹配的候选会被安全跳过。
-    pub fn apply_transaction_rule_preview(&mut self, rule_id: i64, transaction_ids: &[i64]) -> Result<usize> {
+    pub fn apply_transaction_rule_preview(
+        &mut self,
+        rule_id: i64,
+        transaction_ids: &[i64],
+    ) -> Result<usize> {
         let rule = self.transaction_rule(rule_id)?;
         if !rule.enabled {
             return Ok(0);
@@ -181,7 +192,11 @@ impl BookkeepingService {
         Ok(changed)
     }
 
-    fn apply_rule_to_transaction(&mut self, rule: &TransactionRule, transaction_id: i64) -> Result<()> {
+    fn apply_rule_to_transaction(
+        &mut self,
+        rule: &TransactionRule,
+        transaction_id: i64,
+    ) -> Result<()> {
         self.update_transaction_edit(
             transaction_id,
             None,
@@ -192,7 +207,11 @@ impl BookkeepingService {
             None,
             None,
             rule.payee_name.as_deref(),
-            if rule.tag_names.is_empty() { None } else { Some(&rule.tag_names) },
+            if rule.tag_names.is_empty() {
+                None
+            } else {
+                Some(&rule.tag_names)
+            },
             false,
         )?;
         Ok(())
@@ -334,11 +353,17 @@ fn rule_matches(rule: &TransactionRule, tx: &crate::domain::Transaction) -> bool
 }
 
 fn rule_changes_transaction(rule: &TransactionRule, tx: &crate::domain::Transaction) -> bool {
-    if tx.voided_at.is_some() || !matches!(tx.kind, TransactionKind::Expense | TransactionKind::Income) {
+    if tx.voided_at.is_some()
+        || !matches!(tx.kind, TransactionKind::Expense | TransactionKind::Income)
+    {
         return false;
     }
-    rule.category_id.is_some_and(|id| tx.category_id != Some(id))
-        || rule.payee_name.as_deref().is_some_and(|name| tx.payee_name.as_deref() != Some(name))
+    rule.category_id
+        .is_some_and(|id| tx.category_id != Some(id))
+        || rule
+            .payee_name
+            .as_deref()
+            .is_some_and(|name| tx.payee_name.as_deref() != Some(name))
         || (!rule.tag_names.is_empty() && tx.tags != rule.tag_names)
 }
 
@@ -375,7 +400,10 @@ mod tests {
         })?;
         let previews = service.preview_transaction_rule(rule.id)?;
         assert_eq!(previews.len(), 1);
-        assert_eq!(service.apply_transaction_rule_preview(rule.id, &[transaction.id])?, 1);
+        assert_eq!(
+            service.apply_transaction_rule_preview(rule.id, &[transaction.id])?,
+            1
+        );
         let updated = service.transaction(transaction.id)?;
         assert_eq!(updated.category_id, Some(transport.id));
         assert_eq!(updated.payee_name.as_deref(), Some("滴滴出行"));
