@@ -18,3 +18,4 @@ export * from "./reminders";
 export * from "./admin";
 export * from "./planning";
 export * from "./rules";
+export * from "./activity";

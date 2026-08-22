@@ -52,6 +52,7 @@ import { DepositModal } from "../features/deposits/DepositModal";
 import { SettleDepositModal } from "../features/deposits/SettleDepositModal";
 import { TradeModal } from "../features/holdings/TradeModal";
 import { InsightsPage } from "../features/insights/InsightsPage";
+import { ActivityPage } from "../features/activity/ActivityPage";
 import { TasksPage } from "../features/tasks/TasksPage";
 import { LedgerSettingsModal } from "../features/settings/LedgerSettingsModal";
 import { LoanModal } from "../features/loans/LoanModal";
@@ -385,6 +386,8 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             }
           />
         );
+      case "activity":
+        return <ActivityPage />;
       case "users":
         return <UsersAdminPage currentUserId={userId} />;
       case "system":

@@ -8,6 +8,7 @@ export const zh = {
         accounts: "账户",
         transactions: "交易",
         insights: "分析",
+        activity: "动态",
         users: "用户",
         system: "系统",
         main: "主导航",
@@ -47,6 +48,7 @@ export const zh = {
         opFailed: "操作失败",
         countItems: "{{count}} 项",
         quickAdd: "记一笔",
+        refresh: "刷新",
         changePassword: "修改密码",
         logout: "退出登录",
         language: "切换语言",
@@ -132,6 +134,16 @@ export const zh = {
         laneEmpty: "当前没有事项",
         kind: { deposit: "定期存款", loan: "借款", credit_card: "信用卡账单", bill: "固定账单" },
         action: { deposit: "结清", loan: "还款", credit_card: "查看账户", bill: "查看计划" }
+      },
+      activity: {
+        title: "活动轨迹",
+        hint: "记录账本中已完成的关键操作，便于回溯，不会改变任何账本数据。",
+        loadFailed: "无法读取活动轨迹",
+        emptyTitle: "还没有可显示的活动",
+        emptyDetail: "之后的记账、对账、报销与借款操作会显示在这里。",
+        action: {
+          "transaction.created": "创建交易", "transaction.updated": "修改交易", "transaction.voided": "撤销交易", "transaction.restored": "恢复交易", "transaction.deleted": "永久删除交易", "transfer.created": "记录转账", "receipt.attached": "添加凭证", "reimbursement.marked": "标记待报销", "reimbursement.unmarked": "取消待报销", "reimbursement.created": "完成报销", "reconciliation.created": "发起对账", "reconciliation.completed": "完成对账", "reconciliation.cancelled": "取消对账", "loan.created": "记录借款", "loan.repaid": "记录还款"
+        }
       },
       dashboard: {
         greeting: "今天，也把生活记清楚。",

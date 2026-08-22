@@ -187,6 +187,12 @@ async fn api_create_transaction(
         service.confirm_transaction_learning(transaction.id)?;
     }
     let transaction = service.transaction(transaction.id)?;
+    service.record_activity(
+        "transaction.created",
+        "transaction",
+        transaction.id,
+        format!("记录了{}：{} {}", transaction.kind.as_str(), transaction.amount, transaction.currency),
+    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -195,7 +201,8 @@ async fn api_create_transfer(
     State(state): State<AppState>,
     Json(request): Json<CreateTransferRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Transaction>>)> {
-    let transaction = lock_ledger(&state, user.user_id).await?.record_transfer(
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let transaction = service.record_transfer(
         request.from_account_id,
         request.to_account_id,
         request.source_amount,
@@ -203,6 +210,7 @@ async fn api_create_transfer(
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
+    service.record_activity("transfer.created", "transaction", transaction.id, format!("记录了转账：{} {}", transaction.amount, transaction.currency))?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -211,9 +219,9 @@ async fn api_void_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)
-        .await?
-        .void_transaction(transaction_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let transaction = service.void_transaction(transaction_id)?;
+    service.record_activity("transaction.voided", "transaction", transaction.id, format!("撤销了流水：{} {}", transaction.amount, transaction.currency))?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -222,9 +230,9 @@ async fn api_restore_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Transaction>>> {
-    let transaction = lock_ledger(&state, user.user_id)
-        .await?
-        .restore_transaction(transaction_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let transaction = service.restore_transaction(transaction_id)?;
+    service.record_activity("transaction.restored", "transaction", transaction.id, format!("恢复了流水：{} {}", transaction.amount, transaction.currency))?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -233,9 +241,9 @@ async fn api_delete_transaction(
     State(state): State<AppState>,
     AxumPath(transaction_id): AxumPath<i64>,
 ) -> Result<StatusCode> {
-    lock_ledger(&state, user.user_id)
-        .await?
-        .delete_transaction(transaction_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    service.delete_transaction(transaction_id)?;
+    service.record_activity("transaction.deleted", "transaction", transaction_id, "永久删除了一笔已撤销流水")?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -264,6 +272,7 @@ async fn api_update_transaction(
         request.tag_names.as_deref(),
         confirm_learning,
     )?;
+    service.record_activity("transaction.updated", "transaction", transaction.id, format!("修改了流水：{} {}", transaction.amount, transaction.currency))?;
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -331,11 +340,9 @@ async fn api_upload_receipt(
         KokuError::InvalidInput("multipart field \"file\" is required".to_owned())
     })?;
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
-    let receipt = lock_ledger(&state, user.user_id).await?.attach_receipt(
-        transaction_id,
-        content_type,
-        data,
-    )?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let receipt = service.attach_receipt(transaction_id, content_type, data)?;
+    service.record_activity("receipt.attached", "transaction", transaction_id, "添加了交易凭证")?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 

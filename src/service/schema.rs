@@ -232,6 +232,17 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_transaction_rules_priority
             ON transaction_rules(enabled, priority, id);
 
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            action      TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id   INTEGER NOT NULL,
+            summary     TEXT NOT NULL,
+            occurred_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_events_occurred_at
+            ON activity_events(occurred_at DESC, id DESC);
+
         CREATE TABLE IF NOT EXISTS import_profiles (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             name        TEXT NOT NULL UNIQUE,

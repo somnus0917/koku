@@ -1857,6 +1857,10 @@ button:disabled {
 .transaction-timeline h2 { position: relative; z-index: 1; display: inline-block; margin: 0 0 5px; padding: 0 10px 0 22px; background: var(--surface-raised); color: var(--text-soft); font-size: 11px; font-weight: 750; }
 .transaction-timeline h2::before { position: absolute; top: 3px; left: 1px; width: 10px; height: 10px; border: 3px solid var(--surface-raised); border-radius: 50%; background: var(--accent); content: ""; }
 
+.activity-feed { display: grid; padding-top: 9px; padding-bottom: 9px; }
+.activity-feed article { display: flex; align-items: center; gap: 12px; padding: 13px 3px; border-bottom: 1px solid var(--border); }
+.activity-feed article:last-child { border-bottom: 0; }.activity-feed article > span { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent-deep); }.activity-feed article strong, .activity-feed article small { display: block; }.activity-feed article strong { font-size: 12px; }.activity-feed article small { margin-top: 4px; color: var(--text-faint); font-size: 10px; }.activity-feed > p { margin: 10px 3px; color: var(--text-faint); font-size: 11px; }
+
 .search-box {
   flex: 1;
   max-width: 390px;

@@ -18,6 +18,7 @@ pub struct BookkeepingService {
 }
 
 mod accounts;
+mod activity;
 mod auth;
 mod budgets;
 mod credit_cards;

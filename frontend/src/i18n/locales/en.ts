@@ -8,6 +8,7 @@ export const en = {
         accounts: "Accounts",
         transactions: "Transactions",
         insights: "Insights",
+        activity: "Activity",
         users: "Users",
         system: "System",
         main: "Primary navigation",
@@ -47,6 +48,7 @@ export const en = {
         opFailed: "Operation failed",
         countItems: "{{count}} items",
         quickAdd: "Add entry",
+        refresh: "Refresh",
         changePassword: "Change password",
         logout: "Log out",
         language: "Switch language",
@@ -132,6 +134,16 @@ export const en = {
         laneEmpty: "Nothing here right now",
         kind: { deposit: "Fixed deposit", loan: "Loan", credit_card: "Credit card", bill: "Recurring bill" },
         action: { deposit: "Settle", loan: "Repay", credit_card: "View account", bill: "View plan" }
+      },
+      activity: {
+        title: "Activity history",
+        hint: "A read-only record of completed ledger actions, so you can trace changes without changing your books.",
+        loadFailed: "Unable to load activity history",
+        emptyTitle: "No activity to show yet",
+        emptyDetail: "New entries, reconciliations, reimbursements, and loans will appear here.",
+        action: {
+          "transaction.created": "Created transaction", "transaction.updated": "Updated transaction", "transaction.voided": "Voided transaction", "transaction.restored": "Restored transaction", "transaction.deleted": "Permanently deleted transaction", "transfer.created": "Recorded transfer", "receipt.attached": "Attached receipt", "reimbursement.marked": "Marked reimbursable", "reimbursement.unmarked": "Unmarked reimbursable", "reimbursement.created": "Recorded reimbursement", "reconciliation.created": "Started reconciliation", "reconciliation.completed": "Completed reconciliation", "reconciliation.cancelled": "Cancelled reconciliation", "loan.created": "Recorded loan", "loan.repaid": "Recorded repayment"
+        }
       },
       dashboard: {
         greeting: "Keep your life in order, one day at a time.",

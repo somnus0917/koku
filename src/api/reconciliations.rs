@@ -44,14 +44,14 @@ async fn api_create_reconciliation(
     State(state): State<AppState>,
     Json(request): Json<CreateReconciliationRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<Reconciliation>>)> {
-    let reconciliation = lock_ledger(&state, user.user_id)
-        .await?
-        .create_reconciliation(
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let reconciliation = service.create_reconciliation(
             request.account_id,
             &request.statement_date,
             request.statement_balance,
             &request.note,
         )?;
+    service.record_activity("reconciliation.created", "reconciliation", reconciliation.id, format!("发起了 {} 的账户对账", reconciliation.statement_date))?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(reconciliation))))
 }
 
@@ -60,9 +60,9 @@ async fn api_complete_reconciliation(
     State(state): State<AppState>,
     AxumPath(reconciliation_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Reconciliation>>> {
-    let reconciliation = lock_ledger(&state, user.user_id)
-        .await?
-        .complete_reconciliation(reconciliation_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let reconciliation = service.complete_reconciliation(reconciliation_id)?;
+    service.record_activity("reconciliation.completed", "reconciliation", reconciliation.id, "完成了账户对账")?;
     Ok(Json(ApiResponse::new(reconciliation)))
 }
 
@@ -71,9 +71,9 @@ async fn api_cancel_reconciliation(
     State(state): State<AppState>,
     AxumPath(reconciliation_id): AxumPath<i64>,
 ) -> Result<Json<ApiResponse<Reconciliation>>> {
-    let reconciliation = lock_ledger(&state, user.user_id)
-        .await?
-        .cancel_reconciliation(reconciliation_id)?;
+    let mut service = lock_ledger(&state, user.user_id).await?;
+    let reconciliation = service.cancel_reconciliation(reconciliation_id)?;
+    service.record_activity("reconciliation.cancelled", "reconciliation", reconciliation.id, "取消了账户对账")?;
     Ok(Json(ApiResponse::new(reconciliation)))
 }
 

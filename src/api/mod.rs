@@ -21,6 +21,7 @@ use crate::error::KokuError;
 use crate::ratelimit::rate_limit;
 
 mod accounts;
+mod activity;
 mod admin;
 mod auth;
 mod budgets;
@@ -92,6 +93,7 @@ async fn api_health() -> Json<state::ApiResponse<serde_json::Value>> {
 pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
     let protected = Router::new()
         .merge(accounts::router())
+        .merge(activity::router())
         .merge(categories::router())
         .merge(transactions::router())
         .merge(import_export::router())

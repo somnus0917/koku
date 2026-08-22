@@ -1,5 +1,6 @@
 //! 应用导航定义：视图 id 与图标。
 import {
+  Activity,
   ChartNoAxesCombined,
   ListTodo,
   LayoutDashboard,
@@ -10,7 +11,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 
-export type View = "dashboard" | "tasks" | "accounts" | "transactions" | "insights" | "users" | "system";
+export type View = "dashboard" | "tasks" | "accounts" | "transactions" | "insights" | "activity" | "users" | "system";
 
 export const NAV_ITEMS: Array<{ id: View; icon: LucideIcon }> = [
   { id: "dashboard", icon: LayoutDashboard },
@@ -18,6 +19,7 @@ export const NAV_ITEMS: Array<{ id: View; icon: LucideIcon }> = [
   { id: "accounts", icon: WalletCards },
   { id: "transactions", icon: ReceiptText },
   { id: "insights", icon: ChartNoAxesCombined },
+  { id: "activity", icon: Activity },
   { id: "users", icon: Users },
   { id: "system", icon: Settings }
 ];

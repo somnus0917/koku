@@ -588,6 +588,17 @@ pub struct TransactionRulePreview {
     pub suggested_tags: Vec<String>,
 }
 
+/// 账本内用户可见的操作轨迹。事件只存在所属用户的独立账本中。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityEvent {
+    pub id: i64,
+    pub action: String,
+    pub entity_type: String,
+    pub entity_id: i64,
+    pub summary: String,
+    pub occurred_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportProfile {
     pub id: i64,

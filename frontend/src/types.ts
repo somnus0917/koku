@@ -235,6 +235,15 @@ export interface TransactionRulePreview {
   suggested_tags: string[];
 }
 
+export interface ActivityEvent {
+  id: number;
+  action: string;
+  entity_type: string;
+  entity_id: number;
+  summary: string;
+  occurred_at: string;
+}
+
 export interface ImportProfile {
   id: number;
   name: string;
