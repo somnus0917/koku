@@ -5,7 +5,7 @@ use rusqlite::{params, OptionalExtension};
 use rust_decimal::Decimal;
 
 use super::*;
-use crate::domain::{TransactionKind, TransactionRule};
+use crate::domain::{TransactionKind, TransactionRule, TransactionRulePreview};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
@@ -131,21 +131,71 @@ impl BookkeepingService {
         Ok(applied)
     }
 
-    pub fn apply_transaction_rule_to_existing(&mut self, rule_id: i64) -> Result<usize> {
+    /// 返回真正会改变数据的历史匹配项；前端必须先展示这些项并要求用户确认。
+    pub fn preview_transaction_rule(&self, rule_id: i64) -> Result<Vec<TransactionRulePreview>> {
         let rule = self.transaction_rule(rule_id)?;
+        if !rule.enabled {
+            return Ok(Vec::new());
+        }
         let ids: Vec<i64> = self
             .conn
             .prepare("SELECT id FROM transactions ORDER BY id")?
             .query_map([], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-        let mut changed = 0;
+        let mut previews = Vec::new();
         for id in ids {
             let transaction = self.transaction(id)?;
-            if rule.enabled && rule_matches(&rule, &transaction) {
-                changed += self.apply_rules_to_transaction(id)?;
+            if rule_matches(&rule, &transaction) && rule_changes_transaction(&rule, &transaction) {
+                previews.push(TransactionRulePreview {
+                    transaction_id: transaction.id,
+                    occurred_at: transaction.occurred_at,
+                    note: transaction.note.clone(),
+                    amount: transaction.amount,
+                    currency: transaction.currency.clone(),
+                    current_category_id: transaction.category_id,
+                    suggested_category_id: rule.category_id.or(transaction.category_id),
+                    current_payee_name: transaction.payee_name.clone(),
+                    suggested_payee_name: rule.payee_name.clone().or(transaction.payee_name.clone()),
+                    current_tags: transaction.tags.clone(),
+                    suggested_tags: if rule.tag_names.is_empty() { transaction.tags.clone() } else { rule.tag_names.clone() },
+                });
+            }
+        }
+        Ok(previews)
+    }
+
+    /// 应用预览中由用户确认的指定流水。过期或已不匹配的候选会被安全跳过。
+    pub fn apply_transaction_rule_preview(&mut self, rule_id: i64, transaction_ids: &[i64]) -> Result<usize> {
+        let rule = self.transaction_rule(rule_id)?;
+        if !rule.enabled {
+            return Ok(0);
+        }
+        let mut changed = 0;
+        for id in transaction_ids {
+            let transaction = self.transaction(*id)?;
+            if rule_matches(&rule, &transaction) && rule_changes_transaction(&rule, &transaction) {
+                self.apply_rule_to_transaction(&rule, transaction.id)?;
+                changed += 1;
             }
         }
         Ok(changed)
+    }
+
+    fn apply_rule_to_transaction(&mut self, rule: &TransactionRule, transaction_id: i64) -> Result<()> {
+        self.update_transaction_edit(
+            transaction_id,
+            None,
+            None,
+            rule.category_id,
+            None,
+            None,
+            None,
+            None,
+            rule.payee_name.as_deref(),
+            if rule.tag_names.is_empty() { None } else { Some(&rule.tag_names) },
+            false,
+        )?;
+        Ok(())
     }
 
     fn transaction_rule(&self, id: i64) -> Result<TransactionRule> {
@@ -283,6 +333,15 @@ fn rule_matches(rule: &TransactionRule, tx: &crate::domain::Transaction) -> bool
     true
 }
 
+fn rule_changes_transaction(rule: &TransactionRule, tx: &crate::domain::Transaction) -> bool {
+    if tx.voided_at.is_some() || !matches!(tx.kind, TransactionKind::Expense | TransactionKind::Income) {
+        return false;
+    }
+    rule.category_id.is_some_and(|id| tx.category_id != Some(id))
+        || rule.payee_name.as_deref().is_some_and(|name| tx.payee_name.as_deref() != Some(name))
+        || (!rule.tag_names.is_empty() && tx.tags != rule.tag_names)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,7 +373,9 @@ mod tests {
             payee_name: Some("滴滴出行".into()),
             tag_names: vec!["通勤".into()],
         })?;
-        assert_eq!(service.apply_transaction_rule_to_existing(rule.id)?, 1);
+        let previews = service.preview_transaction_rule(rule.id)?;
+        assert_eq!(previews.len(), 1);
+        assert_eq!(service.apply_transaction_rule_preview(rule.id, &[transaction.id])?, 1);
         let updated = service.transaction(transaction.id)?;
         assert_eq!(updated.category_id, Some(transport.id));
         assert_eq!(updated.payee_name.as_deref(), Some("滴滴出行"));

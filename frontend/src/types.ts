@@ -220,6 +220,21 @@ export interface TransactionRule {
   updated_at: string;
 }
 
+/** 一条分类规则对历史流水的待确认修改，不会在预览阶段写入账本。 */
+export interface TransactionRulePreview {
+  transaction_id: number;
+  occurred_at: string;
+  note: string;
+  amount: string;
+  currency: string;
+  current_category_id: number | null;
+  suggested_category_id: number | null;
+  current_payee_name: string | null;
+  suggested_payee_name: string | null;
+  current_tags: string[];
+  suggested_tags: string[];
+}
+
 export interface ImportProfile {
   id: number;
   name: string;

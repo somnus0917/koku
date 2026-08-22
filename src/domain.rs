@@ -572,6 +572,22 @@ pub struct TransactionRule {
     pub updated_at: DateTime<Utc>,
 }
 
+/// 单条规则在某笔历史交易上的可确认修改预览。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransactionRulePreview {
+    pub transaction_id: i64,
+    pub occurred_at: DateTime<Utc>,
+    pub note: String,
+    pub amount: Decimal,
+    pub currency: String,
+    pub current_category_id: Option<i64>,
+    pub suggested_category_id: Option<i64>,
+    pub current_payee_name: Option<String>,
+    pub suggested_payee_name: Option<String>,
+    pub current_tags: Vec<String>,
+    pub suggested_tags: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportProfile {
     pub id: i64,

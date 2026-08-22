@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
-use crate::domain::{TransactionKind, TransactionRule};
+use crate::domain::{TransactionKind, TransactionRule, TransactionRulePreview};
 use crate::error::Result;
 use crate::service::rules::TransactionRuleInput;
 
@@ -26,6 +26,11 @@ struct RuleRequest {
     payee_name: Option<String>,
     #[serde(default)]
     tag_names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplyRuleRequest {
+    transaction_ids: Vec<i64>,
 }
 fn enabled_by_default() -> bool {
     true
@@ -93,17 +98,28 @@ async fn apply(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
     AxumPath(id): AxumPath<i64>,
+    Json(body): Json<ApplyRuleRequest>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
     let changed = lock_ledger(&state, user.user_id)
         .await?
-        .apply_transaction_rule_to_existing(id)?;
+        .apply_transaction_rule_preview(id, &body.transaction_ids)?;
     Ok(Json(ApiResponse::new(
         serde_json::json!({"applied":changed}),
+    )))
+}
+async fn preview(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Vec<TransactionRulePreview>>>> {
+    Ok(Json(ApiResponse::new(
+        lock_ledger(&state, user.user_id).await?.preview_transaction_rule(id)?,
     )))
 }
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/rules", get(list).post(create))
         .route("/api/rules/{id}", put(update).delete(remove))
+        .route("/api/rules/{id}/preview", get(preview))
         .route("/api/rules/{id}/apply", post(apply))
 }
