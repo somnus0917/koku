@@ -237,6 +237,8 @@ export const en = {
         settled: "Deposit settled, principal and interest transferred back"
       },
       transactions: {
+        viewMode: { label: "Transaction view", table: "Table view", timeline: "Timeline view" },
+        savedViews: { label: "Saved views", save: "Save view", namePrompt: "Name the current filters and view", remove: "Remove view {{name}}" },
         title: "Transactions",
         searchPlaceholder: "Search notes, categories or accounts",
         kind: {

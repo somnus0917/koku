@@ -1831,6 +1831,32 @@ button:disabled {
   margin-bottom: 15px;
 }
 
+.transaction-view-actions,
+.view-mode-toggle,
+.saved-views,
+.saved-view-chip {
+  display: flex;
+  align-items: center;
+}
+
+.transaction-view-actions { gap: 8px; }
+.view-mode-toggle { height: 42px; padding: 3px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.view-mode-toggle button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--text-soft); }
+.view-mode-toggle button.active { background: var(--surface-muted); color: var(--accent-deep); }
+.save-view-button { height: 42px; padding: 0 11px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.saved-views { flex-wrap: wrap; gap: 7px; margin: -4px 0 15px; }
+.saved-views > span { margin-right: 2px; color: var(--text-faint); font-size: 10px; font-weight: 700; }
+.saved-view-chip { overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-raised); }
+.saved-view-chip button { height: 27px; border: 0; background: transparent; color: var(--text-soft); font-size: 10px; }
+.saved-view-chip button:first-child { padding: 0 8px 0 11px; font-weight: 650; }
+.saved-view-chip button:last-child { display: grid; width: 25px; place-items: center; padding: 0; color: var(--text-faint); }
+.saved-view-chip button:hover { color: var(--accent-deep); background: var(--surface-muted); }
+.transaction-timeline { display: grid; gap: 23px; padding-top: 15px; }
+.transaction-timeline section { position: relative; }
+.transaction-timeline section::before { position: absolute; top: 36px; bottom: 0; left: 6px; width: 1px; background: var(--border); content: ""; }
+.transaction-timeline h2 { position: relative; z-index: 1; display: inline-block; margin: 0 0 5px; padding: 0 10px 0 22px; background: var(--surface-raised); color: var(--text-soft); font-size: 11px; font-weight: 750; }
+.transaction-timeline h2::before { position: absolute; top: 3px; left: 1px; width: 10px; height: 10px; border: 3px solid var(--surface-raised); border-radius: 50%; background: var(--accent); content: ""; }
+
 .search-box {
   flex: 1;
   max-width: 390px;

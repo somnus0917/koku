@@ -237,6 +237,8 @@ export const zh = {
         settled: "定期已结清，本息已转回"
       },
       transactions: {
+        viewMode: { label: "流水视图", table: "表格视图", timeline: "时间轴视图" },
+        savedViews: { label: "保存的视图", save: "保存视图", namePrompt: "为当前筛选和视图命名", remove: "删除视图 {{name}}" },
         title: "交易流水",
         searchPlaceholder: "搜索备注、分类或账户",
         kind: {

@@ -1,7 +1,7 @@
 //! 交易页：搜索/筛选/导出/导入与流水表格。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Download, LoaderCircle, Plus, Search, Tags, Upload } from "lucide-react";
+import { BookmarkPlus, Download, List, LoaderCircle, Plus, Rows3, Search, Tags, Trash2, Upload } from "lucide-react";
 import { PageTitle } from "../../components/PageTitle";
 import { EmptyState } from "../../components/EmptyState";
 import { useConversionRates } from "../../components/accountDisplay";
@@ -9,6 +9,25 @@ import { TransactionRow } from "./TransactionRow";
 import { exportTransactions, loadTagSummary } from "../../api";
 import { formatMoney } from "../../lib";
 import type { AppData, Tag, TagSummary, Transaction, TransactionKind } from "../../types";
+
+type TransactionViewMode = "table" | "timeline";
+type SavedTransactionView = { id: string; name: string; search: string; kind: "all" | TransactionKind; tags: string[]; mode: TransactionViewMode };
+const SAVED_VIEWS_KEY = "koku.transaction.saved-views.v1";
+
+function readSavedViews(): SavedTransactionView[] {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(SAVED_VIEWS_KEY) ?? "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is SavedTransactionView => Boolean(item) && typeof item === "object" && typeof item.id === "string" && typeof item.name === "string" && typeof item.search === "string" && (item.kind === "all" || typeof item.kind === "string") && Array.isArray(item.tags) && (item.mode === "table" || item.mode === "timeline"));
+  } catch {
+    return [];
+  }
+}
+
+function dateGroup(value: string): string {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", weekday: "short" }).format(date);
+}
 
 /**
  * 标签多选下拉：可同时勾选多个标签（AND 语义），选中后标签筛选生效。
@@ -116,6 +135,8 @@ export function TransactionsPage({
   const [tagSummaryError, setTagSummaryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [mode, setMode] = useState<TransactionViewMode>(() => window.localStorage.getItem("koku.transaction.view-mode") === "timeline" ? "timeline" : "table");
+  const [savedViews, setSavedViews] = useState<SavedTransactionView[]>(readSavedViews);
   const { t } = useTranslation();
   const handleExport = async () => {
     setExporting(true);
@@ -137,6 +158,25 @@ export function TransactionsPage({
   );
   const rates = useConversionRates(txCurrencies, display);
   const tagFilterKey = tagFilter.join(",");
+  const persistSavedViews = (next: SavedTransactionView[]) => {
+    setSavedViews(next);
+    window.localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(next));
+  };
+  const saveCurrentView = () => {
+    const name = window.prompt(t("transactions.savedViews.namePrompt"));
+    if (!name?.trim()) return;
+    persistSavedViews([...savedViews, { id: crypto.randomUUID(), name: name.trim().slice(0, 40), search, kind, tags: tagFilter, mode }]);
+  };
+  const selectSavedView = (view: SavedTransactionView) => {
+    setSearch(view.search);
+    setKind(view.kind);
+    setTagFilter(view.tags);
+    setMode(view.mode);
+  };
+  const changeMode = (next: TransactionViewMode) => {
+    setMode(next);
+    window.localStorage.setItem("koku.transaction.view-mode", next);
+  };
   useEffect(() => {
     const timer = window.setTimeout(() => onFilterChange?.({ search, kind, tags: tagFilter }), 250);
     return () => window.clearTimeout(timer);
@@ -172,6 +212,32 @@ export function TransactionsPage({
     const matchesTag = tagFilter.length === 0 || tagFilter.every((name) => item.tags.includes(name));
     return matchesSearch && matchesTag && (kind === "all" || item.kind === kind);
   });
+  const timelineGroups = filtered.reduce<Array<{ day: string; items: Transaction[] }>>((groups, item) => {
+    const day = item.occurred_at.slice(0, 10);
+    const current = groups.at(-1);
+    if (current?.day === day) current.items.push(item);
+    else groups.push({ day, items: [item] });
+    return groups;
+  }, []);
+  const row = (transaction: Transaction) => (
+    <TransactionRow
+      key={transaction.id}
+      transaction={transaction}
+      account={accountsById.get(transaction.account_id)}
+      target={transaction.to_account_id ? accountsById.get(transaction.to_account_id) : undefined}
+      category={transaction.category_id ? categoriesById.get(transaction.category_id) : undefined}
+      display={display}
+      rates={rates}
+      onVoid={() => onVoid(transaction)}
+      onRestore={() => onRestore(transaction)}
+      onDeletePermanently={() => onDeletePermanently(transaction)}
+      onMarkReimbursable={() => onMarkReimbursable(transaction)}
+      onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
+      onReimburse={() => onReimburse(transaction)}
+      onEdit={() => onEdit(transaction)}
+      onUploadReceipt={(file) => onUploadReceipt(transaction, file)}
+    />
+  );
   return (
     <div className="page page-enter">
       <PageTitle
@@ -213,7 +279,15 @@ export function TransactionsPage({
         >
           <Upload size={16} /> {t("transactions.import")}
         </button>
+        <div className="transaction-view-actions">
+          <div className="view-mode-toggle" aria-label={t("transactions.viewMode.label")}>
+            <button type="button" className={mode === "table" ? "active" : ""} onClick={() => changeMode("table")} title={t("transactions.viewMode.table")}><List size={16} /></button>
+            <button type="button" className={mode === "timeline" ? "active" : ""} onClick={() => changeMode("timeline")} title={t("transactions.viewMode.timeline")}><Rows3 size={16} /></button>
+          </div>
+          <button type="button" className="text-button save-view-button" onClick={saveCurrentView}><BookmarkPlus size={16} /> {t("transactions.savedViews.save")}</button>
+        </div>
       </div>
+      {savedViews.length > 0 && <div className="saved-views" aria-label={t("transactions.savedViews.label")}><span>{t("transactions.savedViews.label")}</span>{savedViews.map((view) => <div className="saved-view-chip" key={view.id}><button type="button" onClick={() => selectSavedView(view)}>{view.name}</button><button type="button" onClick={() => persistSavedViews(savedViews.filter((item) => item.id !== view.id))} aria-label={t("transactions.savedViews.remove", { name: view.name })}><Trash2 size={12} /></button></div>)}</div>}
       {tagFilter.length > 0 && (
         <section className="tag-summary" aria-label={t("transactions.tagSummaryAria")}>
           {tagSummaryError ? (
@@ -249,29 +323,14 @@ export function TransactionsPage({
         </section>
       )}
       {exportError && <div className="inline-error">{t("transactions.exportFailed")}{exportError}</div>}
-      <article className="panel transaction-table">
+      {mode === "table" ? <article className="panel transaction-table">
         <div className="table-header"><span>{t("transactions.colTransaction")}</span><span>{t("transactions.colAccount")}</span><span>{t("transactions.colDate")}</span><span>{t("transactions.colAmount")}</span><span /><span /></div>
-        {filtered.map((transaction) => (
-          <TransactionRow
-            key={transaction.id}
-            transaction={transaction}
-            account={accountsById.get(transaction.account_id)}
-            target={transaction.to_account_id ? accountsById.get(transaction.to_account_id) : undefined}
-            category={transaction.category_id ? categoriesById.get(transaction.category_id) : undefined}
-            display={display}
-            rates={rates}
-            onVoid={() => onVoid(transaction)}
-            onRestore={() => onRestore(transaction)}
-            onDeletePermanently={() => onDeletePermanently(transaction)}
-            onMarkReimbursable={() => onMarkReimbursable(transaction)}
-            onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
-            onReimburse={() => onReimburse(transaction)}
-            onEdit={() => onEdit(transaction)}
-            onUploadReceipt={(file) => onUploadReceipt(transaction, file)}
-          />
-        ))}
+        {filtered.map(row)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
-      </article>
+      </article> : <div className="transaction-timeline panel">
+        {timelineGroups.map((group) => <section key={group.day}><h2>{dateGroup(group.day)}</h2>{group.items.map(row)}</section>)}
+        {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
+      </div>}
       {hasMore && (
         <div className="load-more-row">
           <button
