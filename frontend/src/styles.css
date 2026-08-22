@@ -1282,6 +1282,75 @@ button:disabled {
   margin-top: 42px;
 }
 
+.page-hint {
+  max-width: 650px;
+  margin: -15px 0 24px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.financial-task-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.financial-task-lane {
+  min-height: 310px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-muted);
+}
+
+.financial-task-lane > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 4px 14px;
+}
+
+.financial-task-lane > header > span {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--accent-deep);
+}
+
+.financial-task-lane.urgent > header > span { color: var(--expense); background: var(--expense-soft); }
+.financial-task-lane.soon > header > span { color: #8a593f; background: #f8eee7; }
+
+.financial-task-lane header div { min-width: 0; }
+.financial-task-lane header small { display: block; color: var(--text-faint); font-size: 8px; font-weight: 800; letter-spacing: .12em; }
+.financial-task-lane header h2 { margin: 3px 0 0; font-size: 14px; font-weight: 700; }
+.financial-task-lane header em { margin-left: auto; color: var(--text-faint); font-size: 11px; font-style: normal; font-weight: 700; }
+
+.financial-task-list { display: grid; gap: 9px; }
+.financial-task-list > p { margin: 9px 4px; color: var(--text-faint); font-size: 11px; }
+
+.financial-task-card {
+  display: grid;
+  grid-template-columns: 33px minmax(0, 1fr);
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 13px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-small);
+}
+
+.financial-task-card.overdue { border-color: color-mix(in srgb, var(--expense) 42%, var(--border)); }
+.financial-task-icon { display: grid; width: 33px; height: 33px; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent-deep); }
+.financial-task-copy { min-width: 0; }
+.financial-task-copy small, .financial-task-copy span { display: block; color: var(--text-faint); font-size: 9px; }
+.financial-task-copy strong { display: block; margin: 3px 0 5px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.financial-task-card .text-button { grid-column: 2; justify-self: start; margin-top: 1px; padding: 2px 0; }
+
 .section-heading {
   display: flex;
   align-items: flex-end;
@@ -2832,6 +2901,8 @@ button:disabled {
   .insight-kpis { grid-template-columns: 1fr 1fr; }
   .account-grid { grid-template-columns: 1fr; }
   .insights-grid { grid-template-columns: 1fr; }
+  .financial-task-board { grid-template-columns: 1fr; }
+  .financial-task-lane { min-height: 0; }
   .transaction-row,
   .table-header { grid-template-columns: minmax(180px, 1.4fr) 130px minmax(100px, 0.7fr) 105px 36px; }
   .transaction-row .table-date,

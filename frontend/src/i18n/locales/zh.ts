@@ -4,6 +4,7 @@ export const zh = {
   translation: {
       nav: {
         dashboard: "总览",
+        tasks: "待办",
         accounts: "账户",
         transactions: "交易",
         insights: "分析",
@@ -118,6 +119,19 @@ export const zh = {
         sendDigest: "发送邮件提醒",
         digestSent: "邮件提醒已发送（{{count}} 条）",
         sendFailed: "发送失败"
+      },
+      tasks: {
+        title: "资金待办",
+        hint: "把需要你确认或处理的资金事项集中起来；完成结清、还款或入账后，它们会自动离开这里。",
+        emptyTitle: "没有待处理的资金事项",
+        emptyDetail: "定存、借款、信用卡账单与固定账单接近到期时会显示在这里。",
+        overdue: "已逾期",
+        dueIn: "{{days}} 天后到期",
+        lane: { urgent: "现在处理", soon: "本周处理", planned: "计划中" },
+        laneLabel: { urgent: "ACTION NOW", soon: "THIS WEEK", planned: "AHEAD" },
+        laneEmpty: "当前没有事项",
+        kind: { deposit: "定期存款", loan: "借款", credit_card: "信用卡账单", bill: "固定账单" },
+        action: { deposit: "结清", loan: "还款", credit_card: "查看账户", bill: "查看计划" }
       },
       dashboard: {
         greeting: "今天，也把生活记清楚。",

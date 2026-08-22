@@ -473,7 +473,7 @@ export interface Reconciliation {
 
 /** 到期提醒项（存款到期 / 借款到期 / 信用卡账单）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan" | "credit_card";
+  kind: "deposit" | "loan" | "credit_card" | "bill";
   id: number;
   title: string;
   amount: string;

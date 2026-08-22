@@ -4,6 +4,7 @@ export const en = {
   translation: {
       nav: {
         dashboard: "Dashboard",
+        tasks: "Tasks",
         accounts: "Accounts",
         transactions: "Transactions",
         insights: "Insights",
@@ -118,6 +119,19 @@ export const en = {
         sendDigest: "Send digest email",
         digestSent: "Digest email sent ({{count}} reminders)",
         sendFailed: "Failed to send"
+      },
+      tasks: {
+        title: "Financial tasks",
+        hint: "Keep every financial item that needs your confirmation or action in one place. It leaves this board automatically after you settle, repay, or record it.",
+        emptyTitle: "No financial tasks to handle",
+        emptyDetail: "Maturing deposits, loans, credit-card statements, and recurring bills will appear here.",
+        overdue: "Overdue",
+        dueIn: "due in {{days}} days",
+        lane: { urgent: "Act now", soon: "This week", planned: "Planned" },
+        laneLabel: { urgent: "ACTION NOW", soon: "THIS WEEK", planned: "AHEAD" },
+        laneEmpty: "Nothing here right now",
+        kind: { deposit: "Fixed deposit", loan: "Loan", credit_card: "Credit card", bill: "Recurring bill" },
+        action: { deposit: "Settle", loan: "Repay", credit_card: "View account", bill: "View plan" }
       },
       dashboard: {
         greeting: "Keep your life in order, one day at a time.",

@@ -52,6 +52,7 @@ import { DepositModal } from "../features/deposits/DepositModal";
 import { SettleDepositModal } from "../features/deposits/SettleDepositModal";
 import { TradeModal } from "../features/holdings/TradeModal";
 import { InsightsPage } from "../features/insights/InsightsPage";
+import { TasksPage } from "../features/tasks/TasksPage";
 import { LedgerSettingsModal } from "../features/settings/LedgerSettingsModal";
 import { LoanModal } from "../features/loans/LoanModal";
 import { LoansSection } from "../features/loans/LoansSection";
@@ -249,6 +250,26 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
     if (error && !data) return <ErrorState message={error} onRetry={() => void refresh()} />;
     if (!data) return null;
     switch (activeView) {
+      case "tasks":
+        return <TasksPage reminders={reminders} onOpen={(item) => {
+          if (item.kind === "deposit") {
+            const deposit = data.deposits.find((candidate) => candidate.id === item.id);
+            if (deposit) {
+              setSettleTarget(deposit);
+              setModal("settle");
+              return;
+            }
+          }
+          if (item.kind === "loan") {
+            const loan = data.loans.find((candidate) => candidate.id === item.id);
+            if (loan) {
+              setLoanTarget(loan);
+              setModal("repay");
+              return;
+            }
+          }
+          setActiveView("accounts");
+        }} />;
       case "accounts":
         return (
           <AccountsPage
