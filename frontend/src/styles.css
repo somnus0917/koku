@@ -1895,6 +1895,40 @@ button:disabled {
 .receipt-ticket-total { padding-top: 1px; }.receipt-ticket-total span, .receipt-ticket-total strong { display: block; }.receipt-ticket-total span { color: #81796d; font-size: 8px; font-weight: 700; letter-spacing: .1em; }.receipt-ticket-total strong { margin-top: 4px; font-size: 17px; letter-spacing: -.025em; }.receipt-ticket.large .receipt-ticket-total strong { font-size: 24px; }.receipt-ticket.expense .receipt-ticket-total strong { color: #b4653f; }.receipt-ticket.income .receipt-ticket-total strong { color: #2d7557; }.receipt-ticket-total i { display: block; height: 2px; margin-top: 8px; overflow: hidden; background: #efefe9; }.receipt-ticket-total i::before { display: block; width: var(--ticket-proportion); height: 100%; background: #769582; content: ""; }.receipt-ticket.expense .receipt-ticket-total i::before { background: #dd8d5b; }
 .receipt-ticket footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #837a6c; font-size: 9px; }.receipt-ticket footer > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.receipt-ticket footer > div { display: flex; align-items: center; gap: 7px; }.receipt-paperclip { display: inline-flex; align-items: center; gap: 3px; }.receipt-ticket footer button { display: grid; width: 26px; height: 26px; place-items: center; border: 1px solid #d8cfc2; border-radius: 50%; background: transparent; color: #716759; }.receipt-ticket footer button:hover { border-color: #a68b70; color: #493c30; }
 
+/* 深色主题保留“贴在看板上”的层次，但避免浅色纸张在暗色界面中形成刺眼的大块反差。 */
+:root[data-theme="dark"] .receipt-wall {
+  border-color: #3b4036;
+  background: #2a3028;
+}
+
+:root[data-theme="dark"] .receipt-day > h2 {
+  background: #343a32;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, .36);
+  color: #e4e7dd;
+}
+
+:root[data-theme="dark"] .receipt-ticket {
+  --ticket-paper: #33382f;
+  box-shadow: 0 3px 9px rgba(0, 0, 0, .34);
+  color: #edf0e8;
+}
+
+:root[data-theme="dark"] .receipt-ticket.income { --ticket-paper: #2d3b31; }
+:root[data-theme="dark"] .receipt-ticket.expense { --ticket-paper: #3c342d; }
+:root[data-theme="dark"] .receipt-ticket:hover { box-shadow: 0 10px 16px rgba(0, 0, 0, .46); }
+:root[data-theme="dark"] .receipt-pin { border-color: #2a3028; background: #90c3aa; }
+:root[data-theme="dark"] .receipt-ticket.large .receipt-pin { background: #d4b56a; }
+:root[data-theme="dark"] .receipt-ticket time,
+:root[data-theme="dark"] .receipt-ticket-copy small,
+:root[data-theme="dark"] .receipt-ticket-total span,
+:root[data-theme="dark"] .receipt-ticket footer { color: #aeb5a7; }
+:root[data-theme="dark"] .receipt-ticket-copy strong { color: #f1f3ed; }
+:root[data-theme="dark"] .receipt-ticket-total i { background: rgba(225, 231, 218, .14); }
+:root[data-theme="dark"] .receipt-ticket.expense .receipt-ticket-total strong { color: #f0a783; }
+:root[data-theme="dark"] .receipt-ticket.income .receipt-ticket-total strong { color: #9bd1ae; }
+:root[data-theme="dark"] .receipt-ticket footer button { border-color: #62695d; color: #d7ddd1; }
+:root[data-theme="dark"] .receipt-ticket footer button:hover { border-color: #a7b2a0; color: #fff; }
+
 .activity-feed { display: grid; padding-top: 9px; padding-bottom: 9px; }
 .activity-feed article { display: flex; align-items: center; gap: 12px; padding: 13px 3px; border-bottom: 1px solid var(--border); }
 .activity-feed article:last-child { border-bottom: 0; }.activity-feed article > span { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent-deep); }.activity-feed article strong, .activity-feed article small { display: block; }.activity-feed article strong { font-size: 12px; }.activity-feed article small { margin-top: 4px; color: var(--text-faint); font-size: 10px; }.activity-feed > p { margin: 10px 3px; color: var(--text-faint); font-size: 11px; }
