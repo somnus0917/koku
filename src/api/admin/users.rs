@@ -14,7 +14,8 @@ use super::super::state::{lock_auth, ApiResponse, AppState, AuthenticatedUser};
 
 #[derive(Debug, Deserialize)]
 struct CreateUserRequest {
-    username: String,
+    #[serde(alias = "username")]
+    email: String,
     password: String,
 }
 
@@ -53,21 +54,14 @@ async fn api_create_user(
     Json(request): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<User>>)> {
     user.require_admin()?;
-    if request.username.trim().is_empty() {
-        return Err(KokuError::InvalidInput(
-            "username cannot be empty".to_owned(),
-        ));
-    }
     if lock_auth(&state)?
-        .user_by_username(&request.username)?
+        .user_by_username(&request.email)?
         .is_some()
     {
-        return Err(KokuError::InvalidInput(
-            "username already exists".to_owned(),
-        ));
+        return Err(KokuError::InvalidInput("email already exists".to_owned()));
     }
     let hash = hash_password(request.password).await?;
-    let created = lock_auth(&state)?.create_user(&request.username, &hash, UserRole::Member)?;
+    let created = lock_auth(&state)?.create_user(&request.email, &hash, UserRole::Member)?;
     tracing::info!(target: "auth", "admin {} created user {}", user.username, created.username);
     Ok((StatusCode::CREATED, Json(ApiResponse::new(created))))
 }

@@ -39,6 +39,7 @@ impl UserRole {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub id: i64,
+    #[serde(rename = "email")]
     pub username: String,
     /// bcrypt 密码哈希；序列化时隐藏。
     #[serde(skip_serializing)]
@@ -54,10 +55,32 @@ pub struct User {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthSession {
     pub id: i64,
+    #[serde(rename = "email")]
     pub username: String,
     pub role: UserRole,
     /// 当前用户是否启用 TOTP（前端据此展示二步验证设置入口）。
     pub totp_enabled: bool,
+}
+
+/// 规范化并校验登录邮箱。数据库的历史列名仍为 `username`，但新账号只允许邮箱。
+pub fn normalize_email(value: &str) -> Result<String> {
+    let email = value.trim().to_ascii_lowercase();
+    let valid = email.len() <= 254
+        && email.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && local.len() <= 64
+                && !domain.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !email.chars().any(char::is_whitespace)
+        });
+    if !valid {
+        return Err(KokuError::InvalidInput(
+            "a valid email address is required".to_owned(),
+        ));
+    }
+    Ok(email)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

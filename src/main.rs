@@ -249,7 +249,7 @@ async fn run_server() -> Result<()> {
     }
 
     // 到期提醒邮件：配置了 SMTP 时按 KOKU_SMTP_INTERVAL_HOURS（默认 24 小时）
-    // 把管理员账本中 30 天内的到期提醒发到 KOKU_SMTP_TO。
+    // 为每个启用用户读取其独立账本，并发送到其登录邮箱。
     if let Some(mailer_config) = mailer::MailerConfig::from_env()? {
         let smtp_interval_hours = std::env::var("KOKU_SMTP_INTERVAL_HOURS")
             .unwrap_or_else(|_| "24".to_owned())
@@ -259,39 +259,55 @@ async fn run_server() -> Result<()> {
                     "KOKU_SMTP_INTERVAL_HOURS must be an integer: {error}"
                 ))
             })?;
-        let smtp_admin_id = admin_id;
-        let smtp_ledger_dir = ledger_dir.clone();
+        let smtp_state = state.clone();
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(smtp_interval_hours * 3600));
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let result: Result<()> = async {
-                    let mut ledger = BookkeepingService::open(
-                        smtp_ledger_dir.join(format!("ledger-{smtp_admin_id}.db")),
-                    )?;
-                    let items = ledger.due_reminders(30)?;
-                    if items.is_empty() {
-                        return Ok(());
+                let users = match lock_auth(&smtp_state).and_then(|service| service.users()) {
+                    Ok(users) => users,
+                    Err(error) => {
+                        tracing::error!(target: "koku", error = %error, "could not list users for reminder digest");
+                        continue;
                     }
+                };
+                for user in users.into_iter().filter(|user| user.enabled) {
+                    let items = match lock_ledger(&smtp_state, user.id).await {
+                        Ok(mut ledger) => ledger.due_reminders(30),
+                        Err(error) => {
+                            tracing::error!(target: "koku", user_id = user.id, error = %error, "could not open ledger for reminder digest");
+                            continue;
+                        }
+                    };
+                    let items = match items {
+                        Ok(items) if !items.is_empty() => items,
+                        Ok(_) => continue,
+                        Err(error) => {
+                            tracing::error!(target: "koku", user_id = user.id, error = %error, "could not load reminder digest");
+                            continue;
+                        }
+                    };
                     let subject = format!("Koku 到期提醒（{} 项）", items.len());
                     let body = service::reminder_digest_text(&items);
                     let config = mailer_config.clone();
-                    tokio::task::spawn_blocking(move || {
-                        mailer::send_mail(&config, &subject, &body)
+                    let recipient = user.username.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        mailer::send_mail(&config, &recipient, &subject, &body)
                     })
                     .await
                     .map_err(|error| {
                         KokuError::AuthConfiguration(format!("smtp task failed: {error}"))
-                    })??;
-                    Ok(())
-                }
-                .await;
-                match result {
-                    Ok(()) => tracing::info!(target: "koku", "scheduled reminder digest sent"),
-                    Err(error) => {
-                        tracing::error!(target: "koku", error = %error, "scheduled reminder digest failed")
+                    })
+                    .and_then(|result| result)
+                    {
+                        Ok(()) => {
+                            tracing::info!(target: "koku", user_id = user.id, "scheduled reminder digest sent")
+                        }
+                        Err(error) => {
+                            tracing::error!(target: "koku", user_id = user.id, error = %error, "scheduled reminder digest failed")
+                        }
                     }
                 }
             }

@@ -96,7 +96,7 @@ koku/
 终端一，启动后端：
 
 ```bash
-KOKU_AUTH_USERNAME=somnus \
+KOKU_AUTH_EMAIL=somnus@example.com \
 KOKU_AUTH_PASSWORD_HASH='$2b$12$替换为你自己的bcrypt哈希' \
 KOKU_COOKIE_SECURE=false \
 cargo run
@@ -119,7 +119,7 @@ npm run dev
 ```bash
 KOKU_PORT=9000 \
 KOKU_DB_PATH=/path/to/koku.db \
-KOKU_AUTH_USERNAME=somnus \
+KOKU_AUTH_EMAIL=somnus@example.com \
 KOKU_AUTH_PASSWORD_HASH='$2b$12$替换为你自己的bcrypt哈希' \
 KOKU_COOKIE_SECURE=false \
 cargo run
@@ -177,8 +177,8 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 
 - `KOKU_DOMAIN`：已解析到这台 CVM 的域名；本部署为 `koku.somnus.wiki`。
 - `KOKU_RUNTIME_UID/GID`：分别使用服务器上的 `id -u` 和 `id -g`；当前 `ubuntu` 用户均为 `1000`。
-- `KOKU_AUTH_USERNAME` / `KOKU_AUTH_PASSWORD_HASH`：多用户引导凭据。首次启动时以该用户名+密码创建 **管理员** 账号（应用内改过密码则优先用持久化的哈希）；此后登录全部走 `users` 表，这两个变量只影响全新初始化。
-- 多用户模型：每个用户拥有**完全独立的账本**（账户/分类/交易/标签/预算/借款/持仓/定期/小票等全部隔离），数据存放在 `data/ledgers/ledger-<id>.db`；共享库 `data/koku.db` 只保存用户与会话。**不开放注册**，新用户只能由管理员在「用户」页创建；管理员可重置密码、启用/停用（立即作废其会话）、删除用户（连带其账本文件）。
+- `KOKU_AUTH_EMAIL` / `KOKU_AUTH_PASSWORD_HASH`：多用户引导凭据。首次启动时以该邮箱+密码创建 **管理员** 账号（应用内改过密码则优先用持久化的哈希）；此后登录全部走 `users` 表，这两个变量只影响全新初始化。`KOKU_AUTH_USERNAME` 仅为旧配置兼容别名。
+- 多用户模型：每个用户拥有**完全独立的账本**（账户/分类/交易/标签/预算/借款/持仓/定期/小票等全部隔离），数据存放在 `data/ledgers/ledger-<id>.db`；共享库 `data/koku.db` 只保存用户与会话。**不开放注册**，新用户只能由管理员在「用户」页以邮箱创建；管理员可重置密码、启用/停用（立即作废其会话）、删除用户（连带其账本文件）。
 - `KOKU_SESSION_TTL_DAYS`：登录会话有效天数，范围为 1–365。
 - `DEBIAN_MIRROR`：腾讯云建议使用 `http://mirrors.cloud.tencent.com`；Cargo 构建已固定使用 USTC 稀疏索引并启用缓存。
 
@@ -253,7 +253,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_DB_PATH` | `data/koku.db` | SQLite 文件路径 |
 | `KOKU_SEED_DEMO` | `true` | 是否为空数据库生成演示账本；生产容器固定为 `false` |
 | `KOKU_ALLOWED_ORIGIN` | 未设置 | 可选的单一跨域来源；同域生产部署无需开启 CORS |
-| `KOKU_AUTH_USERNAME` | 必填 | 单用户登录名 |
+| `KOKU_AUTH_EMAIL` | 必填 | 首次启动时创建管理员的登录邮箱；`KOKU_AUTH_USERNAME` 是兼容旧配置的别名 |
 | `KOKU_AUTH_PASSWORD_HASH` | 未设置 | bcrypt 密码哈希，适合本地运行；生产环境使用文件 |
 | `KOKU_AUTH_PASSWORD_HASH_FILE` | 未设置 | bcrypt 哈希文件；生产容器固定为 `/app/data/auth-password.hash` |
 | `KOKU_SESSION_TTL_DAYS` | `30` | 会话有效天数，范围 1–365 |
@@ -268,7 +268,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `KOKU_SMTP_PORT` | `587` | SMTP 端口 |
 | `KOKU_SMTP_TLS` | `starttls` | SMTP 加密方式：`starttls` / `implicit`（465）/ `none` |
 | `KOKU_SMTP_USERNAME` / `KOKU_SMTP_PASSWORD` | 未设置 | SMTP 认证（无认证服务器可留空） |
-| `KOKU_SMTP_FROM` / `KOKU_SMTP_TO` | 必填（启用时） | 发件人 / 收件人邮箱（管理员账本的到期摘要） |
+| `KOKU_SMTP_FROM` | 必填（启用时） | 发件人邮箱；收件人始终为每个启用用户的登录邮箱 |
 | `KOKU_SMTP_INTERVAL_HOURS` | `24` | 到期提醒邮件发送间隔（小时） |
 | `KOKU_R2_ACCOUNT_ID` | 未设置 | Cloudflare R2 账户 ID（设置后启用异地备份上传；需同时配置下面四项） |
 | `KOKU_R2_ACCESS_KEY_ID` / `KOKU_R2_SECRET_ACCESS_KEY` | 未设置 | R2 API 令牌的 S3 凭据（需授予「对象读写」权限） |
@@ -280,7 +280,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
-| `POST` | `/api/auth/login` | 校验用户名密码并创建安全会话；已启用 TOTP 时返回 `totp_required` 进入第二步 |
+| `POST` | `/api/auth/login` | 校验邮箱密码并创建安全会话；已启用 TOTP 时返回 `totp_required` 进入第二步 |
 | `POST` | `/api/auth/totp` | TOTP 第二步：校验 6 位动态码并创建会话（一次性令牌 5 分钟有效） |
 | `GET` | `/api/auth/session` | 查询当前登录用户 |
 | `POST` | `/api/auth/logout` | 作废当前服务器会话并清除 Cookie |
@@ -345,7 +345,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST` | `/api/admin/backup` | （管理员）立即创建备份（共享库 + 全部用户账本打包 zip） |
 | `GET` | `/api/admin/backups/{id}/download` | （管理员）下载备份 zip |
 | `POST` | `/api/admin/backups/{id}/restore` | （管理员）恢复备份（覆盖全部账本，所有会话失效） |
-| `POST` | `/api/admin/reminders/send` | （管理员）手动发送到期提醒邮件（需配置 SMTP） |
+| `POST` | `/api/reminders/send` | 向当前用户邮箱手动发送其账本的到期提醒（需配置 SMTP） |
 | `GET` | `/api/admin/r2/status` | （管理员）R2 状态：是否启用、桶/前缀、最近上传 |
 | `POST` | `/api/admin/r2/upload/{id}` | （管理员）把某个本地备份补传到 R2 |
 | `POST` | `/api/admin/r2/delete/{id}` | （管理员）删除 R2 上的备份对象（不影响本地） |
@@ -387,4 +387,4 @@ R2 API 令牌需在 Cloudflare 控制台创建并授予「对象读写」权限�
 
 ### 到期提醒
 
-顶栏铃铛展示未来 30 天到期（含逾期）的定期存款、借款与未还信用卡账单。可选 SMTP 推送：配置 `KOKU_SMTP_HOST/PORT/TLS/USERNAME/PASSWORD/FROM/TO` 后，服务端每 `KOKU_SMTP_INTERVAL_HOURS`（默认 24 小时）把管理员账本中的到期摘要发到 `KOKU_SMTP_TO`；管理员也可在「系统」页手动发送测试邮件。未配置 SMTP 时仅应用内提醒。
+顶栏铃铛展示未来 30 天到期（含逾期）的定期存款、借款与未还信用卡账单。可选 SMTP 推送：配置 `KOKU_SMTP_HOST/PORT/TLS/USERNAME/PASSWORD/FROM` 后，服务端每 `KOKU_SMTP_INTERVAL_HOURS`（默认 24 小时）为每位启用用户读取其独立账本，并把到期摘要发至该用户的登录邮箱；用户也可在提醒面板手动发送自己的摘要。未配置 SMTP 时仅应用内提醒。

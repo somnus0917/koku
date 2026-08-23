@@ -8,7 +8,7 @@ import { ApiError, login, verifyTotp } from "../../api";
 import type { AuthSession } from "../../types";
 
 export function LoginPage({ onAuthenticated }: { onAuthenticated: (session: AuthSession) => void }) {
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [step, setStep] = useState<"credentials" | "totp">("credentials");
@@ -23,7 +23,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (session: Auth
     event.preventDefault();
     setSubmitting(true); setError(null);
     try {
-      const result = await login(username, password);
+      const result = await login(email, password);
       // 已启用二步验证：先拿 totp_token，切到动态码步骤再完成登录。
       if ("totp_required" in result) {
         setTotpToken(result.totp_token);
@@ -99,10 +99,10 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (session: Auth
             <span className="login-eyebrow">WELCOME BACK</span>
             <h2>{t("login.title")}</h2>
             <p>{t("login.subtitle")}</p>
-            <label><span>{t("login.username")}</span><input autoFocus required autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder={t("login.usernamePlaceholder")} /></label>
+            <label><span>{t("login.email")}</span><input autoFocus required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder={t("login.emailPlaceholder")} /></label>
             <label><span>{t("login.password")}</span><div className="password-field"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("login.passwordPlaceholder")} /><button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></div></label>
             {error && <div className="login-error" role="alert">{error}</div>}
-            <button className="login-submit" disabled={submitting || !username || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? t("login.verifying") : t("login.signIn")}</button>
+            <button className="login-submit" disabled={submitting || !email || !password}>{submitting ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={17} />}{submitting ? t("login.verifying") : t("login.signIn")}</button>
             <small className="login-footnote">{t("login.footnote")}</small>
           </form>
         )}
@@ -110,4 +110,3 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (session: Auth
     </main>
   );
 }
-

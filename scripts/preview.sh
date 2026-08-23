@@ -7,7 +7,7 @@
 #   make preview                  # 等价于 ./scripts/preview.sh
 #
 # 环境变量（均可选）：
-#   KOKU_AUTH_USERNAME      登录名（默认 somnus）
+#   KOKU_AUTH_EMAIL         登录邮箱（默认 somnus@example.com）
 #   KOKU_PREVIEW_PASSWORD   预览密码（默认 koku-preview；首次运行会打印，哈希缓存于 .preview/）
 #   KOKU_AUTH_PASSWORD_HASH 若已设置则直接使用该 bcrypt 哈希，否则自动生成
 #   KOKU_PORT               后端端口（默认 8080）
@@ -21,7 +21,7 @@ cd "$ROOT"
 PORT="${KOKU_PORT:-8080}"
 API_URL="http://127.0.0.1:${PORT}"
 WEB_URL="http://127.0.0.1:5173"
-USERNAME="${KOKU_AUTH_USERNAME:-somnus}"
+EMAIL="${KOKU_AUTH_EMAIL:-somnus@example.com}"
 PASSWORD="${KOKU_PREVIEW_PASSWORD:-koku-preview}"
 
 # 引导凭据：优先用户提供的哈希 → 缓存哈希 → 现场生成并缓存。
@@ -38,7 +38,7 @@ ensure_auth_hash() {
     return
   fi
   mkdir -p "$dir"
-  echo "==> 首次运行：生成预览登录凭据  $USERNAME / $PASSWORD（哈希已缓存，后续不再重复生成）"
+  echo "==> 首次运行：生成预览登录凭据  $EMAIL / $PASSWORD（哈希已缓存，后续不再重复生成）"
   local hash
   hash="$(cargo run --quiet --bin gen_hash -- "$PASSWORD")"
   printf '%s' "$hash" > "$hash_file"
@@ -49,8 +49,8 @@ ensure_auth_hash() {
 start_api() {
   local hash
   hash="$(ensure_auth_hash)"
-  echo "==> 启动后端 API  $API_URL  (登录名 $USERNAME)"
-  KOKU_AUTH_USERNAME="$USERNAME" \
+  echo "==> 启动后端 API  $API_URL  (登录邮箱 $EMAIL)"
+  KOKU_AUTH_EMAIL="$EMAIL" \
   KOKU_AUTH_PASSWORD_HASH="$hash" \
   KOKU_COOKIE_SECURE="${KOKU_COOKIE_SECURE:-false}" \
   cargo run --bin koku
@@ -87,6 +87,6 @@ if [[ "$ready" != 1 ]]; then
   exit 1
 fi
 
-echo "==> 启动前端  $WEB_URL  （登录：$USERNAME / $PASSWORD）"
+echo "==> 启动前端  $WEB_URL  （登录：$EMAIL / $PASSWORD）"
 cd frontend
 npm run dev

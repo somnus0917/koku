@@ -8,10 +8,10 @@ export function listUsers(): Promise<User[]> {
   return request("/api/users");
 }
 /** 管理员：创建成员用户。 */
-export function createUser(username: string, password: string): Promise<User> {
+export function createUser(email: string, password: string): Promise<User> {
   return request("/api/users", {
     method: "POST",
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ email, password })
   });
 }
 /** 管理员：重置某用户密码（其会话全部作废）。 */

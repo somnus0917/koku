@@ -32,7 +32,7 @@ export default function App() {
   if (!session) return <LoginPage onAuthenticated={setSession} />;
   return (
     <LedgerApp
-      username={session.username}
+      username={session.email}
       role={session.role}
       userId={session.id}
       onLogout={async () => {
@@ -48,4 +48,3 @@ function AuthLoadingState() {
   const { t } = useTranslation();
   return <main className="auth-loading"><div className="loading-mark"><span /><span /></div><p>{t("app.checkingSession")}</p></main>;
 }
-

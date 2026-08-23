@@ -7,7 +7,7 @@ export function loadReminders(days = 30): Promise<ReminderItem[]> {
   const query = new URLSearchParams({ days: String(days) });
   return request(`/api/reminders?${query.toString()}`);
 }
-/** 管理员：立即发送到期提醒邮件；SMTP 未配置时后端返回 422。 */
+/** 立即向当前登录邮箱发送本账本的到期提醒；SMTP 未配置时后端返回 422。 */
 export function sendReminderDigest(): Promise<{ sent: boolean; count: number }> {
-  return request("/api/admin/reminders/send", { method: "POST" });
+  return request("/api/reminders/send", { method: "POST" });
 }

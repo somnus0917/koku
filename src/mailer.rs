@@ -19,7 +19,6 @@ pub struct MailerConfig {
     pub username: Option<String>,
     pub password: Option<String>,
     pub from: String,
-    pub to: String,
 }
 
 impl MailerConfig {
@@ -65,21 +64,19 @@ impl MailerConfig {
             username: std::env::var("KOKU_SMTP_USERNAME").ok(),
             password: std::env::var("KOKU_SMTP_PASSWORD").ok(),
             from: required("KOKU_SMTP_FROM")?,
-            to: required("KOKU_SMTP_TO")?,
         }))
     }
 }
 
 /// 发送一封纯文本邮件；失败返回带上下文的错误（不 panic）。
-pub fn send_mail(config: &MailerConfig, subject: &str, body: &str) -> Result<()> {
+pub fn send_mail(config: &MailerConfig, to: &str, subject: &str, body: &str) -> Result<()> {
     let from: Mailbox = config
         .from
         .parse()
         .map_err(|error| KokuError::InvalidInput(format!("invalid KOKU_SMTP_FROM: {error}")))?;
-    let to: Mailbox = config
-        .to
+    let to: Mailbox = to
         .parse()
-        .map_err(|error| KokuError::InvalidInput(format!("invalid KOKU_SMTP_TO: {error}")))?;
+        .map_err(|error| KokuError::InvalidInput(format!("invalid recipient email: {error}")))?;
     let message = Message::builder()
         .from(from)
         .to(to)
@@ -131,14 +128,12 @@ mod tests {
     }
 
     #[test]
-    fn mailer_config_requires_from_and_to_when_host_is_set() {
+    fn mailer_config_requires_from_when_host_is_set() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("KOKU_SMTP_HOST", "smtp.example.com");
         std::env::remove_var("KOKU_SMTP_FROM");
-        std::env::remove_var("KOKU_SMTP_TO");
         assert!(MailerConfig::from_env().is_err());
         std::env::set_var("KOKU_SMTP_FROM", "a@example.com");
-        std::env::set_var("KOKU_SMTP_TO", "b@example.com");
         assert!(MailerConfig::from_env().is_ok());
         std::env::remove_var("KOKU_SMTP_HOST");
     }
@@ -148,7 +143,6 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("KOKU_SMTP_HOST", "smtp.example.com");
         std::env::set_var("KOKU_SMTP_FROM", "a@example.com");
-        std::env::set_var("KOKU_SMTP_TO", "b@example.com");
         std::env::set_var("KOKU_SMTP_TLS", "sneaky");
         assert!(MailerConfig::from_env().is_err());
         std::env::set_var("KOKU_SMTP_TLS", "starttls");

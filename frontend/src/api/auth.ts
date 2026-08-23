@@ -6,13 +6,13 @@ export function getAuthSession(): Promise<AuthSession> {
   return request("/api/auth/session");
 }
 /**
- * 登录第一步：用户名/密码正确时返回会话（带会话 Cookie）；若该账号已启用
+ * 登录第一步：邮箱/密码正确时返回会话（带会话 Cookie）；若该账号已启用
  * 二步验证则返回 TotpChallenge（无会话 Cookie），需再用 verifyTotp 完成登录。
  */
-export function login(username: string, password: string): Promise<AuthSession | TotpChallenge> {
+export function login(email: string, password: string): Promise<AuthSession | TotpChallenge> {
   return request("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ email, password })
   });
 }
 /** 登录第二步：用第一步拿到的 totp_token + 验证器动态码换取会话。 */

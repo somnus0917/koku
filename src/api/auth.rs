@@ -20,7 +20,8 @@ use super::state::{lock_auth, ApiResponse, AppState, AuthenticatedUser};
 
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
-    username: String,
+    #[serde(alias = "username")]
+    email: String,
     password: String,
 }
 
@@ -92,7 +93,7 @@ async fn api_login(
 
     let password = request.password;
     let user = lock_auth(&state)?
-        .user_by_username(&request.username)?
+        .user_by_username(&request.email)?
         .ok_or(KokuError::InvalidCredentials)?;
     if !user.enabled {
         return Err(KokuError::InvalidCredentials);
@@ -129,7 +130,7 @@ async fn api_login(
         let mut response = Json(ApiResponse::new(serde_json::json!({
             "totp_required": true,
             "totp_token": pending_token,
-            "username": user.username,
+            "email": user.username,
         })))
         .into_response();
         response

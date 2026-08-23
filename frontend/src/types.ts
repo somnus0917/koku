@@ -52,7 +52,7 @@ export type UserRole = "admin" | "member";
 
 export interface AuthSession {
   id: number;
-  username: string;
+  email: string;
   role: UserRole;
   /** 该账号是否已启用二步验证（TOTP）。 */
   totp_enabled: boolean;
@@ -62,13 +62,13 @@ export interface AuthSession {
 export interface TotpChallenge {
   totp_required: true;
   totp_token: string;
-  username: string;
+  email: string;
 }
 
 /** 账本用户（管理员可见；password_hash 不会下发）。 */
 export interface User {
   id: number;
-  username: string;
+  email: string;
   role: UserRole;
   enabled: boolean;
   /** 该账号是否已启用二步验证（TOTP）。 */

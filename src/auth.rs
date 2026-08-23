@@ -4,6 +4,7 @@ use axum::http::{header, HeaderMap, HeaderValue};
 use sha2::{Digest, Sha256};
 
 use crate::config::{env_bool, required_env};
+use crate::domain::normalize_email;
 use crate::error::{KokuError, Result};
 
 pub const SESSION_COOKIE_NAME: &str = "koku_session";
@@ -18,7 +19,17 @@ pub struct AuthConfig {
 
 impl AuthConfig {
     pub fn from_env() -> Result<Self> {
-        let username = required_env("KOKU_AUTH_USERNAME")?;
+        // `KOKU_AUTH_USERNAME` 是旧版本兼容别名；新部署应使用 KOKU_AUTH_EMAIL。
+        let username = match std::env::var("KOKU_AUTH_EMAIL") {
+            Ok(value) if !value.trim().is_empty() => value,
+            Ok(_) | Err(std::env::VarError::NotPresent) => required_env("KOKU_AUTH_USERNAME")?,
+            Err(error) => {
+                return Err(KokuError::AuthConfiguration(format!(
+                    "could not read KOKU_AUTH_EMAIL: {error}"
+                )))
+            }
+        };
+        let username = normalize_email(&username)?;
         let password_hash = match std::env::var("KOKU_AUTH_PASSWORD_HASH") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
             Ok(_) | Err(std::env::VarError::NotPresent) => {

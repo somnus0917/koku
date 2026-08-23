@@ -359,14 +359,14 @@ mod tests {
     #[test]
     fn server_sessions_are_hashed_expirable_and_revocable() -> Result<()> {
         let mut service = test_service()?;
-        let user = service.create_user("somnus", "hash", UserRole::Admin)?;
+        let user = service.create_user("somnus@example.com", "hash", UserRole::Admin)?;
         let token = service.create_auth_session(user.id, &user.username, 3600)?;
         assert_eq!(token.len(), 64);
         assert_eq!(
             service
                 .authenticated_user(&token)?
                 .map(|user| user.username),
-            Some("somnus".to_owned())
+            Some("somnus@example.com".to_owned())
         );
         let stored_token =
             service
@@ -403,7 +403,7 @@ mod tests {
             Some("new")
         );
 
-        let user = service.create_user("somnus", "hash", UserRole::Admin)?;
+        let user = service.create_user("somnus@example.com", "hash", UserRole::Admin)?;
         let token = service.create_auth_session(user.id, &user.username, 3600)?;
         assert!(service.authenticated_user(&token)?.is_some());
         // 改密码会作废该用户全部会话。
@@ -422,8 +422,8 @@ mod tests {
             let ledgers = dir.join("ledgers");
             std::fs::create_dir_all(&ledgers)?;
             let mut auth = BookkeepingService::open(&shared)?;
-            let alice = auth.create_user("alice", "h1", UserRole::Admin)?;
-            let bob = auth.create_user("bob", "h2", UserRole::Member)?;
+            let alice = auth.create_user("alice@example.com", "h1", UserRole::Admin)?;
+            let bob = auth.create_user("bob@example.com", "h2", UserRole::Member)?;
 
             let mut ledger_a =
                 BookkeepingService::open(ledgers.join(format!("ledger-{}.db", alice.id)))?;
@@ -504,16 +504,22 @@ mod tests {
                 // 旧会话（username 而非 user_id）
                 legacy.conn.execute(
                     "INSERT INTO auth_sessions(token_hash, username, created_at, expires_at)
-                     VALUES ('aabb', 'somnus', '2026-08-01T00:00:00Z', 9999999999)",
+                     VALUES ('aabb', 'somnus@example.com', '2026-08-01T00:00:00Z', 9999999999)",
                     [],
                 )?;
             }
 
             // 2) 多用户迁移：引导 admin（密码回退到引导哈希）+ 搬迁数据。
             let mut auth = BookkeepingService::open(&shared)?;
-            let admin_id = ensure_multi_user(&mut auth, &shared, &ledgers, "somnus", "boot-hash")?;
+            let admin_id = ensure_multi_user(
+                &mut auth,
+                &shared,
+                &ledgers,
+                "somnus@example.com",
+                "boot-hash",
+            )?;
             let admin = auth.user(admin_id)?;
-            assert_eq!(admin.username, "somnus");
+            assert_eq!(admin.username, "somnus@example.com");
             assert_eq!(admin.role, UserRole::Admin);
             // 旧会话已回填 user_id。
             let session_user: Option<i64> = auth.conn.query_row(
@@ -538,7 +544,13 @@ mod tests {
 
             // 4) 幂等：再次迁移不会重复引导或搬迁。
             let mut auth2 = BookkeepingService::open(&shared)?;
-            let admin2 = ensure_multi_user(&mut auth2, &shared, &ledgers, "somnus", "boot-hash")?;
+            let admin2 = ensure_multi_user(
+                &mut auth2,
+                &shared,
+                &ledgers,
+                "somnus@example.com",
+                "boot-hash",
+            )?;
             assert_eq!(admin2, admin_id);
             assert_eq!(auth2.users()?.len(), 1);
             Ok(())
@@ -550,19 +562,27 @@ mod tests {
     #[test]
     fn users_are_created_unique_and_sessions_follow_enabled_state() -> Result<()> {
         let mut service = test_service()?;
-        let admin = service.create_user("admin", "admin-hash", UserRole::Admin)?;
-        let member = service.create_user("alice", "alice-hash", UserRole::Member)?;
+        let admin = service.create_user("admin@example.com", "admin-hash", UserRole::Admin)?;
+        let member = service.create_user("alice@example.com", "alice-hash", UserRole::Member)?;
         assert_eq!(admin.role, UserRole::Admin);
         assert_eq!(member.role, UserRole::Member);
         assert!(admin.enabled);
 
-        // 用户名唯一
+        // 邮箱唯一（忽略大小写）
         assert!(matches!(
-            service.create_user("alice", "x", UserRole::Member),
+            service.create_user("ALICE@example.com", "x", UserRole::Member),
             Err(KokuError::Database(_))
         ));
-        // 用户名按原文匹配（区分大小写）
-        assert!(service.user_by_username("ALICE")?.is_none());
+        assert_eq!(
+            service
+                .user_by_username("ALICE@EXAMPLE.COM")?
+                .map(|user| user.id),
+            Some(member.id)
+        );
+        assert!(matches!(
+            service.create_user("not-an-email", "x", UserRole::Member),
+            Err(KokuError::InvalidInput(_))
+        ));
 
         // 停用后会话立即失效
         let token = service.create_auth_session(member.id, &member.username, 3600)?;

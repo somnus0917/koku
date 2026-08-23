@@ -16,7 +16,7 @@ services:
       KOKU_PORT: 8080
       KOKU_DB_PATH: /app/data/koku.db
       KOKU_SEED_DEMO: "false"
-      KOKU_AUTH_USERNAME: ${KOKU_AUTH_USERNAME:?KOKU_AUTH_USERNAME is required}
+      KOKU_AUTH_EMAIL: ${KOKU_AUTH_EMAIL:?KOKU_AUTH_EMAIL is required}
       KOKU_AUTH_PASSWORD_HASH_FILE: /app/data/auth-password.hash
       KOKU_SESSION_TTL_DAYS: ${KOKU_SESSION_TTL_DAYS:-30}
       KOKU_COOKIE_SECURE: "true"
@@ -33,7 +33,6 @@ services:
       KOKU_SMTP_USERNAME: ${KOKU_SMTP_USERNAME:-}
       KOKU_SMTP_PASSWORD: ${KOKU_SMTP_PASSWORD:-}
       KOKU_SMTP_FROM: ${KOKU_SMTP_FROM:-}
-      KOKU_SMTP_TO: ${KOKU_SMTP_TO:-}
       KOKU_SMTP_INTERVAL_HOURS: ${KOKU_SMTP_INTERVAL_HOURS:-24}
       # R2 异地备份（可选；缺省留空 = 不启用）
       KOKU_R2_ACCOUNT_ID: ${KOKU_R2_ACCOUNT_ID:-}

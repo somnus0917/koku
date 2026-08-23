@@ -29,14 +29,13 @@ async fn api_reminders(
     Ok(Json(ApiResponse::new(items)))
 }
 
-/// 管理员手动发送到期提醒邮件（需配置 SMTP）。
+/// 手动向当前用户邮箱发送其账本的到期提醒（需配置 SMTP）。
 async fn api_send_reminder_digest(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>> {
-    user.require_admin()?;
     let config = mailer::MailerConfig::from_env()?.ok_or_else(|| {
-        KokuError::InvalidInput("SMTP 未配置：请设置 KOKU_SMTP_HOST/FROM/TO 环境变量".to_owned())
+        KokuError::InvalidInput("SMTP 未配置：请设置 KOKU_SMTP_HOST/FROM 环境变量".to_owned())
     })?;
     let mut ledger = lock_ledger(&state, user.user_id).await?;
     let items = ledger.due_reminders(30)?;
@@ -46,7 +45,8 @@ async fn api_send_reminder_digest(
         format!("Koku 到期提醒（{} 项）", items.len())
     };
     let body = reminder_digest_text(&items);
-    tokio::task::spawn_blocking(move || mailer::send_mail(&config, &subject, &body))
+    let recipient = user.username;
+    tokio::task::spawn_blocking(move || mailer::send_mail(&config, &recipient, &subject, &body))
         .await
         .map_err(|error| KokuError::AuthConfiguration(format!("smtp task failed: {error}")))??;
     Ok(Json(ApiResponse::new(serde_json::json!({
@@ -58,5 +58,5 @@ async fn api_send_reminder_digest(
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/reminders", get(api_reminders))
-        .route("/api/admin/reminders/send", post(api_send_reminder_digest))
+        .route("/api/reminders/send", post(api_send_reminder_digest))
 }

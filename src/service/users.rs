@@ -6,24 +6,19 @@ use std::path::Path;
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use super::*;
-use crate::domain::{User, UserRole};
+use crate::domain::{normalize_email, User, UserRole};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
 
 impl BookkeepingService {
-    /// 创建用户；用户名唯一（1-32 字符），密码为已生成的 bcrypt 哈希。
+    /// 创建用户；邮箱唯一，密码为已生成的 bcrypt 哈希。
     pub fn create_user(
         &mut self,
         username: &str,
         password_hash: &str,
         role: UserRole,
     ) -> Result<User> {
-        let username = username.trim();
-        if username.is_empty() || username.chars().count() > 32 {
-            return Err(KokuError::InvalidInput(
-                "username must be 1-32 characters".to_owned(),
-            ));
-        }
+        let username = normalize_email(username)?;
         let now = Utc::now();
         self.conn.execute(
             "INSERT INTO users(username, password_hash, role, enabled, created_at)
@@ -49,12 +44,13 @@ impl BookkeepingService {
     }
 
     pub fn user_by_username(&self, username: &str) -> Result<Option<User>> {
+        let username = username.trim().to_ascii_lowercase();
         let row = self
             .conn
             .query_row(
                 "SELECT id, username, password_hash, role, enabled, created_at, totp_enabled
-                 FROM users WHERE username = ?1",
-                [username.trim()],
+                 FROM users WHERE lower(username) = ?1",
+                [username],
                 user_row,
             )
             .optional()?;
@@ -249,7 +245,7 @@ mod tests {
     #[test]
     fn totp_secret_lifecycle_pending_then_enable_then_disable() -> Result<()> {
         let mut service = BookkeepingService::in_memory()?;
-        let user = service.create_user("alice", "hash", UserRole::Admin)?;
+        let user = service.create_user("alice@example.com", "hash", UserRole::Admin)?;
         assert!(!service.user(user.id)?.totp_enabled);
         assert_eq!(service.user_totp_pending(user.id)?, None);
 

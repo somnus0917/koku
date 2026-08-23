@@ -37,7 +37,7 @@ pub enum KokuError {
     NotVoided,
     #[error("insufficient permissions for this operation")]
     Forbidden,
-    #[error("invalid username or password")]
+    #[error("invalid email or password")]
     InvalidCredentials,
     #[error("authentication required")]
     Unauthorized,
