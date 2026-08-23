@@ -15,8 +15,29 @@ createRoot(root).render(
   </StrictMode>
 );
 
-// PWA：注册基础 Service Worker（离线缓存应用外壳，账本 API 仍走网络）。
-if ("serviceWorker" in navigator) {
+async function clearPreviewServiceWorker() {
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const cacheKeys = await caches.keys();
+  const kokuCacheKeys = cacheKeys.filter((key) => key.startsWith("koku-"));
+
+  await Promise.all([
+    ...registrations.map((registration) => registration.unregister()),
+    ...kokuCacheKeys.map((key) => caches.delete(key)),
+  ]);
+
+  // 首次执行时旧的 Service Worker 仍可能控制本页；清理后刷新一次才能重新请求
+  // Vite 的 CSS 模块，避免把旧票根墙样式继续留在页面上。
+  if (registrations.length > 0 || kokuCacheKeys.length > 0) {
+    window.location.reload();
+  }
+}
+
+if (import.meta.env.DEV && "serviceWorker" in navigator) {
+  // 本地预览没有带内容哈希的资源 URL；若沿用生产缓存策略，旧 CSS 会被缓存优先
+  // 命中，造成组件结构已更新、样式却停留在旧版本的错位显示。
+  void clearPreviewServiceWorker();
+} else if ("serviceWorker" in navigator) {
+  // PWA：仅生产环境注册 Service Worker（离线缓存应用外壳，账本 API 仍走网络）。
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("/sw.js")
@@ -33,4 +54,3 @@ if ("serviceWorker" in navigator) {
       });
   });
 }
-
