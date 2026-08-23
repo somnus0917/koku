@@ -136,7 +136,11 @@ export function TransactionsPage({
   const [tagSummaryError, setTagSummaryError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [mode, setMode] = useState<TransactionViewMode>(() => window.localStorage.getItem("koku.transaction.view-mode") === "timeline" ? "timeline" : "table");
+  // 票根墙是默认入口；用户主动切换后的偏好仍保存在当前设备。
+  const [mode, setMode] = useState<TransactionViewMode>(() => {
+    const stored = window.localStorage.getItem("koku.transaction.view-mode");
+    return stored === "table" || stored === "timeline" || stored === "receipts" ? stored : "receipts";
+  });
   const [savedViews, setSavedViews] = useState<SavedTransactionView[]>(readSavedViews);
   const { t } = useTranslation();
   const handleExport = async () => {
