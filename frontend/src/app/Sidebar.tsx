@@ -63,7 +63,7 @@ export function Sidebar({
       <div className="profile-actions">
         <button className="profile-chip" onClick={onOpenCategories}>
           <span className="avatar">K</span>
-          <span>
+          <span title={username}>
             <strong>{username}</strong>
           </span>
           <MoreHorizontal size={18} />

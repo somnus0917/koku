@@ -534,10 +534,20 @@ button:disabled {
   min-width: 0;
 }
 
+.profile-chip span:not(.avatar) {
+  flex: 1 1 auto;
+}
+
 .privacy-note strong,
 .profile-chip strong {
   display: block;
   font-size: 12px;
+}
+
+.profile-chip strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .privacy-note span,
@@ -611,6 +621,7 @@ button:disabled {
 }
 
 .profile-chip > svg {
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--text-faint);
 }
