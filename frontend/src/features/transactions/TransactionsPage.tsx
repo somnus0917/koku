@@ -1,16 +1,17 @@
 //! 交易页：搜索/筛选/导出/导入与流水表格。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { BookmarkPlus, Download, List, LoaderCircle, Plus, Rows3, Search, Tags, Trash2, Upload } from "lucide-react";
+import { BookmarkPlus, Download, List, LoaderCircle, Plus, Rows3, Search, Tags, Ticket, Trash2, Upload } from "lucide-react";
 import { PageTitle } from "../../components/PageTitle";
 import { EmptyState } from "../../components/EmptyState";
 import { useConversionRates } from "../../components/accountDisplay";
 import { TransactionRow } from "./TransactionRow";
+import { ReceiptWall } from "./ReceiptWall";
 import { exportTransactions, loadTagSummary } from "../../api";
 import { formatMoney } from "../../lib";
 import type { AppData, Tag, TagSummary, Transaction, TransactionKind } from "../../types";
 
-type TransactionViewMode = "table" | "timeline";
+type TransactionViewMode = "table" | "timeline" | "receipts";
 type SavedTransactionView = { id: string; name: string; search: string; kind: "all" | TransactionKind; tags: string[]; mode: TransactionViewMode };
 const SAVED_VIEWS_KEY = "koku.transaction.saved-views.v1";
 
@@ -18,7 +19,7 @@ function readSavedViews(): SavedTransactionView[] {
   try {
     const value: unknown = JSON.parse(window.localStorage.getItem(SAVED_VIEWS_KEY) ?? "[]");
     if (!Array.isArray(value)) return [];
-    return value.filter((item): item is SavedTransactionView => Boolean(item) && typeof item === "object" && typeof item.id === "string" && typeof item.name === "string" && typeof item.search === "string" && (item.kind === "all" || typeof item.kind === "string") && Array.isArray(item.tags) && (item.mode === "table" || item.mode === "timeline"));
+    return value.filter((item): item is SavedTransactionView => Boolean(item) && typeof item === "object" && typeof item.id === "string" && typeof item.name === "string" && typeof item.search === "string" && (item.kind === "all" || typeof item.kind === "string") && Array.isArray(item.tags) && (item.mode === "table" || item.mode === "timeline" || item.mode === "receipts"));
   } catch {
     return [];
   }
@@ -283,6 +284,7 @@ export function TransactionsPage({
           <div className="view-mode-toggle" aria-label={t("transactions.viewMode.label")}>
             <button type="button" className={mode === "table" ? "active" : ""} onClick={() => changeMode("table")} title={t("transactions.viewMode.table")}><List size={16} /></button>
             <button type="button" className={mode === "timeline" ? "active" : ""} onClick={() => changeMode("timeline")} title={t("transactions.viewMode.timeline")}><Rows3 size={16} /></button>
+            <button type="button" className={mode === "receipts" ? "active" : ""} onClick={() => changeMode("receipts")} title={t("transactions.viewMode.receipts")}><Ticket size={16} /></button>
           </div>
           <button type="button" className="text-button save-view-button" onClick={saveCurrentView}><BookmarkPlus size={16} /> {t("transactions.savedViews.save")}</button>
         </div>
@@ -323,14 +325,16 @@ export function TransactionsPage({
         </section>
       )}
       {exportError && <div className="inline-error">{t("transactions.exportFailed")}{exportError}</div>}
-      {mode === "table" ? <article className="panel transaction-table">
+      {mode === "table" && <article className="panel transaction-table">
         <div className="table-header"><span>{t("transactions.colTransaction")}</span><span>{t("transactions.colAccount")}</span><span>{t("transactions.colDate")}</span><span>{t("transactions.colAmount")}</span><span /><span /></div>
         {filtered.map(row)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
-      </article> : <div className="transaction-timeline panel">
+      </article>}
+      {mode === "timeline" && <div className="transaction-timeline panel">
         {timelineGroups.map((group) => <section key={group.day}><h2>{dateGroup(group.day)}</h2>{group.items.map(row)}</section>)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </div>}
+      {mode === "receipts" && (filtered.length > 0 ? <ReceiptWall transactions={filtered} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}
       {hasMore && (
         <div className="load-more-row">
           <button
