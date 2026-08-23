@@ -5,6 +5,7 @@ import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { RateHintLine, useRateHint } from "../../components/RateHint";
 import { TagEditor } from "./TagEditor";
+import { selectTransferSource, selectTransferTarget } from "./transferEndpoints";
 import { CategoryAvatar } from "../../components/avatar";
 import { availableCurrencies, localDateTimeValue, readQuickEntry, writeQuickEntry } from "../../lib";
 import { listPayees } from "../../api";
@@ -85,6 +86,18 @@ export function TransactionModal({
     }
   };
 
+  const changeTransferSource = (nextSourceId: number) => {
+    const endpoints = selectTransferSource({ sourceId: accountId, targetId }, nextSourceId);
+    setAccountId(endpoints.sourceId);
+    setTargetId(endpoints.targetId);
+  };
+
+  const changeTransferTarget = (nextTargetId: number) => {
+    const endpoints = selectTransferTarget({ sourceId: accountId, targetId }, nextTargetId);
+    setAccountId(endpoints.sourceId);
+    setTargetId(endpoints.targetId);
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
@@ -140,9 +153,9 @@ export function TransactionModal({
         </div>
         <label className="amount-field"><span>{t(kind === "income" ? "modals.transaction.incomeAmount" : kind === "transfer" ? "modals.transaction.transferAmount" : "modals.transaction.expenseAmount")} · {kind === "transfer" ? source?.currency : sourceCurrency}</span><div><em>{(kind === "transfer" ? source?.currency : sourceCurrency) === "CNY" ? "¥" : (kind === "transfer" ? source?.currency : sourceCurrency) === "USD" ? "$" : kind === "transfer" ? source?.currency : sourceCurrency}</em><input autoFocus required min="0.01" step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></div></label>
         <div className="form-grid">
-          <label><span>{kind === "transfer" ? t("modals.transaction.fromAccount") : t("common.account")}</span><select value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
+          <label><span>{kind === "transfer" ? t("modals.transaction.fromAccount") : t("common.account")}</span><select value={accountId} onChange={(e) => kind === "transfer" ? changeTransferSource(Number(e.target.value)) : setAccountId(Number(e.target.value))}>{accounts.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           {kind === "transfer" ? (
-            <label><span>{t("modals.transaction.toAccount")}</span><select value={targetId} onChange={(e) => setTargetId(Number(e.target.value))}>{accounts.filter((item) => item.id !== accountId).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
+            <label><span>{t("modals.transaction.toAccount")}</span><select value={targetId} onChange={(e) => changeTransferTarget(Number(e.target.value))}>{accounts.filter((item) => item.id !== accountId).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.currency}</option>)}</select></label>
           ) : (
             <>
               <label><span>{t("modals.transaction.currency")}</span><select value={sourceCurrency} onChange={(e) => setSourceCurrency(e.target.value)}>{currencyOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
