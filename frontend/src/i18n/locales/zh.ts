@@ -250,7 +250,7 @@ export const zh = {
       },
       transactions: {
         viewMode: { label: "流水视图", table: "表格视图", timeline: "时间轴视图", receipts: "票根墙视图" },
-        receiptWall: { total: "本笔金额" },
+        receiptWall: { total: "本笔金额", transferOut: "转出", transferIn: "转入" },
         savedViews: { label: "保存的视图", save: "保存视图", namePrompt: "为当前筛选和视图命名", remove: "删除视图 {{name}}" },
         title: "交易流水",
         searchPlaceholder: "搜索备注、分类或账户",

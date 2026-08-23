@@ -1,6 +1,6 @@
 //! 票根墙：把流水以固定倾角的票据呈现，突出金额大小与每笔交易的独立感。
 import type { CSSProperties } from "react";
-import { Paperclip, Pencil } from "lucide-react";
+import { ArrowRight, Paperclip, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CategoryAvatar } from "../../components/avatar";
 import { formatDate, formatMoney } from "../../lib";
@@ -57,10 +57,14 @@ export function ReceiptWall({
           {group.transactions.map((transaction) => {
             const category = transaction.category_id ? categoriesById.get(transaction.category_id) : undefined;
             const account = accountsById.get(transaction.account_id);
+            const targetAccount = transaction.to_account_id ? accountsById.get(transaction.to_account_id) : undefined;
             const income = transaction.kind === "income";
             const expense = transaction.kind === "expense";
+            const transfer = transaction.kind === "transfer";
             const typeLabel = t(`transactions.meta.${transaction.kind}`);
-            const title = transaction.payee_name || transaction.note || category?.name || typeLabel;
+            const title = transfer
+              ? `${account?.name ?? t("common.unknownAccount")} → ${targetAccount?.name ?? t("common.unknownAccount")}`
+              : transaction.payee_name || transaction.note || category?.name || typeLabel;
             const subtitle = category?.name || typeLabel;
             const size = ticketSize(transaction, largestAmount, transactions.length);
             const prefix = expense ? "−" : income ? "+" : "";
@@ -77,7 +81,11 @@ export function ReceiptWall({
                   <time dateTime={transaction.occurred_at}>{receiptTime(transaction.occurred_at)}</time>
                 </header>
                 <div className="receipt-ticket-copy"><strong>{title}</strong><small>{subtitle}</small></div>
-                <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong><i aria-hidden="true" /></div>
+                {transfer ? <div className="receipt-transfer-flow">
+                  <div><span>{t("transactions.receiptWall.transferOut")}</span><strong>{formatMoney(transaction.amount, transaction.currency)}</strong></div>
+                  <ArrowRight size={15} aria-hidden="true" />
+                  <div><span>{t("transactions.receiptWall.transferIn")}</span><strong>{transaction.target_amount && transaction.target_currency ? formatMoney(transaction.target_amount, transaction.target_currency) : "—"}</strong></div>
+                </div> : <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong><i aria-hidden="true" /></div>}
                 <footer>
                   <span>{account?.name ?? t("common.unknownAccount")}</span>
                   <div>
