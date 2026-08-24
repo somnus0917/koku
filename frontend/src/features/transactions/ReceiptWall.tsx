@@ -71,12 +71,11 @@ export function ReceiptWall({
             const size = ticketSize(transaction, largestAmount, transactions.length);
             const prefix = expense ? "−" : income ? "+" : "";
             const canRefund = expense && !transaction.voided_at && Number(transaction.amount) > Number(transaction.reimbursed_amount) + Number(transaction.refunded_amount);
-            const proportion = largestAmount > 0 ? Math.max(4, Math.round((Math.abs(Number(transaction.amount)) / largestAmount) * 100)) : 4;
             return (
               <article
                 className={`receipt-ticket ${size} ${expense ? "expense" : income ? "income" : "transfer"} ${transaction.voided_at ? "voided" : ""}`}
                 key={transaction.id}
-                style={{ "--ticket-rotation": `${ticketTilt(transaction.id)}deg`, "--ticket-proportion": `${proportion}%` } as CSSProperties}
+                style={{ "--ticket-rotation": `${ticketTilt(transaction.id)}deg` } as CSSProperties}
               >
                 <span className="receipt-pin" aria-hidden="true" />
                 <header>
@@ -88,7 +87,7 @@ export function ReceiptWall({
                   <div><span>{t("transactions.receiptWall.transferOut")}</span><strong>{formatMoney(transaction.amount, transaction.currency)}</strong></div>
                   <ArrowRight size={15} aria-hidden="true" />
                   <div><span>{t("transactions.receiptWall.transferIn")}</span><strong>{transaction.target_amount && transaction.target_currency ? formatMoney(transaction.target_amount, transaction.target_currency) : "—"}</strong></div>
-                </div> : <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong><i aria-hidden="true" />{expense && transaction.refunded_amount !== "0" && <small>{t("transactions.refundedLabel")} {formatMoney(transaction.refunded_amount, transaction.currency)}</small>}</div>}
+                </div> : <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong>{expense && transaction.refunded_amount !== "0" && <small>{t("transactions.refundedLabel")} {formatMoney(transaction.refunded_amount, transaction.currency)}</small>}</div>}
                 <footer>
                   <span>{account?.name ?? t("common.unknownAccount")}</span>
                   <div>
