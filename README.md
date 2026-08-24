@@ -161,7 +161,7 @@ cargo run -- --demo
 
 ### 1. 初始化服务器
 
-服务器需要安装 Docker Engine 和 Docker Compose v2。当前镜像由 GitHub 的 x86-64 Runner 构建，因此腾讯云实例应使用 x86-64；ARM 实例需要在工作流中额外配置多架构构建。
+服务器需要安装 Docker Engine 和 Docker Compose v2。API 与 Web 发布镜像均提供 `linux/amd64` 和 `linux/arm64`，腾讯云的 x86-64 与 ARM 实例都可直接拉取对应架构。
 
 为部署用户创建目录，并确认服务器上已经存在共享 `proxy` 网络：
 
@@ -236,6 +236,17 @@ Actions 使用单独的无密码部署密钥。该公钥在服务器上通过 `r
 6. 启动新镜像并等待健康检查；失败时恢复上一组镜像。
 
 也可以在 GitHub Actions 页面通过 `workflow_dispatch` 手动重新部署 `main`。
+
+### GHCR 多架构镜像
+
+发布 GitHub Release 时，[容器发布工作流](.github/workflows/release.yml) 使用 Buildx/QEMU 构建 API 与 Web 的 `linux/amd64,linux/arm64` manifest，并通过 `GITHUB_TOKEN` 推送到 GHCR：
+
+```bash
+docker pull ghcr.io/somnus0917/koku-api:<release-tag>
+docker pull ghcr.io/somnus0917/koku-web:<release-tag>
+```
+
+非预发布 Release 同时更新 `latest` 标签，每次构建也会产生不可变的 `sha-<short-sha>` 标签。工作流支持手动运行；手动运行只发布 SHA 标签。现有受限 SSH 自动部署流程仍在目标服务器从已验证源码构建，不受镜像发布流程影响。
 
 服务器排查命令：
 
