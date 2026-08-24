@@ -136,10 +136,13 @@ VITE_API_BASE_URL=http://127.0.0.1:8080
 ```bash
 cargo test
 cargo clippy --all-targets -- -D warnings
-cd frontend && npm run build
+cargo audit
+cd frontend
+npm audit --omit=dev
+npm run build
 ```
 
-同样的检查已配置在 [GitHub Actions CI](.github/workflows/ci.yml)，会在推送到 `main` 或创建 Pull Request 时自动运行。
+`cargo audit` 需先安装 `cargo-audit`（`cargo install cargo-audit --locked`）。同样的检查已配置在 [GitHub Actions CI](.github/workflows/ci.yml)，会在推送到 `main` 或创建 Pull Request 时自动运行；RustSec 扫描完整的 Cargo 锁定依赖树，npm 扫描通过 `--omit=dev` 仅检查前端生产依赖。`.cargo/audit.toml` 只豁免未启用的 `rust_decimal/rkyv` 可选依赖告警，并在文件内记录原因。
 
 保留原始控制台演示入口：
 

@@ -1,0 +1,6 @@
+[advisories]
+# rust_decimal declares rkyv 0.7 as an optional dependency, but Koku does not
+# enable rust_decimal's rkyv feature (verified with `cargo tree -i rkyv`).
+# cargo-audit scans every package retained in Cargo.lock, including inactive
+# optional dependencies, so this advisory is not reachable in Koku builds.
+ignore = ["RUSTSEC-2026-0235"]

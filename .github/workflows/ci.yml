@@ -17,6 +17,9 @@ jobs:
   rust:
     name: Rust checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -29,6 +32,11 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
+
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -59,6 +67,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
       - name: Run tests
         run: npm test
 
@@ -79,5 +90,5 @@ jobs:
         env:
           KOKU_API_IMAGE: koku-api:ci
           KOKU_WEB_IMAGE: koku-web:ci
-          KOKU_AUTH_USERNAME: ci-user
+          KOKU_AUTH_EMAIL: ci@example.com
         run: docker compose --file compose.production.yml config --quiet
