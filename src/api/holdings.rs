@@ -59,6 +59,7 @@ fn quote_ttl_hours() -> i64 {
         .unwrap_or(24)
 }
 
+#[utoipa::path(get, path = "/api/holdings", tag = "holdings", responses((status = 200, description = "List holdings")))]
 async fn api_holdings(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -67,6 +68,7 @@ async fn api_holdings(
     Ok(Json(ApiResponse::new(holdings)))
 }
 
+#[utoipa::path(post, path = "/api/holdings/buy", tag = "holdings", responses((status = 201, description = "Buy stock")))]
 async fn api_buy_stock(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -85,6 +87,7 @@ async fn api_buy_stock(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
+#[utoipa::path(post, path = "/api/holdings/sell", tag = "holdings", responses((status = 201, description = "Sell stock")))]
 async fn api_sell_stock(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -104,6 +107,7 @@ async fn api_sell_stock(
 }
 
 /// 供买入表单按证券代码查询参考价；失败时前端仍可由用户输入手动价格。
+#[utoipa::path(get, path = "/api/holdings/quote", tag = "holdings", responses((status = 200, description = "Get a market quote")))]
 async fn api_quote(
     Extension(_user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -127,6 +131,13 @@ async fn api_quote(
     )))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/holdings/{holding_id}/price",
+    tag = "holdings",
+    params(("holding_id" = i64, Path)),
+    responses((status = 200, description = "Set a holding price"))
+)]
 async fn api_set_holding_price(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -140,6 +151,7 @@ async fn api_set_holding_price(
 }
 
 /// 刷新全部过期（或缺失）市价：并发拉取 Stooq 后批量写回，返回逐标的明细。
+#[utoipa::path(post, path = "/api/holdings/refresh", tag = "holdings", responses((status = 200, description = "Refresh stale holding prices")))]
 async fn api_refresh_holdings(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -195,6 +207,13 @@ async fn api_refresh_holdings(
 }
 
 /// 刷新单只持仓市价（忽略 TTL，强制拉取）。
+#[utoipa::path(
+    post,
+    path = "/api/holdings/{holding_id}/refresh",
+    tag = "holdings",
+    params(("holding_id" = i64, Path)),
+    responses((status = 200, description = "Refresh a holding price"))
+)]
 async fn api_refresh_holding(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -227,3 +246,13 @@ pub(super) fn router() -> Router<AppState> {
             post(api_refresh_holding),
         )
 }
+
+api_doc!(
+    HoldingsApi: api_holdings,
+    api_buy_stock,
+    api_sell_stock,
+    api_quote,
+    api_set_holding_price,
+    api_refresh_holdings,
+    api_refresh_holding,
+);

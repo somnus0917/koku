@@ -78,6 +78,7 @@ struct UpdateTransactionRequest {
     splits: Option<Vec<SplitInput>>,
 }
 
+#[utoipa::path(get, path = "/api/transactions", tag = "transactions", responses((status = 200, description = "List transactions")))]
 async fn api_transactions(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -111,6 +112,7 @@ async fn api_transactions(
     Ok(Json(ApiResponse::new(transactions)))
 }
 
+#[utoipa::path(post, path = "/api/transactions", tag = "transactions", responses((status = 201, description = "Create a transaction")))]
 async fn api_create_transaction(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -201,6 +203,7 @@ async fn api_create_transaction(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
+#[utoipa::path(post, path = "/api/transfers", tag = "transactions", responses((status = 201, description = "Create a transfer")))]
 async fn api_create_transfer(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -227,6 +230,7 @@ async fn api_create_transfer(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
+#[utoipa::path(post, path = "/api/transactions/{transaction_id}/void", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Void a transaction")))]
 async fn api_void_transaction(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -246,6 +250,7 @@ async fn api_void_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+#[utoipa::path(post, path = "/api/transactions/{transaction_id}/restore", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Restore a transaction")))]
 async fn api_restore_transaction(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -265,6 +270,7 @@ async fn api_restore_transaction(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+#[utoipa::path(delete, path = "/api/transactions/{transaction_id}", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 204, description = "Delete a transaction")))]
 async fn api_delete_transaction(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -281,6 +287,7 @@ async fn api_delete_transaction(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(patch, path = "/api/transactions/{transaction_id}", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Update a transaction")))]
 async fn api_update_transaction(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -319,6 +326,7 @@ async fn api_update_transaction(
 }
 
 /// 列出交易的拆分分类（无拆分为空数组）。
+#[utoipa::path(get, path = "/api/transactions/{transaction_id}/splits", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "List transaction splits")))]
 async fn api_list_transaction_splits(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -331,6 +339,7 @@ async fn api_list_transaction_splits(
 }
 
 /// 清除交易的拆分分类（恢复父交易分类统计）。
+#[utoipa::path(delete, path = "/api/transactions/{transaction_id}/splits", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Clear transaction splits")))]
 async fn api_clear_transaction_splits(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -345,6 +354,7 @@ async fn api_clear_transaction_splits(
 }
 
 /// 原子替换交易的拆分分类（金额总和须等于父交易金额）。
+#[utoipa::path(put, path = "/api/transactions/{transaction_id}/splits", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Set transaction splits")))]
 async fn api_set_transaction_splits(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -357,6 +367,7 @@ async fn api_set_transaction_splits(
     Ok(Json(ApiResponse::new(splits)))
 }
 
+#[utoipa::path(post, path = "/api/transactions/{transaction_id}/receipt", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 201, description = "Upload a receipt")))]
 async fn api_upload_receipt(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -393,6 +404,7 @@ async fn api_upload_receipt(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 
+#[utoipa::path(get, path = "/api/transactions/{transaction_id}/receipt", tag = "transactions", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Download a receipt")))]
 async fn api_get_receipt(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -452,3 +464,18 @@ pub(super) fn router() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
 }
+
+api_doc!(
+    TransactionsApi: api_transactions,
+    api_create_transaction,
+    api_create_transfer,
+    api_void_transaction,
+    api_restore_transaction,
+    api_delete_transaction,
+    api_update_transaction,
+    api_list_transaction_splits,
+    api_clear_transaction_splits,
+    api_set_transaction_splits,
+    api_upload_receipt,
+    api_get_receipt,
+);

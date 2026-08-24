@@ -4,8 +4,8 @@ use axum::Router;
 
 use super::state::AppState;
 
-mod backups;
-mod users;
+pub(super) mod backups;
+pub(super) mod users;
 
 /// 管理后台受保护路由（叠加在全局鉴权中间件之上）。
 pub(super) fn router() -> Router<AppState> {

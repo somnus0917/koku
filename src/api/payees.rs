@@ -18,6 +18,7 @@ struct PayeeQuery {
     limit: Option<u32>,
 }
 
+#[utoipa::path(get, path = "/api/payees", tag = "payees", responses((status = 200, description = "List payees")))]
 async fn api_payees(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -31,6 +32,7 @@ async fn api_payees(
 
 /// 清除自动分类学习数据（merchant_aliases 与 payee_category_stats）。
 /// 不删除 Payee、不删除交易、不修改已有交易分类。
+#[utoipa::path(post, path = "/api/payees/clear-learning", tag = "payees", responses((status = 200, description = "Clear learned payee associations")))]
 async fn api_clear_payee_learning(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -48,3 +50,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/payees", get(api_payees))
         .route("/api/payees/clear-learning", post(api_clear_payee_learning))
 }
+
+api_doc!(PayeesApi: api_payees, api_clear_payee_learning);

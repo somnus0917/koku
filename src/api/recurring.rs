@@ -32,6 +32,7 @@ struct SetPausedRequest {
     paused: bool,
 }
 
+#[utoipa::path(get, path = "/api/recurring", tag = "recurring", responses((status = 200, description = "List recurring rules")))]
 async fn api_recurring_rules(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -40,6 +41,7 @@ async fn api_recurring_rules(
     Ok(Json(ApiResponse::new(rules)))
 }
 
+#[utoipa::path(post, path = "/api/recurring", tag = "recurring", responses((status = 201, description = "Create a recurring rule")))]
 async fn api_create_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -59,6 +61,7 @@ async fn api_create_recurring(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(rule))))
 }
 
+#[utoipa::path(delete, path = "/api/recurring/{rule_id}", tag = "recurring", params(("rule_id" = i64, Path)), responses((status = 200, description = "Delete a recurring rule")))]
 async fn api_delete_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -70,6 +73,7 @@ async fn api_delete_recurring(
     Ok(Json(ApiResponse::new(rule)))
 }
 
+#[utoipa::path(put, path = "/api/recurring/{rule_id}", tag = "recurring", params(("rule_id" = i64, Path)), responses((status = 200, description = "Update a recurring rule")))]
 async fn api_update_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -91,6 +95,7 @@ async fn api_update_recurring(
     Ok(Json(ApiResponse::new(rule)))
 }
 
+#[utoipa::path(post, path = "/api/recurring/{rule_id}/paused", tag = "recurring", params(("rule_id" = i64, Path)), responses((status = 200, description = "Pause or resume a recurring rule")))]
 async fn api_set_recurring_paused(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -103,6 +108,7 @@ async fn api_set_recurring_paused(
     Ok(Json(ApiResponse::new(rule)))
 }
 
+#[utoipa::path(get, path = "/api/recurring/{rule_id}/preview", tag = "recurring", params(("rule_id" = i64, Path)), responses((status = 200, description = "Preview recurring occurrences")))]
 async fn api_recurring_preview(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -114,6 +120,7 @@ async fn api_recurring_preview(
     Ok(Json(ApiResponse::new(occurrences)))
 }
 
+#[utoipa::path(post, path = "/api/recurring/run", tag = "recurring", responses((status = 200, description = "Run due recurring rules")))]
 async fn api_run_recurring(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -142,3 +149,13 @@ pub(super) fn router() -> Router<AppState> {
             get(api_recurring_preview),
         )
 }
+
+api_doc!(
+    RecurringApi: api_recurring_rules,
+    api_create_recurring,
+    api_delete_recurring,
+    api_update_recurring,
+    api_set_recurring_paused,
+    api_recurring_preview,
+    api_run_recurring,
+);

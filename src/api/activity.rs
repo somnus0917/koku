@@ -15,6 +15,7 @@ struct ActivityQuery {
     limit: Option<u32>,
 }
 
+#[utoipa::path(get, path = "/api/activity", tag = "activity", responses((status = 200, description = "List activity entries")))]
 async fn list(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -30,3 +31,5 @@ async fn list(
 pub(super) fn router() -> Router<AppState> {
     Router::new().route("/api/activity", get(list))
 }
+
+api_doc!(ActivityApi: list);

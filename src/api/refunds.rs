@@ -23,6 +23,7 @@ struct RefundRequest {
     note: String,
 }
 
+#[utoipa::path(post, path = "/api/refunds", tag = "refunds", responses((status = 200, description = "Create a refund")))]
 async fn api_refund(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -51,3 +52,5 @@ async fn api_refund(
 pub(super) fn router() -> Router<AppState> {
     Router::new().route("/api/refunds", post(api_refund))
 }
+
+api_doc!(RefundsApi: api_refund);

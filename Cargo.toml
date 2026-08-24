@@ -29,6 +29,8 @@ totp-rs = { version = "5", features = ["otpauth"] }
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = "5.5"
+utoipa-swagger-ui = { version = "9.0", features = ["axum", "debug-embed", "vendored"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # bundled SQLite 是 C 代码，dev 模式默认 opt-level=0 会让 SQL 慢数倍；

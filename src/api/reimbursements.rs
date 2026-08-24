@@ -23,6 +23,7 @@ struct ReimburseRequest {
     note: String,
 }
 
+#[utoipa::path(post, path = "/api/transactions/{transaction_id}/reimbursable", tag = "reimbursements", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Mark a transaction reimbursable")))]
 async fn api_mark_reimbursable(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -39,6 +40,7 @@ async fn api_mark_reimbursable(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+#[utoipa::path(delete, path = "/api/transactions/{transaction_id}/reimbursable", tag = "reimbursements", params(("transaction_id" = i64, Path)), responses((status = 200, description = "Remove a reimbursable marker")))]
 async fn api_unmark_reimbursable(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -55,6 +57,7 @@ async fn api_unmark_reimbursable(
     Ok(Json(ApiResponse::new(transaction)))
 }
 
+#[utoipa::path(post, path = "/api/reimbursements", tag = "reimbursements", responses((status = 201, description = "Record a reimbursement")))]
 async fn api_reimburse(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -88,3 +91,9 @@ pub(super) fn router() -> Router<AppState> {
         )
         .route("/api/reimbursements", post(api_reimburse))
 }
+
+api_doc!(
+    ReimbursementsApi: api_mark_reimbursable,
+    api_unmark_reimbursable,
+    api_reimburse,
+);

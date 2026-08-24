@@ -14,6 +14,7 @@ use crate::service::BookkeepingService;
 use super::super::state::{lock_auth, ApiResponse, AppState, AuthenticatedUser};
 
 /// 列出全部备份（管理员）。
+#[utoipa::path(get, path = "/api/admin/backups", tag = "administration", responses((status = 200, description = "List backups")))]
 async fn api_list_backups(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -24,6 +25,7 @@ async fn api_list_backups(
 }
 
 /// 手动创建一份备份（管理员）。
+#[utoipa::path(post, path = "/api/admin/backup", tag = "administration", responses((status = 201, description = "Create a backup")))]
 async fn api_create_backup(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -61,6 +63,7 @@ async fn upload_backup_to_r2(r2: &R2Client, meta: &mut BackupMeta, state: &AppSt
 }
 
 /// R2 状态（管理员）：是否启用、桶/前缀、最近一次备份的上传状态。
+#[utoipa::path(get, path = "/api/admin/r2/status", tag = "administration", responses((status = 200, description = "Get R2 backup status")))]
 async fn api_r2_status(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -99,6 +102,7 @@ async fn api_r2_status(
 }
 
 /// 把某个本地备份补传到 R2（管理员）。
+#[utoipa::path(post, path = "/api/admin/r2/upload/{backup_id}", tag = "administration", params(("backup_id" = String, Path)), responses((status = 200, description = "Upload a backup to R2")))]
 async fn api_r2_upload(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -120,6 +124,7 @@ async fn api_r2_upload(
 }
 
 /// 从 R2 删除某备份对象（管理员；不影响本地备份）。
+#[utoipa::path(post, path = "/api/admin/r2/delete/{backup_id}", tag = "administration", params(("backup_id" = String, Path)), responses((status = 200, description = "Delete an R2 backup")))]
 async fn api_r2_delete(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -145,6 +150,7 @@ async fn api_r2_delete(
 
 /// 从 R2 恢复某备份（管理员）：下载 zip 到本地备份目录后执行恢复，
 /// 覆盖共享库与全部账本文件（所有会话失效）。
+#[utoipa::path(post, path = "/api/admin/r2/restore/{backup_id}", tag = "administration", params(("backup_id" = String, Path)), responses((status = 200, description = "Restore an R2 backup")))]
 async fn api_r2_restore(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -174,6 +180,7 @@ async fn api_r2_restore(
 }
 
 /// 下载备份 zip（管理员）。
+#[utoipa::path(get, path = "/api/admin/backups/{backup_id}/download", tag = "administration", params(("backup_id" = String, Path)), responses((status = 200, description = "Download a backup")))]
 async fn api_download_backup(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -200,6 +207,7 @@ async fn api_download_backup(
 
 /// 恢复备份（管理员）：覆盖共享库与全部账本文件，随后重开共享库连接并
 /// 清空账本连接缓存。恢复会使当前所有会话失效（共享库被替换）。
+#[utoipa::path(post, path = "/api/admin/backups/{backup_id}/restore", tag = "administration", params(("backup_id" = String, Path)), responses((status = 200, description = "Restore a backup")))]
 async fn api_restore_backup(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -245,3 +253,14 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/admin/r2/delete/{backup_id}", post(api_r2_delete))
         .route("/api/admin/r2/restore/{backup_id}", post(api_r2_restore))
 }
+
+api_doc!(
+    BackupsApi: api_list_backups,
+    api_create_backup,
+    api_r2_status,
+    api_r2_upload,
+    api_r2_delete,
+    api_r2_restore,
+    api_download_backup,
+    api_restore_backup,
+);

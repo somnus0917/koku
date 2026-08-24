@@ -23,6 +23,7 @@ struct SetBudgetRequest {
     limit_amount: Decimal,
 }
 
+#[utoipa::path(get, path = "/api/budgets", tag = "budgets", responses((status = 200, description = "List monthly budgets")))]
 async fn api_budgets(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -34,6 +35,13 @@ async fn api_budgets(
     Ok(Json(ApiResponse::new(budgets)))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/budgets/{category_id}",
+    tag = "budgets",
+    params(("category_id" = i64, Path)),
+    responses((status = 200, description = "Set a category budget"))
+)]
 async fn api_set_budget(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -50,6 +58,13 @@ async fn api_set_budget(
     Ok(Json(ApiResponse::new(budget)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/budgets/{category_id}",
+    tag = "budgets",
+    params(("category_id" = i64, Path)),
+    responses((status = 200, description = "Clear a category budget"))
+)]
 async fn api_clear_budget(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -64,6 +79,7 @@ async fn api_clear_budget(
     Ok(Json(ApiResponse::new(budget)))
 }
 
+#[utoipa::path(post, path = "/api/budgets/rollover", tag = "budgets", responses((status = 200, description = "Roll over budgets")))]
 async fn api_rollover_budgets(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -85,3 +101,10 @@ pub(super) fn router() -> Router<AppState> {
             put(api_set_budget).delete(api_clear_budget),
         )
 }
+
+api_doc!(
+    BudgetsApi: api_budgets,
+    api_set_budget,
+    api_clear_budget,
+    api_rollover_budgets,
+);

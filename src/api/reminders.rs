@@ -18,6 +18,7 @@ struct RemindersQuery {
 }
 
 /// 到期提醒：未来 `days` 天内到期（含已逾期）的定存、借款与信用卡账单。
+#[utoipa::path(get, path = "/api/reminders", tag = "reminders", responses((status = 200, description = "List due reminders")))]
 async fn api_reminders(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -30,6 +31,7 @@ async fn api_reminders(
 }
 
 /// 手动向当前用户邮箱发送其账本的到期提醒（需配置 SMTP）。
+#[utoipa::path(post, path = "/api/reminders/send", tag = "reminders", responses((status = 200, description = "Send the reminder digest")))]
 async fn api_send_reminder_digest(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -60,3 +62,8 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/reminders", get(api_reminders))
         .route("/api/reminders/send", post(api_send_reminder_digest))
 }
+
+api_doc!(
+    RemindersApi: api_reminders,
+    api_send_reminder_digest,
+);

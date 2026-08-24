@@ -28,6 +28,7 @@ struct ReconciliationQuery {
     account_id: Option<i64>,
 }
 
+#[utoipa::path(get, path = "/api/reconciliations", tag = "reconciliations", responses((status = 200, description = "List reconciliations")))]
 async fn api_reconciliations(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -39,6 +40,7 @@ async fn api_reconciliations(
     Ok(Json(ApiResponse::new(list)))
 }
 
+#[utoipa::path(post, path = "/api/reconciliations", tag = "reconciliations", responses((status = 201, description = "Create a reconciliation")))]
 async fn api_create_reconciliation(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -60,6 +62,13 @@ async fn api_create_reconciliation(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(reconciliation))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/reconciliations/{reconciliation_id}/complete",
+    tag = "reconciliations",
+    params(("reconciliation_id" = i64, Path)),
+    responses((status = 200, description = "Complete a reconciliation"))
+)]
 async fn api_complete_reconciliation(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -76,6 +85,13 @@ async fn api_complete_reconciliation(
     Ok(Json(ApiResponse::new(reconciliation)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/reconciliations/{reconciliation_id}/cancel",
+    tag = "reconciliations",
+    params(("reconciliation_id" = i64, Path)),
+    responses((status = 200, description = "Cancel a reconciliation"))
+)]
 async fn api_cancel_reconciliation(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -107,3 +123,10 @@ pub(super) fn router() -> Router<AppState> {
             post(api_cancel_reconciliation),
         )
 }
+
+api_doc!(
+    ReconciliationsApi: api_reconciliations,
+    api_create_reconciliation,
+    api_complete_reconciliation,
+    api_cancel_reconciliation,
+);

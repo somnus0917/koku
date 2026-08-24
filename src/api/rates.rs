@@ -22,6 +22,7 @@ struct RateQuery {
 
 /// 汇率提示：同币种直接返回 1；跨币种优先用当天/近几天的本地缓存，
 /// 未命中则拉取 Frankfurter 并缓存；数据源不可达时回退到旧缓存（标记 stale）。
+#[utoipa::path(get, path = "/api/rates", tag = "rates", responses((status = 200, description = "Get an exchange-rate hint")))]
 async fn api_rate_hint(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -72,3 +73,5 @@ async fn api_rate_hint(
 pub(super) fn router() -> Router<AppState> {
     Router::new().route("/api/rates", get(api_rate_hint))
 }
+
+api_doc!(RatesApi: api_rate_hint);

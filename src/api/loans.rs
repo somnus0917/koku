@@ -35,6 +35,7 @@ struct RepayLoanRequest {
     note: String,
 }
 
+#[utoipa::path(get, path = "/api/loans", tag = "loans", responses((status = 200, description = "List loans")))]
 async fn api_loans(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -43,6 +44,7 @@ async fn api_loans(
     Ok(Json(ApiResponse::new(loans)))
 }
 
+#[utoipa::path(post, path = "/api/loans", tag = "loans", responses((status = 201, description = "Create a loan")))]
 async fn api_create_loan(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -69,6 +71,13 @@ async fn api_create_loan(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(loan))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/loans/{loan_id}/repay",
+    tag = "loans",
+    params(("loan_id" = i64, Path)),
+    responses((status = 201, description = "Record a loan repayment"))
+)]
 async fn api_repay_loan(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -100,3 +109,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/loans", get(api_loans).post(api_create_loan))
         .route("/api/loans/{loan_id}/repay", post(api_repay_loan))
 }
+
+api_doc!(LoansApi: api_loans, api_create_loan, api_repay_loan);

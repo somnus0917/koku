@@ -20,6 +20,7 @@ struct CreateCategoryRequest {
     icon: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/categories", tag = "categories", responses((status = 200, description = "List categories")))]
 async fn api_categories(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -28,6 +29,7 @@ async fn api_categories(
     Ok(Json(ApiResponse::new(categories)))
 }
 
+#[utoipa::path(post, path = "/api/categories", tag = "categories", responses((status = 201, description = "Create a category")))]
 async fn api_create_category(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -39,6 +41,13 @@ async fn api_create_category(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(category))))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/categories/{category_id}",
+    tag = "categories",
+    params(("category_id" = i64, Path)),
+    responses((status = 200, description = "Delete a category"))
+)]
 async fn api_delete_category(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -50,6 +59,7 @@ async fn api_delete_category(
     Ok(Json(ApiResponse::new(category)))
 }
 
+#[utoipa::path(get, path = "/api/tags", tag = "categories", responses((status = 200, description = "List tags")))]
 async fn api_tags(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -67,3 +77,10 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/categories/{category_id}", delete(api_delete_category))
         .route("/api/tags", get(api_tags))
 }
+
+api_doc!(
+    CategoriesApi: api_categories,
+    api_create_category,
+    api_delete_category,
+    api_tags,
+);

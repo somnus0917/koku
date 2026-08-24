@@ -39,6 +39,7 @@ fn deletes_last_enabled_admin(target: &User, users: &[User]) -> bool {
             <= 1
 }
 
+#[utoipa::path(get, path = "/api/users", tag = "administration", responses((status = 200, description = "List users")))]
 async fn api_users(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -48,6 +49,7 @@ async fn api_users(
     Ok(Json(ApiResponse::new(users)))
 }
 
+#[utoipa::path(post, path = "/api/users", tag = "administration", responses((status = 201, description = "Create a user")))]
 async fn api_create_user(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -66,6 +68,7 @@ async fn api_create_user(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(created))))
 }
 
+#[utoipa::path(post, path = "/api/users/{user_id}/password", tag = "administration", params(("user_id" = i64, Path)), responses((status = 200, description = "Reset a user password")))]
 async fn api_reset_user_password(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -80,6 +83,7 @@ async fn api_reset_user_password(
     )))
 }
 
+#[utoipa::path(post, path = "/api/users/{user_id}/enabled", tag = "administration", params(("user_id" = i64, Path)), responses((status = 200, description = "Enable or disable a user")))]
 async fn api_set_user_enabled(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -112,6 +116,7 @@ async fn api_set_user_enabled(
     )))
 }
 
+#[utoipa::path(delete, path = "/api/users/{user_id}", tag = "administration", params(("user_id" = i64, Path)), responses((status = 200, description = "Delete a user")))]
 async fn api_delete_user(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -162,6 +167,14 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/users/{user_id}/enabled", post(api_set_user_enabled))
         .route("/api/users/{user_id}", delete(api_delete_user))
 }
+
+api_doc!(
+    UsersApi: api_users,
+    api_create_user,
+    api_reset_user_password,
+    api_set_user_enabled,
+    api_delete_user,
+);
 
 #[cfg(test)]
 mod tests {

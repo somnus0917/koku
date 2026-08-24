@@ -29,6 +29,7 @@ struct SettleDepositRequest {
     to_account_id: i64,
 }
 
+#[utoipa::path(get, path = "/api/deposits", tag = "deposits", responses((status = 200, description = "List deposits")))]
 async fn api_deposits(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -37,6 +38,7 @@ async fn api_deposits(
     Ok(Json(ApiResponse::new(deposits)))
 }
 
+#[utoipa::path(post, path = "/api/deposits", tag = "deposits", responses((status = 201, description = "Create a deposit")))]
 async fn api_create_deposit(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -56,6 +58,13 @@ async fn api_create_deposit(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(deposit))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/deposits/{deposit_id}/settle",
+    tag = "deposits",
+    params(("deposit_id" = i64, Path)),
+    responses((status = 200, description = "Settle a deposit"))
+)]
 async fn api_settle_deposit(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -76,3 +85,9 @@ pub(super) fn router() -> Router<AppState> {
             post(api_settle_deposit),
         )
 }
+
+api_doc!(
+    DepositsApi: api_deposits,
+    api_create_deposit,
+    api_settle_deposit,
+);

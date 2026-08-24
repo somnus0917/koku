@@ -52,6 +52,7 @@ impl From<RuleRequest> for TransactionRuleInput {
         }
     }
 }
+#[utoipa::path(get, path = "/api/rules", tag = "rules", responses((status = 200, description = "List transaction rules")))]
 async fn list(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -62,6 +63,7 @@ async fn list(
             .transaction_rules()?,
     )))
 }
+#[utoipa::path(post, path = "/api/rules", tag = "rules", responses((status = 201, description = "Create a transaction rule")))]
 async fn create(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -72,6 +74,7 @@ async fn create(
         .create_transaction_rule(body.into())?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(rule))))
 }
+#[utoipa::path(put, path = "/api/rules/{id}", tag = "rules", params(("id" = i64, Path)), responses((status = 200, description = "Update a transaction rule")))]
 async fn update(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -84,6 +87,7 @@ async fn update(
             .update_transaction_rule(id, body.into())?,
     )))
 }
+#[utoipa::path(delete, path = "/api/rules/{id}", tag = "rules", params(("id" = i64, Path)), responses((status = 204, description = "Delete a transaction rule")))]
 async fn remove(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -94,6 +98,7 @@ async fn remove(
         .delete_transaction_rule(id)?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[utoipa::path(post, path = "/api/rules/{id}/apply", tag = "rules", params(("id" = i64, Path)), responses((status = 200, description = "Apply a transaction rule")))]
 async fn apply(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -107,6 +112,7 @@ async fn apply(
         serde_json::json!({"applied":changed}),
     )))
 }
+#[utoipa::path(get, path = "/api/rules/{id}/preview", tag = "rules", params(("id" = i64, Path)), responses((status = 200, description = "Preview a transaction rule")))]
 async fn preview(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -125,3 +131,5 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/rules/{id}/preview", get(preview))
         .route("/api/rules/{id}/apply", post(apply))
 }
+
+api_doc!(RulesApi: list, create, update, remove, apply, preview);

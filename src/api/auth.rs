@@ -72,6 +72,7 @@ pub(super) async fn hash_password(password: String) -> Result<String> {
         .map_err(|error| KokuError::AuthConfiguration(error.to_string()))
 }
 
+#[utoipa::path(post, path = "/api/auth/login", tag = "authentication", responses((status = 200, description = "Authenticate with email and password")))]
 async fn api_login(
     State(state): State<AppState>,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
@@ -166,6 +167,7 @@ async fn api_login(
 }
 
 /// TOTP 第二步：校验动态码并创建会话（一次性令牌 5 分钟内有效）。
+#[utoipa::path(post, path = "/api/auth/totp", tag = "authentication", responses((status = 200, description = "Complete TOTP authentication")))]
 async fn api_totp_verify(
     State(state): State<AppState>,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
@@ -239,6 +241,7 @@ async fn api_totp_verify(
 }
 
 /// TOTP 设置第一步：校验当前密码后生成新密钥（暂存为 pending，未启用）。
+#[utoipa::path(post, path = "/api/auth/totp/setup", tag = "authentication", responses((status = 200, description = "Create a TOTP setup challenge")))]
 async fn api_totp_setup(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -266,6 +269,7 @@ async fn api_totp_setup(
 }
 
 /// TOTP 设置第二步：用动态码确认密钥可用后启用。
+#[utoipa::path(post, path = "/api/auth/totp/enable", tag = "authentication", responses((status = 200, description = "Enable TOTP authentication")))]
 async fn api_totp_enable(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -292,6 +296,7 @@ async fn api_totp_enable(
 }
 
 /// 关闭 TOTP：需要提供当前有效的动态码。
+#[utoipa::path(post, path = "/api/auth/totp/disable", tag = "authentication", responses((status = 200, description = "Disable TOTP authentication")))]
 async fn api_totp_disable(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -314,6 +319,7 @@ async fn api_totp_disable(
     )))
 }
 
+#[utoipa::path(get, path = "/api/auth/session", tag = "authentication", responses((status = 200, description = "Get the current session")))]
 async fn api_auth_session(Extension(user): Extension<AuthenticatedUser>) -> Response {
     let mut response = Json(ApiResponse::new(AuthSession {
         id: user.user_id,
@@ -328,6 +334,7 @@ async fn api_auth_session(Extension(user): Extension<AuthenticatedUser>) -> Resp
     response
 }
 
+#[utoipa::path(post, path = "/api/auth/logout", tag = "authentication", responses((status = 200, description = "End the current session")))]
 async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result<Response> {
     if let Some(token) = session_token(&headers) {
         lock_auth(&state)?.delete_auth_session(&token)?;
@@ -344,6 +351,7 @@ async fn api_logout(State(state): State<AppState>, headers: HeaderMap) -> Result
     Ok(response)
 }
 
+#[utoipa::path(post, path = "/api/auth/password", tag = "authentication", responses((status = 200, description = "Change the current password")))]
 async fn api_change_password(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -399,3 +407,14 @@ pub(super) fn public_router() -> Router<AppState> {
         .route("/api/auth/totp", post(api_totp_verify))
         .route("/api/auth/logout", post(api_logout))
 }
+
+api_doc!(
+    AuthApi: api_login,
+    api_totp_verify,
+    api_totp_setup,
+    api_totp_enable,
+    api_totp_disable,
+    api_auth_session,
+    api_logout,
+    api_change_password,
+);

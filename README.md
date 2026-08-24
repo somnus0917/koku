@@ -291,6 +291,8 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 
 ## REST API
 
+运行服务后可访问 Swagger UI：`http://127.0.0.1:8080/swagger-ui/`。机器可读的 OpenAPI 3.1 文档位于 `/api-docs/openapi.json`，由处理器上的 `utoipa` 注解随代码自动生成。
+
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |

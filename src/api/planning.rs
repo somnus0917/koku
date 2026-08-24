@@ -40,6 +40,7 @@ struct Goal {
     current_amount: Decimal,
     target_date: Option<NaiveDate>,
 }
+#[utoipa::path(get, path = "/api/import-profiles", tag = "planning", responses((status = 200, description = "List import profiles")))]
 async fn profiles(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -48,6 +49,7 @@ async fn profiles(
         lock_ledger(&s, u.user_id).await?.import_profiles()?,
     )))
 }
+#[utoipa::path(post, path = "/api/import-profiles", tag = "planning", responses((status = 201, description = "Create an import profile")))]
 async fn profile_create(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -63,6 +65,7 @@ async fn profile_create(
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(p))))
 }
+#[utoipa::path(put, path = "/api/import-profiles/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 200, description = "Update an import profile")))]
 async fn profile_update(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -80,6 +83,7 @@ async fn profile_update(
         )?,
     )))
 }
+#[utoipa::path(delete, path = "/api/import-profiles/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 204, description = "Delete an import profile")))]
 async fn profile_delete(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -90,6 +94,7 @@ async fn profile_delete(
         .delete_import_profile(id)?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[utoipa::path(get, path = "/api/bills", tag = "planning", responses((status = 200, description = "List bills")))]
 async fn bills(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -98,6 +103,7 @@ async fn bills(
         lock_ledger(&s, u.user_id).await?.bills()?,
     )))
 }
+#[utoipa::path(post, path = "/api/bills", tag = "planning", responses((status = 201, description = "Create a bill")))]
 async fn bill_create(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -115,6 +121,7 @@ async fn bill_create(
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(b))))
 }
+#[utoipa::path(put, path = "/api/bills/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 200, description = "Update a bill")))]
 async fn bill_update(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -134,6 +141,7 @@ async fn bill_update(
         )?,
     )))
 }
+#[utoipa::path(delete, path = "/api/bills/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 204, description = "Delete a bill")))]
 async fn bill_delete(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -142,6 +150,7 @@ async fn bill_delete(
     lock_ledger(&s, u.user_id).await?.delete_bill(id)?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[utoipa::path(get, path = "/api/savings-goals", tag = "planning", responses((status = 200, description = "List savings goals")))]
 async fn goals(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -150,6 +159,7 @@ async fn goals(
         lock_ledger(&s, u.user_id).await?.savings_goals()?,
     )))
 }
+#[utoipa::path(post, path = "/api/savings-goals", tag = "planning", responses((status = 201, description = "Create a savings goal")))]
 async fn goal_create(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -165,6 +175,7 @@ async fn goal_create(
     )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(g))))
 }
+#[utoipa::path(put, path = "/api/savings-goals/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 200, description = "Update a savings goal")))]
 async fn goal_update(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -182,6 +193,7 @@ async fn goal_update(
         )?,
     )))
 }
+#[utoipa::path(delete, path = "/api/savings-goals/{id}", tag = "planning", params(("id" = i64, Path)), responses((status = 204, description = "Delete a savings goal")))]
 async fn goal_delete(
     Extension(u): Extension<AuthenticatedUser>,
     State(s): State<AppState>,
@@ -205,3 +217,18 @@ pub(super) fn router() -> Router<AppState> {
             put(goal_update).delete(goal_delete),
         )
 }
+
+api_doc!(
+    PlanningApi: profiles,
+    profile_create,
+    profile_update,
+    profile_delete,
+    bills,
+    bill_create,
+    bill_update,
+    bill_delete,
+    goals,
+    goal_create,
+    goal_update,
+    goal_delete,
+);

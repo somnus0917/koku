@@ -53,6 +53,7 @@ struct BalanceQuery {
     currency: Option<String>,
 }
 
+#[utoipa::path(get, path = "/api/summary/monthly", tag = "summaries", responses((status = 200, description = "Get a monthly summary")))]
 async fn api_monthly_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -72,6 +73,7 @@ async fn api_monthly_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+#[utoipa::path(get, path = "/api/summary/cash-flow", tag = "summaries", responses((status = 200, description = "Get a cash-flow summary")))]
 async fn api_cash_flow_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -91,6 +93,7 @@ async fn api_cash_flow_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+#[utoipa::path(get, path = "/api/summary/by-tag", tag = "summaries", responses((status = 200, description = "Get a tag summary")))]
 async fn api_tag_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -122,6 +125,7 @@ async fn api_tag_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+#[utoipa::path(get, path = "/api/summary/trend", tag = "summaries", responses((status = 200, description = "Get the monthly trend")))]
 async fn api_monthly_trend(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -139,6 +143,7 @@ async fn api_monthly_trend(
     Ok(Json(ApiResponse::new(trend)))
 }
 
+#[utoipa::path(get, path = "/api/summary/balance", tag = "summaries", responses((status = 200, description = "Get a balance summary")))]
 async fn api_balance_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -156,6 +161,7 @@ async fn api_balance_summary(
 }
 
 /// 年度汇总：`?year=`（缺省当前年）与 `?currency=`（缺省 CNY）。
+#[utoipa::path(get, path = "/api/summary/yearly", tag = "summaries", responses((status = 200, description = "Get a yearly summary")))]
 async fn api_yearly_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -176,6 +182,7 @@ async fn api_yearly_summary(
 
 /// 滚动平均：`?months=`（趋势月数，默认 12，上限 120）、
 /// `?window=`（平均窗口，默认 3，上限 120）、`?currency=`（默认 CNY）。
+#[utoipa::path(get, path = "/api/summary/rolling", tag = "summaries", responses((status = 200, description = "Get a rolling summary")))]
 async fn api_rolling_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -244,3 +251,13 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/summary/rolling", get(api_rolling_summary))
         .route("/api/summary/balance", get(api_balance_summary))
 }
+
+api_doc!(
+    SummariesApi: api_monthly_summary,
+    api_cash_flow_summary,
+    api_tag_summary,
+    api_monthly_trend,
+    api_balance_summary,
+    api_yearly_summary,
+    api_rolling_summary,
+);

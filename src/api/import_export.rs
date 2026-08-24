@@ -54,6 +54,7 @@ fn neutralize_formula(value: &str) -> String {
     }
 }
 
+#[utoipa::path(get, path = "/api/transactions/export", tag = "import-export", responses((status = 200, description = "Export transactions as CSV")))]
 async fn api_export_transactions(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -240,6 +241,7 @@ async fn parse_import_upload(mut multipart: Multipart) -> Result<ParsedImport> {
 }
 
 /// 只解析并展示导入摘要；用户确认前不会写入账本。
+#[utoipa::path(post, path = "/api/transactions/import/preview", tag = "import-export", responses((status = 200, description = "Preview a transaction import")))]
 async fn api_preview_import_transactions(
     Extension(_user): Extension<AuthenticatedUser>,
     multipart: Multipart,
@@ -252,6 +254,7 @@ async fn api_preview_import_transactions(
     ))))
 }
 
+#[utoipa::path(post, path = "/api/transactions/import", tag = "import-export", responses((status = 201, description = "Import transactions")))]
 async fn api_import_transactions(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -279,6 +282,13 @@ async fn api_import_transactions(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(result))))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/transactions/import/{batch_id}/undo",
+    tag = "import-export",
+    params(("batch_id" = String, Path)),
+    responses((status = 200, description = "Undo an import batch"))
+)]
 async fn api_undo_import_batch(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -308,6 +318,13 @@ pub(super) fn router() -> Router<AppState> {
             post(api_undo_import_batch),
         )
 }
+
+api_doc!(
+    ImportExportApi: api_export_transactions,
+    api_preview_import_transactions,
+    api_import_transactions,
+    api_undo_import_batch,
+);
 
 #[cfg(test)]
 mod tests {

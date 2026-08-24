@@ -15,10 +15,20 @@ use axum::routing::get;
 use axum::{Json, Router};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::auth::session_token;
 use crate::error::KokuError;
 use crate::ratelimit::rate_limit;
+
+macro_rules! api_doc {
+    ($name:ident: $($path:ident),+ $(,)?) => {
+        #[derive(utoipa::OpenApi)]
+        #[openapi(paths($($path),+))]
+        pub(in crate::api) struct $name;
+    };
+}
 
 mod accounts;
 mod activity;
@@ -84,11 +94,52 @@ async fn require_auth(State(state): State<AppState>, mut request: Request, next:
     next.run(request).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "system",
+    responses((status = 200, description = "API is healthy"))
+)]
 async fn api_health() -> Json<state::ApiResponse<serde_json::Value>> {
     Json(state::ApiResponse::new(serde_json::json!({
         "status": "ok",
         "service": "koku-api"
     })))
+}
+
+#[derive(OpenApi)]
+#[openapi(paths(api_health))]
+struct ApiDoc;
+
+fn openapi() -> utoipa::openapi::OpenApi {
+    let mut document = ApiDoc::openapi();
+    for module in [
+        accounts::AccountsApi::openapi(),
+        activity::ActivityApi::openapi(),
+        admin::backups::BackupsApi::openapi(),
+        admin::users::UsersApi::openapi(),
+        auth::AuthApi::openapi(),
+        budgets::BudgetsApi::openapi(),
+        categories::CategoriesApi::openapi(),
+        deposits::DepositsApi::openapi(),
+        holdings::HoldingsApi::openapi(),
+        import_export::ImportExportApi::openapi(),
+        loans::LoansApi::openapi(),
+        payees::PayeesApi::openapi(),
+        planning::PlanningApi::openapi(),
+        rates::RatesApi::openapi(),
+        reconciliations::ReconciliationsApi::openapi(),
+        recurring::RecurringApi::openapi(),
+        refunds::RefundsApi::openapi(),
+        reimbursements::ReimbursementsApi::openapi(),
+        reminders::RemindersApi::openapi(),
+        rules::RulesApi::openapi(),
+        summaries::SummariesApi::openapi(),
+        transactions::TransactionsApi::openapi(),
+    ] {
+        document.merge(module);
+    }
+    document
 }
 
 pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Router {
@@ -119,6 +170,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .route("/api/health", get(api_health))
         .merge(auth::public_router())
         .merge(protected)
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi()))
         .with_state(state.clone());
 
     let router = match allowed_origin {
@@ -150,7 +202,7 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
 
 #[cfg(test)]
 mod tests {
-    use super::maintenance_operation;
+    use super::{maintenance_operation, openapi};
 
     #[test]
     fn maintenance_gate_skips_only_operations_that_take_the_write_lock() {
@@ -163,5 +215,15 @@ mod tests {
         ));
         assert!(!maintenance_operation("/api/admin/backups"));
         assert!(!maintenance_operation("/api/transactions"));
+    }
+
+    #[test]
+    fn openapi_registers_public_and_protected_routes() {
+        let document = openapi();
+        assert_eq!(document.paths.paths.len(), 88);
+        assert!(document.paths.paths.contains_key("/api/health"));
+        assert!(document.paths.paths.contains_key("/api/auth/login"));
+        assert!(document.paths.paths.contains_key("/api/transactions"));
+        assert!(document.paths.paths.contains_key("/api/admin/backups"));
     }
 }

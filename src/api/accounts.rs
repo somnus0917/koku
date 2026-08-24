@@ -53,6 +53,7 @@ struct AdjustBalanceRequest {
     note: String,
 }
 
+#[utoipa::path(get, path = "/api/accounts", tag = "accounts", responses((status = 200, description = "List accounts")))]
 async fn api_accounts(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -61,6 +62,7 @@ async fn api_accounts(
     Ok(Json(ApiResponse::new(accounts)))
 }
 
+#[utoipa::path(post, path = "/api/accounts", tag = "accounts", responses((status = 201, description = "Create an account")))]
 async fn api_create_account(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -81,6 +83,13 @@ async fn api_create_account(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(account))))
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/accounts/{account_id}",
+    tag = "accounts",
+    params(("account_id" = i64, Path)),
+    responses((status = 200, description = "Update an account"))
+)]
 async fn api_update_account(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -103,6 +112,13 @@ async fn api_update_account(
 }
 
 /// 信用卡账单摘要（额度/出账/未出账/账单与还款日）；仅对 Credit 账户有效。
+#[utoipa::path(
+    get,
+    path = "/api/accounts/{account_id}/credit-card-summary",
+    tag = "accounts",
+    params(("account_id" = i64, Path)),
+    responses((status = 200, description = "Get a credit-card summary"))
+)]
 async fn api_credit_card_summary(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -114,6 +130,13 @@ async fn api_credit_card_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/accounts/{account_id}/credit-card-statements",
+    tag = "accounts",
+    params(("account_id" = i64, Path)),
+    responses((status = 200, description = "List credit-card statements"))
+)]
 async fn api_credit_card_statements(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -125,6 +148,13 @@ async fn api_credit_card_statements(
     Ok(Json(ApiResponse::new(statements)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/accounts/{account_id}/adjust-balance",
+    tag = "accounts",
+    params(("account_id" = i64, Path)),
+    responses((status = 201, description = "Adjust an account balance"))
+)]
 async fn api_adjust_balance(
     Extension(user): Extension<AuthenticatedUser>,
     State(state): State<AppState>,
@@ -156,3 +186,12 @@ pub(super) fn router() -> Router<AppState> {
             post(api_adjust_balance),
         )
 }
+
+api_doc!(
+    AccountsApi: api_accounts,
+    api_create_account,
+    api_update_account,
+    api_credit_card_summary,
+    api_credit_card_statements,
+    api_adjust_balance,
+);
