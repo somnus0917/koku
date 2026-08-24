@@ -95,6 +95,8 @@ export interface Transaction {
   reimbursed_at: string | null;
   reimbursed_amount: string;
   refunded_amount: string;
+  /** 退款收入关联的原支出；票根墙将其折叠到原票根。 */
+  refund_expense_id?: number | null;
   has_receipt: boolean;
   /** 是否已有拆分分类（父交易仅作默认分类，统计以拆分为准）。 */
   has_splits: boolean;

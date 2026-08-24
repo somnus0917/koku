@@ -219,6 +219,8 @@ export function TransactionsPage({
     const matchesTag = tagFilter.length === 0 || tagFilter.every((name) => item.tags.includes(name));
     return matchesSearch && matchesTag && (kind === "all" || item.kind === kind);
   });
+  // 退款收入仍会保留在列表/时间线；票根墙则折叠到它关联的原支出票根。
+  const receiptTransactions = filtered.filter((transaction) => transaction.refund_expense_id == null);
   const timelineGroups = filtered.reduce<Array<{ day: string; items: Transaction[] }>>((groups, item) => {
     const day = item.occurred_at.slice(0, 10);
     const current = groups.at(-1);
@@ -341,7 +343,7 @@ export function TransactionsPage({
         {timelineGroups.map((group) => <section key={group.day}><h2>{dateGroup(group.day)}</h2>{group.items.map(row)}</section>)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </div>}
-      {mode === "receipts" && (filtered.length > 0 ? <ReceiptWall transactions={filtered} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} onRefund={onRefund} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}
+      {mode === "receipts" && (receiptTransactions.length > 0 ? <ReceiptWall transactions={receiptTransactions} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} onRefund={onRefund} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}
       {hasMore && (
         <div className="load-more-row">
           <button

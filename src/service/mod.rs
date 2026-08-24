@@ -122,7 +122,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount, (SELECT expense_id FROM refunds r WHERE r.income_id = transactions.id) AS refund_expense_id, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -2321,6 +2321,7 @@ mod tests {
         assert_eq!(refund.kind, TransactionKind::Income);
         assert_eq!(refund.account_id, card.id);
         assert_eq!(refund.amount, Decimal::from(40_u32));
+        assert_eq!(refund.refund_expense_id, Some(expense.id));
         assert_eq!(
             refund.category_id,
             Some(

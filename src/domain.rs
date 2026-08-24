@@ -338,6 +338,9 @@ pub struct Transaction {
     pub reimbursed_amount: Decimal,
     /// 累计已退款金额（原币种）
     pub refunded_amount: Decimal,
+    /// 若本交易是退款收入，则关联的原支出 ID；用于在票根墙中折叠展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refund_expense_id: Option<i64>,
     /// 是否已挂有小票/发票附件
     pub has_receipt: bool,
     /// 是否已有拆分分类（父交易仅作默认分类，统计以拆分为准）
