@@ -96,7 +96,7 @@ impl BookkeepingService {
                 expense.currency
             )));
         }
-        let remaining = expense.amount - expense.reimbursed_amount;
+        let remaining = expense.amount - expense.reimbursed_amount - expense.refunded_amount;
         if amount > remaining {
             return Err(KokuError::InvalidInput(format!(
                 "reimbursement amount {amount} exceeds the remaining {remaining}"
@@ -155,6 +155,93 @@ impl BookkeepingService {
         )?;
         tx.execute(
             "INSERT INTO reimbursements(expense_id, income_id, amount, reimbursed_at) VALUES (?1, ?2, ?3, ?4)",
+            params![expense_id, income_id, decimal_to_db(amount), timestamp(now)],
+        )?;
+        tx.commit()?;
+        self.transaction(income_id)
+    }
+
+    /// 为一笔支出登记商户退款：生成关联收入，可入任意指定账户并支持部分退款。
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund(
+        &mut self,
+        expense_id: i64,
+        account_id: i64,
+        amount: Decimal,
+        currency: impl Into<String>,
+        settled_amount: Option<Decimal>,
+        note: impl Into<String>,
+    ) -> Result<Transaction> {
+        positive_amount(amount)?;
+        let expense = self.transaction(expense_id)?;
+        if expense.kind != TransactionKind::Expense {
+            return Err(KokuError::InvalidInput(
+                "refunds can only be created for expense transactions".to_owned(),
+            ));
+        }
+        if expense.voided_at.is_some() {
+            return Err(KokuError::InvalidInput(
+                "voided transactions cannot be refunded".to_owned(),
+            ));
+        }
+        let currency = normalize_currency(currency.into())?;
+        if currency != expense.currency {
+            return Err(KokuError::InvalidInput(format!(
+                "refund must be in the expense currency {}",
+                expense.currency
+            )));
+        }
+        let remaining = expense.amount - expense.reimbursed_amount - expense.refunded_amount;
+        if amount > remaining {
+            return Err(KokuError::InvalidInput(format!(
+                "refund amount {amount} exceeds the remaining {remaining}"
+            )));
+        }
+
+        let refund_category = self.create_category("退款", CategoryKind::Income)?;
+        let now = Utc::now();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let account = Self::account_in_tx(&tx, account_id)?;
+        let category = Self::category_in_tx(&tx, refund_category.id)?;
+        let settled = match settled_amount {
+            Some(value) => value,
+            None if currency == account.currency => amount,
+            None => {
+                return Err(KokuError::InvalidInput(format!(
+                    "settled_amount in {} is required for a {currency} refund",
+                    account.currency
+                )))
+            }
+        };
+        positive_amount(settled)?;
+        if currency == account.currency && settled != amount {
+            return Err(KokuError::InvalidInput(
+                "same-currency refunds must settle for the original amount".to_owned(),
+            ));
+        }
+        let new_balance = account.account_type.apply_inflow(account.balance, settled);
+        Self::set_balance(&tx, account_id, new_balance)?;
+        tx.execute(
+            "INSERT INTO transactions(kind, account_id, category_id, amount, currency, settled_amount, occurred_at, note) VALUES ('income', ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                account_id,
+                category.id,
+                decimal_to_db(amount),
+                currency,
+                decimal_to_db(settled),
+                timestamp(now),
+                note.into()
+            ],
+        )?;
+        let income_id = tx.last_insert_rowid();
+        tx.execute(
+            "UPDATE transactions SET refunded_amount = ?1 WHERE id = ?2",
+            params![decimal_to_db(expense.refunded_amount + amount), expense_id],
+        )?;
+        tx.execute(
+            "INSERT INTO refunds(expense_id, income_id, amount, refunded_at) VALUES (?1, ?2, ?3, ?4)",
             params![expense_id, income_id, decimal_to_db(amount), timestamp(now)],
         )?;
         tx.commit()?;

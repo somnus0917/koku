@@ -1,6 +1,6 @@
 //! 票根墙：把流水以固定倾角的票据呈现，突出金额大小与每笔交易的独立感。
 import type { CSSProperties } from "react";
-import { ArrowRight, Paperclip, Pencil } from "lucide-react";
+import { ArrowRight, Paperclip, Pencil, RotateCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CategoryAvatar } from "../../components/avatar";
 import { formatDate, formatMoney } from "../../lib";
@@ -33,12 +33,14 @@ export function ReceiptWall({
   transactions,
   accountsById,
   categoriesById,
-  onEdit
+  onEdit,
+  onRefund
 }: {
   transactions: Transaction[];
   accountsById: Map<number, Account>;
   categoriesById: Map<number, Category>;
   onEdit: (transaction: Transaction) => void;
+  onRefund: (transaction: Transaction) => void;
 }) {
   const { t } = useTranslation();
   const largestAmount = Math.max(0, ...transactions.map((item) => Math.abs(Number(item.amount)) || 0));
@@ -68,6 +70,7 @@ export function ReceiptWall({
             const subtitle = category?.name || typeLabel;
             const size = ticketSize(transaction, largestAmount, transactions.length);
             const prefix = expense ? "−" : income ? "+" : "";
+            const canRefund = expense && !transaction.voided_at && Number(transaction.amount) > Number(transaction.reimbursed_amount) + Number(transaction.refunded_amount);
             const proportion = largestAmount > 0 ? Math.max(4, Math.round((Math.abs(Number(transaction.amount)) / largestAmount) * 100)) : 4;
             return (
               <article
@@ -85,11 +88,12 @@ export function ReceiptWall({
                   <div><span>{t("transactions.receiptWall.transferOut")}</span><strong>{formatMoney(transaction.amount, transaction.currency)}</strong></div>
                   <ArrowRight size={15} aria-hidden="true" />
                   <div><span>{t("transactions.receiptWall.transferIn")}</span><strong>{transaction.target_amount && transaction.target_currency ? formatMoney(transaction.target_amount, transaction.target_currency) : "—"}</strong></div>
-                </div> : <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong><i aria-hidden="true" /></div>}
+                </div> : <div className="receipt-ticket-total"><span>{t("transactions.receiptWall.total")}</span><strong>{prefix}{formatMoney(transaction.amount, transaction.currency)}</strong><i aria-hidden="true" />{expense && transaction.refunded_amount !== "0" && <small>{t("transactions.refundedLabel")} {formatMoney(transaction.refunded_amount, transaction.currency)}</small>}</div>}
                 <footer>
                   <span>{account?.name ?? t("common.unknownAccount")}</span>
                   <div>
                     {transaction.has_receipt && <span className="receipt-paperclip"><Paperclip size={13} /> {t("transactions.receipt")}</span>}
+                    {canRefund && <button type="button" onClick={() => onRefund(transaction)} aria-label={t("transactions.refund")} title={t("transactions.refund")}><RotateCcw size={14} /></button>}
                     <button type="button" onClick={() => onEdit(transaction)} aria-label={t("transactions.edit")} title={t("transactions.edit")}><Pencil size={14} /></button>
                   </div>
                 </footer>

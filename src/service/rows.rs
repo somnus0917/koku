@@ -40,6 +40,7 @@ pub(super) type TransactionRow = (
     Option<String>,
     Option<String>,
     String,
+    String,
     bool,
     String,
     Option<i64>,
@@ -119,6 +120,7 @@ pub(super) fn transaction_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Trans
         row.get(20)?,
         row.get(21)?,
         row.get(22)?,
+        row.get(23)?,
     ))
 }
 
@@ -141,12 +143,13 @@ pub(super) fn transaction_from_row(row: TransactionRow) -> Result<Transaction> {
         reimbursable_at: row.14.as_deref().map(parse_timestamp).transpose()?,
         reimbursed_at: row.15.as_deref().map(parse_timestamp).transpose()?,
         reimbursed_amount: decimal_from_db(&row.16)?,
-        has_receipt: row.17,
-        tags: split_tags(&row.18),
-        payee_id: row.19,
-        raw_description: row.20,
-        payee_name: row.21,
-        has_splits: row.22,
+        refunded_amount: decimal_from_db(&row.17)?,
+        has_receipt: row.18,
+        tags: split_tags(&row.19),
+        payee_id: row.20,
+        raw_description: row.21,
+        payee_name: row.22,
+        has_splits: row.23,
     })
 }
 

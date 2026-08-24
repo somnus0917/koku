@@ -24,7 +24,7 @@ export function ReimburseModal({
     settled_amount?: string;
   }) => Promise<void>;
 }) {
-  const remaining = Math.max(0, Number(expense.amount) - Number(expense.reimbursed_amount)).toFixed(2);
+  const remaining = Math.max(0, Number(expense.amount) - Number(expense.reimbursed_amount) - Number(expense.refunded_amount)).toFixed(2);
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState(remaining);
   const [settledAmount, setSettledAmount] = useState("");

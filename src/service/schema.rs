@@ -126,6 +126,14 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             reimbursed_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS refunds (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            expense_id  INTEGER NOT NULL REFERENCES transactions(id),
+            income_id   INTEGER NOT NULL REFERENCES transactions(id),
+            amount      TEXT NOT NULL,
+            refunded_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS exchange_rates (
             base   TEXT NOT NULL,
             quote  TEXT NOT NULL,
@@ -186,6 +194,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             reimbursable_at TEXT,
             reimbursed_at   TEXT,
             reimbursed_amount TEXT NOT NULL DEFAULT '0',
+            refunded_amount TEXT NOT NULL DEFAULT '0',
             payee_id      INTEGER REFERENCES payees(id),
             raw_description TEXT,
             import_external_id TEXT,

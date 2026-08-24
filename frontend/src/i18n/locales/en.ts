@@ -142,7 +142,7 @@ export const en = {
         emptyTitle: "No activity to show yet",
         emptyDetail: "New entries, reconciliations, reimbursements, and loans will appear here.",
         action: {
-          "transaction.created": "Created transaction", "transaction.updated": "Updated transaction", "transaction.voided": "Voided transaction", "transaction.restored": "Restored transaction", "transaction.deleted": "Permanently deleted transaction", "transfer.created": "Recorded transfer", "receipt.attached": "Attached receipt", "reimbursement.marked": "Marked reimbursable", "reimbursement.unmarked": "Unmarked reimbursable", "reimbursement.created": "Recorded reimbursement", "reconciliation.created": "Started reconciliation", "reconciliation.completed": "Completed reconciliation", "reconciliation.cancelled": "Cancelled reconciliation", "loan.created": "Recorded loan", "loan.repaid": "Recorded repayment"
+          "transaction.created": "Created transaction", "transaction.updated": "Updated transaction", "transaction.voided": "Voided transaction", "transaction.restored": "Restored transaction", "transaction.deleted": "Permanently deleted transaction", "transfer.created": "Recorded transfer", "receipt.attached": "Attached receipt", "reimbursement.marked": "Marked reimbursable", "reimbursement.unmarked": "Unmarked reimbursable", "reimbursement.created": "Recorded reimbursement", "refund.created": "Recorded refund", "reconciliation.created": "Started reconciliation", "reconciliation.completed": "Completed reconciliation", "reconciliation.cancelled": "Cancelled reconciliation", "loan.created": "Recorded loan", "loan.repaid": "Recorded repayment"
         }
       },
       dashboard: {
@@ -309,6 +309,9 @@ export const en = {
         reimbursedLabel: "reimbursed",
         reimbursedTitle: "Reimbursed {{amount}}",
         reimburse: "Reimburse",
+        refundedLabel: "refunded",
+        refund: "Refund",
+        refunded: "Refund recorded",
         unmarkReimburse: "Unmark to reimburse",
         markReimburse: "Mark to reimburse",
         restoreTitle: "Undo deletion and restore this transaction",
@@ -320,7 +323,7 @@ export const en = {
         viewReceipt: "View receipt",
         edit: "Edit transaction",
         uploadReceipt: "Upload receipt",
-        confirmDeletePermanent: "Permanently delete “{{label}}”? This cannot be undone and will also delete the receipt and reimbursement records.",
+        confirmDeletePermanent: "Permanently delete “{{label}}”? This cannot be undone and will also delete the receipt, reimbursement, and refund records.",
         voided: "Transaction voided, balance restored",
         restored: "Transaction restored",
         deletedPermanently: "Transaction permanently deleted",
@@ -490,6 +493,16 @@ export const en = {
           settled: "Settled amount ({{currency}})",
           settledPlaceholder: "Converted to {{currency}}",
           submit: "Confirm reimbursement"
+        },
+        refund: {
+          title: "Record refund",
+          defaultNote: "An expense",
+          info: "{{note}} · {{amount}}, {{remaining}} left to refund.",
+          account: "Refund to account",
+          amount: "Refund amount ({{currency}})",
+          settled: "Settled amount ({{currency}})",
+          settledPlaceholder: "Converted to {{currency}}",
+          submit: "Confirm refund"
         },
         loan: {
           direction: "Direction",

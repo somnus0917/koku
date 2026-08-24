@@ -25,6 +25,7 @@ import {
   refreshHoldings,
   refreshHolding,
   reimburse,
+  refund,
   repayLoan,
   restoreTransaction,
   sellStock,
@@ -59,6 +60,7 @@ import { LoanModal } from "../features/loans/LoanModal";
 import { LoansSection } from "../features/loans/LoansSection";
 import { RepayModal } from "../features/loans/RepayModal";
 import { ReimburseModal } from "../features/reimbursements/ReimburseModal";
+import { RefundModal } from "../features/refunds/RefundModal";
 import { ReconciliationModal } from "../features/reconciliation/ReconciliationModal";
 import { RecurringModal } from "../features/recurring/RecurringModal";
 import { EditTransactionModal } from "../features/transactions/EditTransactionModal";
@@ -82,6 +84,7 @@ type Modal =
   | "deposit"
   | "settle"
   | "reimburse"
+  | "refund"
   | "loan"
   | "repay"
   | "edit-account"
@@ -115,6 +118,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   const [depositFrom, setDepositFrom] = useState<Account | null>(null);
   const [settleTarget, setSettleTarget] = useState<Deposit | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
+  const [refundTarget, setRefundTarget] = useState<Transaction | null>(null);
   const [loanTarget, setLoanTarget] = useState<Loan | null>(null);
   const [editRecurring, setEditRecurring] = useState<RecurringRule | null>(null);
   const [reconcileAccount, setReconcileAccount] = useState<Account | null>(null);
@@ -350,6 +354,10 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               setReimburseTarget(transaction);
               setModal("reimburse");
             }}
+            onRefund={(transaction) => {
+              setRefundTarget(transaction);
+              setModal("refund");
+            }}
             onEdit={(transaction) => {
               setEditTransaction(transaction);
               setModal("edit-transaction");
@@ -553,6 +561,19 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             mutate(
               () => reimburse({ expense_id: reimburseTarget.id, ...input }),
               t("transactions.reimbursed")
+            )
+          }
+        />
+      )}
+      {modal === "refund" && data && refundTarget && (
+        <RefundModal
+          expense={refundTarget}
+          accounts={data.accounts}
+          onClose={() => setModal(null)}
+          onSubmit={(input) =>
+            mutate(
+              () => refund({ expense_id: refundTarget.id, ...input }),
+              t("transactions.refunded")
             )
           }
         />

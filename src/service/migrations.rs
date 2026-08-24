@@ -78,6 +78,12 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    if !table_has_column(conn, "transactions", "refunded_amount")? {
+        conn.execute(
+            "ALTER TABLE transactions ADD COLUMN refunded_amount TEXT NOT NULL DEFAULT '0'",
+            [],
+        )?;
+    }
     // —— 多用户迁移：auth_sessions 关联 users ——
     if !table_has_column(conn, "auth_sessions", "user_id")? {
         conn.execute(
@@ -449,6 +455,7 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
             reimbursable_at TEXT,
             reimbursed_at   TEXT,
             reimbursed_amount TEXT NOT NULL DEFAULT '0',
+            refunded_amount TEXT NOT NULL DEFAULT '0',
             CHECK (
                 (kind IN ('expense', 'income') AND category_id IS NOT NULL
                  AND to_account_id IS NULL AND target_amount IS NULL)
@@ -463,11 +470,11 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
         INSERT INTO transactions_new(id, kind, account_id, to_account_id, category_id, amount,
                                      currency, settled_amount, target_amount, target_currency,
                                      occurred_at, note, voided_at, loan_id,
-                                     reimbursable_at, reimbursed_at, reimbursed_amount)
+                                     reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount)
             SELECT id, kind, account_id, to_account_id, category_id, amount,
                    currency, settled_amount, target_amount, target_currency,
                    occurred_at, note, voided_at, loan_id,
-                   reimbursable_at, reimbursed_at, COALESCE(reimbursed_amount, '0')
+                   reimbursable_at, reimbursed_at, COALESCE(reimbursed_amount, '0'), COALESCE(refunded_amount, '0')
             FROM transactions;
         DROP TABLE transactions;
         ALTER TABLE transactions_new RENAME TO transactions;

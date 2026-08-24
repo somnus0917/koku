@@ -336,6 +336,8 @@ pub struct Transaction {
     pub reimbursed_at: Option<DateTime<Utc>>,
     /// 累计已报销金额（原币种）
     pub reimbursed_amount: Decimal,
+    /// 累计已退款金额（原币种）
+    pub refunded_amount: Decimal,
     /// 是否已挂有小票/发票附件
     pub has_receipt: bool,
     /// 是否已有拆分分类（父交易仅作默认分类，统计以拆分为准）

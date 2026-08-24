@@ -33,8 +33,8 @@ export function EditTransactionModal({
   const foreign = transaction.currency !== accountCurrency;
   const sameCurrencyAccounts = accounts.filter((item) => item.currency === accountCurrency);
   const matchingCategories = categories.filter((item) => item.kind === transaction.kind);
-  // 已发生报销的支出：金额/账户/结算额不可改（报销收入流水由后端兜底拒绝）。
-  const reimbursementLocked = transaction.reimbursed_amount !== "0";
+  // 已发生报销或退款的支出：金额/账户/结算额不可改（后端也会兜底拒绝）。
+  const reimbursementLocked = transaction.reimbursed_amount !== "0" || transaction.refunded_amount !== "0";
 
   const [note, setNote] = useState(transaction.note);
   const [occurredAt, setOccurredAt] = useState(toLocalDateTimeValue(transaction.occurred_at));

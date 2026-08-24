@@ -312,6 +312,7 @@ SQLite 数据位于 `KOKU_DATA_DIR`，默认是 `~/koku/data/koku.db`。浏览�
 | `POST/DELETE` | `/api/transactions/{id}/reimbursable` | 标记/取消"待报销"（已发生报销的支出不可取消） |
 | `POST/GET` | `/api/transactions/{id}/receipt` | 上传（multipart `file` 字段）或读取交易的小票/发票图片 |
 | `POST` | `/api/reimbursements` | 报销支出（支持部分报销，生成关联收入流水；撤销支出会级联撤销报销收入） |
+| `POST` | `/api/refunds` | 记录支出退款（指定到账账户，支持部分退款与跨币种结算；撤销原支出会级联撤销退款收入） |
 | `GET` | `/api/tags` | 查询全部标签 |
 | `GET/PUT/DELETE` | `/api/budgets` / `/api/budgets/{category_id}` | 查询/设置/清除某分类某月预算（`?year=&month=`） |
 | `GET/POST` | `/api/recurring` | 查询或创建周期交易（每月/每周） |

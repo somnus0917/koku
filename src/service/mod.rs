@@ -122,7 +122,7 @@ impl BookkeepingService {
     fn transaction_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Transaction> {
         let raw = tx
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -237,6 +237,52 @@ impl BookkeepingService {
             [income_id],
         )?;
         Ok(())
+    }
+
+    /// 某笔支出的全部退款关联：(income_id, 退款金额)。
+    fn refunds_for_expense_in_tx(
+        tx: &SqlTransaction<'_>,
+        expense_id: i64,
+    ) -> Result<Vec<(i64, Decimal)>> {
+        let mut statement =
+            tx.prepare("SELECT income_id, amount FROM refunds WHERE expense_id = ?1 ORDER BY id")?;
+        let rows = statement.query_map([expense_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut links = Vec::new();
+        for row in rows {
+            let (income_id, amount) = row?;
+            links.push((income_id, decimal_from_db(&amount)?));
+        }
+        Ok(links)
+    }
+
+    /// 若某笔收入是一笔退款，返回其关联的 (原支出, 退款金额)。
+    fn refund_for_income_in_tx(
+        tx: &SqlTransaction<'_>,
+        income_id: i64,
+    ) -> Result<Option<(i64, Decimal)>> {
+        let Some((expense_id, amount)) = tx
+            .query_row(
+                "SELECT expense_id, amount FROM refunds WHERE income_id = ?1",
+                [income_id],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((expense_id, decimal_from_db(&amount)?)))
+    }
+
+    /// 撤销一笔退款收入：余额反向恢复并置 voided_at；已撤销则跳过。
+    fn void_refund_income_in_tx(tx: &SqlTransaction<'_>, income_id: i64) -> Result<()> {
+        Self::void_reimbursement_income_in_tx(tx, income_id)
+    }
+
+    /// 恢复一笔退款收入：余额正向应用并清除 voided_at；未撤销则跳过。
+    fn restore_refund_income_in_tx(tx: &SqlTransaction<'_>, income_id: i64) -> Result<()> {
+        Self::restore_reimbursement_income_in_tx(tx, income_id)
     }
 }
 
@@ -2246,6 +2292,87 @@ mod tests {
         let september = service.monthly_summary(2026, 9, "CNY")?;
         assert_eq!(september.total_expense, Decimal::ZERO);
         assert_eq!(september.total_income, Decimal::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn refund_creates_linked_income_and_tracks_remaining_amount() -> Result<()> {
+        let mut service = test_service()?;
+        let cash =
+            service.create_account("现金", AccountType::Cash, "CNY", Decimal::from(1_000_u32))?;
+        let card =
+            service.create_account("银行卡", AccountType::Cash, "CNY", Decimal::from(500_u32))?;
+        let food = service.create_category("餐饮", CategoryKind::Expense)?;
+        let at = NaiveDate::from_ymd_opt(2026, 8, 15)
+            .and_then(|date| date.and_hms_opt(12, 0, 0))
+            .ok_or_else(|| KokuError::InvalidInput("invalid test date".to_owned()))?
+            .and_utc();
+        let expense =
+            service.record_expense(cash.id, food.id, Decimal::from(100_u32), at, "退款商品")?;
+
+        let refund = service.refund(
+            expense.id,
+            card.id,
+            Decimal::from(40_u32),
+            "CNY",
+            None,
+            "商户退款",
+        )?;
+        assert_eq!(refund.kind, TransactionKind::Income);
+        assert_eq!(refund.account_id, card.id);
+        assert_eq!(refund.amount, Decimal::from(40_u32));
+        assert_eq!(
+            refund.category_id,
+            Some(
+                service
+                    .categories()?
+                    .iter()
+                    .find(|category| category.name == "退款")
+                    .unwrap()
+                    .id
+            )
+        );
+        assert_eq!(
+            service.transaction(expense.id)?.refunded_amount,
+            Decimal::from(40_u32)
+        );
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(900_u32));
+        assert_eq!(service.account(card.id)?.balance, Decimal::from(540_u32));
+
+        assert!(matches!(
+            service.refund(
+                expense.id,
+                card.id,
+                Decimal::from(61_u32),
+                "CNY",
+                None,
+                "超额退款"
+            ),
+            Err(KokuError::InvalidInput(_))
+        ));
+
+        service.void_transaction(refund.id)?;
+        assert_eq!(
+            service.transaction(expense.id)?.refunded_amount,
+            Decimal::ZERO
+        );
+        assert_eq!(service.account(card.id)?.balance, Decimal::from(500_u32));
+
+        service.restore_transaction(refund.id)?;
+        assert_eq!(
+            service.transaction(expense.id)?.refunded_amount,
+            Decimal::from(40_u32)
+        );
+        assert_eq!(service.account(card.id)?.balance, Decimal::from(540_u32));
+
+        service.void_transaction(expense.id)?;
+        assert!(service.transaction(refund.id)?.voided_at.is_some());
+        assert_eq!(
+            service.transaction(expense.id)?.refunded_amount,
+            Decimal::ZERO
+        );
+        assert_eq!(service.account(cash.id)?.balance, Decimal::from(1_000_u32));
+        assert_eq!(service.account(card.id)?.balance, Decimal::from(500_u32));
         Ok(())
     }
 

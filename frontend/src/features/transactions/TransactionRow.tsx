@@ -21,6 +21,7 @@ export function TransactionRow({
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
+  onRefund,
   onEdit,
   onUploadReceipt
 }: {
@@ -41,6 +42,7 @@ export function TransactionRow({
   onMarkReimbursable?: () => void;
   onUnmarkReimbursable?: () => void;
   onReimburse?: () => void;
+  onRefund?: () => void;
   /** 传入后在行最右侧显示 ⋯ 菜单（编辑交易） */
   onEdit?: () => void;
   /** 传入后菜单里出现「上传小票」 */
@@ -79,6 +81,7 @@ export function TransactionRow({
     : "";
   const reimbursable = transaction.reimbursable_at && !transaction.reimbursed_at;
   const hasReimburseActions = transaction.kind === "expense" && !transaction.voided_at && !transaction.reimbursed_at;
+  const canRefund = transaction.kind === "expense" && !transaction.voided_at && Number(transaction.amount) > Number(transaction.reimbursed_amount) + Number(transaction.refunded_amount);
 
   // 折算显示：display 币种与交易币种不同且有汇率时，主金额换算为显示币种，
   // 并用一行「原币」保留真实入账金额；无汇率时回退原币显示。
@@ -98,6 +101,9 @@ export function TransactionRow({
   const reimbursedShown = converted
     ? formatMoney((Number(transaction.reimbursed_amount) * factor!).toFixed(2), display!)
     : formatMoney(transaction.reimbursed_amount, transaction.currency);
+  const refundedShown = converted
+    ? formatMoney((Number(transaction.refunded_amount) * factor!).toFixed(2), display!)
+    : formatMoney(transaction.refunded_amount, transaction.currency);
   // 普通收支且设置了商户：主标题展示商户，meta 展示「分类 · 备注」。
   const showPayee =
     (transaction.kind === "expense" || transaction.kind === "income") &&
@@ -143,6 +149,9 @@ export function TransactionRow({
         {transaction.kind === "expense" && transaction.reimbursed_amount !== "0" && !transaction.reimbursed_at && (
           <span>{t("transactions.reimbursedLabel")} {reimbursedShown}</span>
         )}
+        {transaction.kind === "expense" && transaction.refunded_amount !== "0" && (
+          <span>{t("transactions.refundedLabel")} {refundedShown}</span>
+        )}
         {compact && <span>{formatDate(transaction.occurred_at)}</span>}
       </div>
       {!compact && (
@@ -155,6 +164,7 @@ export function TransactionRow({
                 </>
               : <button className="row-action reimburse" onClick={onMarkReimbursable} title={t("transactions.markReimburse")} aria-label={t("transactions.markReimburse")}><Tags size={16} /></button>
           )}
+          {canRefund && <button className="row-action reimburse" onClick={onRefund} title={t("transactions.refund")} aria-label={t("transactions.refund")}><RotateCcw size={16} /></button>}
           {transaction.reimbursed_at && (
             <span
               className="reimbursed-indicator"

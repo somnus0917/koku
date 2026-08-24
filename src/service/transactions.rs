@@ -240,10 +240,14 @@ impl BookkeepingService {
                 for (income_id, _) in &reimbursements {
                     Self::void_reimbursement_income_in_tx(&tx, *income_id)?;
                 }
-                if !reimbursements.is_empty() {
+                let refunds = Self::refunds_for_expense_in_tx(&tx, transaction_id)?;
+                for (income_id, _) in &refunds {
+                    Self::void_refund_income_in_tx(&tx, *income_id)?;
+                }
+                if !reimbursements.is_empty() || !refunds.is_empty() {
                     tx.execute(
                         "UPDATE transactions
-                         SET reimbursed_amount = '0', reimbursed_at = NULL, reimbursable_at = NULL
+                         SET reimbursed_amount = '0', refunded_amount = '0', reimbursed_at = NULL, reimbursable_at = NULL
                          WHERE id = ?1",
                         [transaction_id],
                     )?;
@@ -275,6 +279,18 @@ impl BookkeepingService {
                         params![
                             decimal_to_db(new_reimbursed),
                             reimbursed_at.map(timestamp),
+                            expense_id
+                        ],
+                    )?;
+                }
+                if let Some((expense_id, amount)) =
+                    Self::refund_for_income_in_tx(&tx, transaction_id)?
+                {
+                    let expense = Self::transaction_in_tx(&tx, expense_id)?;
+                    tx.execute(
+                        "UPDATE transactions SET refunded_amount = ?1 WHERE id = ?2",
+                        params![
+                            decimal_to_db((expense.refunded_amount - amount).max(Decimal::ZERO)),
                             expense_id
                         ],
                     )?;
@@ -387,6 +403,18 @@ impl BookkeepingService {
                         ],
                     )?;
                 }
+                let refunds = Self::refunds_for_expense_in_tx(&tx, transaction_id)?;
+                let mut refunded = Decimal::ZERO;
+                for (income_id, amount) in &refunds {
+                    Self::restore_refund_income_in_tx(&tx, *income_id)?;
+                    refunded += *amount;
+                }
+                if !refunds.is_empty() {
+                    tx.execute(
+                        "UPDATE transactions SET refunded_amount = ?1 WHERE id = ?2",
+                        params![decimal_to_db(refunded), transaction_id],
+                    )?;
+                }
                 let source = Self::account_in_tx(&tx, transaction.account_id)?;
                 Self::set_balance(
                     &tx,
@@ -411,6 +439,15 @@ impl BookkeepingService {
                     tx.execute(
                         "UPDATE transactions SET reimbursed_amount = ?1, reimbursed_at = ?2 WHERE id = ?3",
                         params![decimal_to_db(new_reimbursed), reimbursed_at.map(timestamp), expense_id],
+                    )?;
+                }
+                if let Some((expense_id, amount)) =
+                    Self::refund_for_income_in_tx(&tx, transaction_id)?
+                {
+                    let expense = Self::transaction_in_tx(&tx, expense_id)?;
+                    tx.execute(
+                        "UPDATE transactions SET refunded_amount = ?1 WHERE id = ?2",
+                        params![decimal_to_db(expense.refunded_amount + amount), expense_id],
                     )?;
                 }
                 let source = Self::account_in_tx(&tx, transaction.account_id)?;
@@ -499,6 +536,12 @@ impl BookkeepingService {
                     Self::delete_transaction_in_tx(tx, income_id)?;
                 }
             }
+            let refunds = Self::refunds_for_expense_in_tx(tx, transaction_id)?;
+            for (income_id, _) in refunds {
+                if Self::transaction_in_tx(tx, income_id)?.voided_at.is_some() {
+                    Self::delete_transaction_in_tx(tx, income_id)?;
+                }
+            }
         }
         tx.execute(
             "DELETE FROM receipts WHERE transaction_id = ?1",
@@ -514,6 +557,10 @@ impl BookkeepingService {
         Self::delete_transaction_splits_in_tx(tx, transaction_id)?;
         tx.execute(
             "DELETE FROM reimbursements WHERE expense_id = ?1 OR income_id = ?1",
+            [transaction_id],
+        )?;
+        tx.execute(
+            "DELETE FROM refunds WHERE expense_id = ?1 OR income_id = ?1",
             [transaction_id],
         )?;
         tx.execute("DELETE FROM transactions WHERE id = ?1", [transaction_id])?;
@@ -610,14 +657,17 @@ impl BookkeepingService {
             ));
         }
         // 已发生报销的支出，或报销产生的收入流水：金额/账户/结算额不可改。
-        let reimbursement_linked = Self::reimbursement_for_income_in_tx(&tx, transaction_id)?
+        let compensation_linked = Self::reimbursement_for_income_in_tx(&tx, transaction_id)?
             .is_some()
-            || !transaction.reimbursed_amount.is_zero();
-        if reimbursement_linked
+            || Self::refund_for_income_in_tx(&tx, transaction_id)?.is_some()
+            || !transaction.reimbursed_amount.is_zero()
+            || !transaction.refunded_amount.is_zero();
+        if compensation_linked
             && (amount.is_some() || account_id.is_some() || settled_amount.is_some())
         {
             return Err(KokuError::InvalidInput(
-                "reimbursed transactions can only edit note, category, or time".to_owned(),
+                "reimbursed or refunded transactions can only edit note, category, or time"
+                    .to_owned(),
             ));
         }
 
@@ -762,7 +812,7 @@ impl BookkeepingService {
         let raw = self
             .conn
             .query_row(
-                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
+                "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions WHERE id = ?1",
                 [id],
                 transaction_row,
             )
@@ -807,7 +857,7 @@ impl BookkeepingService {
                 "transactions limit must be between 1 and 1000".to_owned(),
             ));
         }
-        const COLUMNS: &str = "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions";
+        const COLUMNS: &str = "SELECT id, kind, account_id, to_account_id, category_id, amount, currency, settled_amount, target_amount, target_currency, occurred_at, note, voided_at, loan_id, reimbursable_at, reimbursed_at, reimbursed_amount, refunded_amount, EXISTS(SELECT 1 FROM receipts r WHERE r.transaction_id = transactions.id) AS has_receipt, COALESCE((SELECT group_concat(t.name, ',') FROM tags t JOIN transaction_tags tt ON tt.tag_id = t.id WHERE tt.transaction_id = transactions.id), '') AS tags, payee_id, raw_description, (SELECT p.name FROM payees p WHERE p.id = transactions.payee_id) AS payee_name, EXISTS(SELECT 1 FROM transaction_splits s WHERE s.transaction_id = transactions.id) AS has_splits FROM transactions";
         let mut where_clauses = Vec::new();
         let mut values = Vec::new();
         if let Some((start, end)) = range {

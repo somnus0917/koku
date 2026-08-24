@@ -94,6 +94,7 @@ export interface Transaction {
   reimbursable_at: string | null;
   reimbursed_at: string | null;
   reimbursed_amount: string;
+  refunded_amount: string;
   has_receipt: boolean;
   /** 是否已有拆分分类（父交易仅作默认分类，统计以拆分为准）。 */
   has_splits: boolean;

@@ -142,7 +142,7 @@ export const zh = {
         emptyTitle: "还没有可显示的活动",
         emptyDetail: "之后的记账、对账、报销与借款操作会显示在这里。",
         action: {
-          "transaction.created": "创建交易", "transaction.updated": "修改交易", "transaction.voided": "撤销交易", "transaction.restored": "恢复交易", "transaction.deleted": "永久删除交易", "transfer.created": "记录转账", "receipt.attached": "添加凭证", "reimbursement.marked": "标记待报销", "reimbursement.unmarked": "取消待报销", "reimbursement.created": "完成报销", "reconciliation.created": "发起对账", "reconciliation.completed": "完成对账", "reconciliation.cancelled": "取消对账", "loan.created": "记录借款", "loan.repaid": "记录还款"
+          "transaction.created": "创建交易", "transaction.updated": "修改交易", "transaction.voided": "撤销交易", "transaction.restored": "恢复交易", "transaction.deleted": "永久删除交易", "transfer.created": "记录转账", "receipt.attached": "添加凭证", "reimbursement.marked": "标记待报销", "reimbursement.unmarked": "取消待报销", "reimbursement.created": "完成报销", "refund.created": "记录退款", "reconciliation.created": "发起对账", "reconciliation.completed": "完成对账", "reconciliation.cancelled": "取消对账", "loan.created": "记录借款", "loan.repaid": "记录还款"
         }
       },
       dashboard: {
@@ -309,6 +309,9 @@ export const zh = {
         reimbursedLabel: "已报销",
         reimbursedTitle: "已报销 {{amount}}",
         reimburse: "报销",
+        refundedLabel: "已退款",
+        refund: "退款",
+        refunded: "退款已入账",
         unmarkReimburse: "取消待报销",
         markReimburse: "标记待报销",
         restoreTitle: "撤销删除，恢复这笔交易",
@@ -320,7 +323,7 @@ export const zh = {
         viewReceipt: "查看小票",
         edit: "编辑交易",
         uploadReceipt: "上传小票",
-        confirmDeletePermanent: "永久删除「{{label}}」？此操作不可恢复，将同时删除小票与报销记录。",
+        confirmDeletePermanent: "永久删除「{{label}}」？此操作不可恢复，将同时删除小票、报销与退款记录。",
         voided: "交易已撤销，余额已恢复",
         restored: "交易已恢复",
         deletedPermanently: "交易已永久删除",
@@ -490,6 +493,16 @@ export const zh = {
           settled: "入账金额（{{currency}}）",
           settledPlaceholder: "按汇率折算成 {{currency}}",
           submit: "确认报销"
+        },
+        refund: {
+          title: "记录退款",
+          defaultNote: "一笔支出",
+          info: "{{note}} · {{amount}}，剩余可退款 {{remaining}}。",
+          account: "退款到账账户",
+          amount: "退款金额（{{currency}}）",
+          settled: "入账金额（{{currency}}）",
+          settledPlaceholder: "按汇率折算成 {{currency}}",
+          submit: "确认退款"
         },
         loan: {
           direction: "方向",

@@ -101,6 +101,7 @@ export function TransactionsPage({
   onMarkReimbursable,
   onUnmarkReimbursable,
   onReimburse,
+  onRefund,
   onEdit,
   onUploadReceipt,
   onLoadMore,
@@ -120,6 +121,7 @@ export function TransactionsPage({
   onMarkReimbursable: (transaction: Transaction) => void;
   onUnmarkReimbursable: (transaction: Transaction) => void;
   onReimburse: (transaction: Transaction) => void;
+  onRefund: (transaction: Transaction) => void;
   onEdit: (transaction: Transaction) => void;
   onUploadReceipt: (transaction: Transaction, file: File) => void;
   onLoadMore?: () => void;
@@ -239,6 +241,7 @@ export function TransactionsPage({
       onMarkReimbursable={() => onMarkReimbursable(transaction)}
       onUnmarkReimbursable={() => onUnmarkReimbursable(transaction)}
       onReimburse={() => onReimburse(transaction)}
+      onRefund={() => onRefund(transaction)}
       onEdit={() => onEdit(transaction)}
       onUploadReceipt={(file) => onUploadReceipt(transaction, file)}
     />
@@ -338,7 +341,7 @@ export function TransactionsPage({
         {timelineGroups.map((group) => <section key={group.day}><h2>{dateGroup(group.day)}</h2>{group.items.map(row)}</section>)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </div>}
-      {mode === "receipts" && (filtered.length > 0 ? <ReceiptWall transactions={filtered} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}
+      {mode === "receipts" && (filtered.length > 0 ? <ReceiptWall transactions={filtered} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} onRefund={onRefund} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}
       {hasMore && (
         <div className="load-more-row">
           <button
