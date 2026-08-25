@@ -30,12 +30,13 @@ export function LoansSection({
   const closed = loans.filter((loan) => loan.closed_at);
   const shown = (value: string, from: string) =>
     convertedMoney(value, from, display, rates) ?? { amount: value, currency: from };
+  const totalDue = (loan: Loan) => String(Number(loan.outstanding) + Number(loan.accrued_interest));
   const lendOutstanding = open
     .filter((loan) => loan.loan_type === "lend")
-    .reduce((sum, loan) => sum + Number(shown(loan.outstanding, loan.currency).amount), 0);
+    .reduce((sum, loan) => sum + Number(shown(totalDue(loan), loan.currency).amount), 0);
   const borrowOutstanding = open
     .filter((loan) => loan.loan_type === "borrow")
-    .reduce((sum, loan) => sum + Number(shown(loan.outstanding, loan.currency).amount), 0);
+    .reduce((sum, loan) => sum + Number(shown(totalDue(loan), loan.currency).amount), 0);
   const { t } = useTranslation();
   return (
     <section className="section-block account-group">
@@ -49,7 +50,7 @@ export function LoansSection({
       </div>
       <div className="account-grid">
         {open.map((loan) => {
-          const outstandingShown = shown(loan.outstanding, loan.currency);
+          const outstandingShown = shown(totalDue(loan), loan.currency);
           const principalShown = shown(loan.principal, loan.currency);
           const isConverted = outstandingShown.currency !== loan.currency;
           return (
@@ -64,10 +65,11 @@ export function LoansSection({
                 </h3>
                 <span>
                   {loan.currency}
-                  {isConverted ? `（${t("accounts.originalCurrency", { amount: formatMoney(loan.outstanding, loan.currency) })}）` : ""} · {t("accounts.loans.principal")}{" "}
+                  {isConverted ? `（${t("accounts.originalCurrency", { amount: formatMoney(totalDue(loan), loan.currency) })}）` : ""} · {t("accounts.loans.principal")}{" "}
                   {formatMoney(principalShown.amount, principalShown.currency)}
                   {isConverted ? `（${t("accounts.originalCurrency", { amount: formatMoney(loan.principal, loan.currency) })}）` : ""} ·{" "}
                   {accountMap.get(loan.account_id)?.name ?? t("common.unknownAccount")}
+                  {loan.interest_rate ? ` · ${t("accounts.loans.interest", { rate: loan.interest_rate, amount: formatMoney(loan.accrued_interest, loan.currency) })}` : ""}
                   {loan.note ? ` · ${loan.note}` : ""}
                 </span>
               </div>
@@ -85,7 +87,7 @@ export function LoansSection({
               <span className="large-account-icon"><Handshake size={23} /></span>
               <div className="account-detail-copy">
                 <h3>{loan.counterparty}<small>{t(loan.loan_type === "lend" ? "common.lend" : "common.borrow")}</small></h3>
-                <span>{formatDate(loan.opened_at)} {t("common.opened")}{loan.closed_at ? ` · ${formatDate(loan.closed_at)} ${t("common.settled")}` : ""}</span>
+                <span>{formatDate(loan.opened_at)} {t("common.opened")}{loan.closed_at ? ` · ${formatDate(loan.closed_at)} ${t("common.settled")}` : ""}{loan.interest_rate ? ` · ${t("accounts.loans.settledInterest", { amount: formatMoney(loan.accrued_interest, loan.currency) })}` : ""}</span>
               </div>
               <strong>{t("common.settledDone")}</strong>
             </article>

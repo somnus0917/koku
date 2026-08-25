@@ -402,6 +402,10 @@ pub struct Loan {
     pub currency: String,
     pub principal: Decimal,
     pub outstanding: Decimal,
+    /// 可选年化利率（百分比，如 5 = 5%）；无息借款为 None。
+    pub interest_rate: Option<Decimal>,
+    /// 截至当前（已结清则截至结清日）按实际天数计算的应计利息。
+    pub accrued_interest: Decimal,
     /// 首笔资金进出的账户
     pub account_id: i64,
     pub opened_at: DateTime<Utc>,

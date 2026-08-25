@@ -120,6 +120,8 @@ export interface Loan {
   currency: string;
   principal: string;
   outstanding: string;
+  interest_rate: string | null;
+  accrued_interest: string;
   account_id: number;
   opened_at: string;
   note: string;

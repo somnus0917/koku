@@ -15,12 +15,13 @@ export function LoanModal({
   /** 历史往来人（来自已有借款），下拉可选；选中已有的人会合并到未结清的同一方向借款 */
   counterparties: string[];
   onClose: () => void;
-  onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; note?: string; due_at?: string }) => Promise<void>;
+  onSubmit: (input: { loan_type: LoanType; counterparty: string; amount: string; account_id: number; interest_rate?: string; note?: string; due_at?: string }) => Promise<void>;
 }) {
   const [loanType, setLoanType] = useState<LoanType>("lend");
   const [counterparty, setCounterparty] = useState("");
   const [accountId, setAccountId] = useState("");
   const [amount, setAmount] = useState("");
+  const [interestRate, setInterestRate] = useState("");
   const [note, setNote] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -34,6 +35,7 @@ export function LoanModal({
         loan_type: loanType,
         counterparty,
         amount,
+        interest_rate: interestRate || undefined,
         account_id: Number(accountId),
         note: note || undefined,
         due_at: dueAt ? new Date(`${dueAt}T00:00:00`).toISOString() : undefined
@@ -60,6 +62,7 @@ export function LoanModal({
             </datalist>
           </label>
           <label><span>{t("common.amount")}</span><input required step="0.01" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" /></label>
+          <label><span>{t("modals.loan.interestRate")}</span><input min="0" step="0.01" inputMode="decimal" value={interestRate} onChange={(e) => setInterestRate(e.target.value)} placeholder={t("modals.loan.interestRatePlaceholder")} /></label>
           <label><span>{t("common.fundingAccount")}</span>
             <select required value={accountId} onChange={(e) => setAccountId(e.target.value)}>
               <option value="" disabled>{t("common.selectAccount")}</option>

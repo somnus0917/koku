@@ -63,6 +63,9 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
     if !table_has_column(conn, "loans", "due_at")? {
         conn.execute("ALTER TABLE loans ADD COLUMN due_at TEXT", [])?;
     }
+    if !table_has_column(conn, "loans", "interest_rate")? {
+        conn.execute("ALTER TABLE loans ADD COLUMN interest_rate TEXT", [])?;
+    }
     if !table_has_column(conn, "transactions", "reimbursable_at")? {
         conn.execute(
             "ALTER TABLE transactions ADD COLUMN reimbursable_at TEXT",

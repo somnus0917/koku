@@ -19,6 +19,7 @@ struct CreateLoanRequest {
     counterparty: String,
     currency: Option<String>,
     amount: Decimal,
+    interest_rate: Option<Decimal>,
     account_id: i64,
     #[serde(default)]
     note: String,
@@ -53,7 +54,7 @@ async fn api_create_loan(
     let mut service = lock_ledger(&state, user.user_id).await?;
     let account = service.account(request.account_id)?;
     let currency = request.currency.unwrap_or_else(|| account.currency.clone());
-    let loan = service.create_loan(
+    let loan = service.create_loan_with_interest(
         request.loan_type,
         request.counterparty,
         currency,
@@ -61,6 +62,7 @@ async fn api_create_loan(
         request.account_id,
         request.note,
         request.due_at,
+        request.interest_rate,
     )?;
     service.record_activity(
         "loan.created",

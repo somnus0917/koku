@@ -121,12 +121,9 @@ impl BookkeepingService {
                 "settlement target must use the same currency as the deposit".to_owned(),
             ));
         }
-        let days = (Utc::now() - deposit.opened_at).num_days().max(0);
-        let hundred = Decimal::from(100_u32);
-        let year = Decimal::from(365_u32);
-        let interest =
-            (deposit.amount * deposit.rate / hundred * Decimal::from(days) / year).round_dp(2);
         let now = Utc::now();
+        let interest =
+            calculate_simple_interest(deposit.amount, deposit.rate, deposit.opened_at, now);
 
         if interest > Decimal::ZERO {
             let interest_category = self.create_category("利息", CategoryKind::Income)?;

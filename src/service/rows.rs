@@ -3,7 +3,10 @@
 //! 转换依赖（decimal/timestamp 等）仍定义在 `super`（service/mod.rs），
 //! 通过 `pub(super) use rows::*` 在本模块与各业务子模块中共享。
 
-use super::{decimal_from_db, parse_timestamp};
+use chrono::Utc;
+use rust_decimal::Decimal;
+
+use super::{calculate_simple_interest, decimal_from_db, parse_timestamp};
 use crate::domain::{
     Account, AccountType, Category, CategoryKind, Loan, LoanType, Transaction, TransactionKind,
     User, UserRole,
@@ -177,6 +180,7 @@ pub(super) type LoanRow = (
     String,
     Option<String>,
     Option<String>,
+    Option<String>,
 );
 
 pub(super) fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
@@ -192,21 +196,38 @@ pub(super) fn loan_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoanRow> {
         row.get(8)?,
         row.get(9)?,
         row.get(10)?,
+        row.get(11)?,
     ))
 }
 
 pub(super) fn loan_from_row(row: LoanRow) -> Result<Loan> {
+    let principal = decimal_from_db(&row.4)?;
+    let opened_at = parse_timestamp(&row.7)?;
+    let closed_at = row.9.as_deref().map(parse_timestamp).transpose()?;
+    let interest_rate = row.11.as_deref().map(decimal_from_db).transpose()?;
+    let accrued_interest = interest_rate
+        .map(|rate| {
+            calculate_simple_interest(
+                principal,
+                rate,
+                opened_at,
+                closed_at.unwrap_or_else(Utc::now),
+            )
+        })
+        .unwrap_or(Decimal::ZERO);
     Ok(Loan {
         id: row.0,
         loan_type: LoanType::from_db(&row.1)?,
         counterparty: row.2,
         currency: row.3,
-        principal: decimal_from_db(&row.4)?,
+        principal,
         outstanding: decimal_from_db(&row.5)?,
         account_id: row.6,
-        opened_at: parse_timestamp(&row.7)?,
+        opened_at,
         note: row.8,
-        closed_at: row.9.as_deref().map(parse_timestamp).transpose()?,
+        closed_at,
         due_at: row.10.as_deref().map(parse_timestamp).transpose()?,
+        interest_rate,
+        accrued_interest,
     })
 }

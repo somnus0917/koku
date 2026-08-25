@@ -123,6 +123,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             currency     TEXT NOT NULL,
             principal    TEXT NOT NULL,
             outstanding  TEXT NOT NULL,
+            interest_rate TEXT,
             account_id   INTEGER NOT NULL REFERENCES accounts(id),
             opened_at    TEXT NOT NULL,
             note         TEXT NOT NULL DEFAULT '',

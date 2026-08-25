@@ -138,7 +138,7 @@ impl BookkeepingService {
     fn loan_in_tx(tx: &SqlTransaction<'_>, id: i64) -> Result<Loan> {
         let row = tx
             .query_row(
-                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at, due_at FROM loans WHERE id = ?1",
+                "SELECT id, loan_type, counterparty, currency, principal, outstanding, account_id, opened_at, note, closed_at, due_at, interest_rate FROM loans WHERE id = ?1",
                 [id],
                 loan_row,
             )
@@ -370,6 +370,19 @@ fn positive_amount(amount: Decimal) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// 按实际持有天数计算简单利息；年化利率使用百分数（5 = 5%）。
+pub(crate) fn calculate_simple_interest(
+    principal: Decimal,
+    annual_rate: Decimal,
+    opened_at: DateTime<Utc>,
+    settled_at: DateTime<Utc>,
+) -> Decimal {
+    let days = (settled_at - opened_at).num_days().max(0);
+    (principal * annual_rate / Decimal::from(100_u32) * Decimal::from(days)
+        / Decimal::from(365_u32))
+    .round_dp(2)
 }
 
 fn decimal_to_db(value: Decimal) -> String {

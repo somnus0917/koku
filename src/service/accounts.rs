@@ -501,23 +501,30 @@ impl BookkeepingService {
         }
         // 未结借款纳入净资产：借出 = 应收（资产），借入 = 应付（负债），同样按汇率折算。
         let mut statement = self.conn.prepare(
-            "SELECT loan_type, currency, outstanding FROM loans WHERE closed_at IS NULL",
+            "SELECT loan_type, currency, outstanding, interest_rate, opened_at
+             FROM loans WHERE closed_at IS NULL",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })?;
         for row in rows {
-            let (loan_type, loan_currency, outstanding) = row?;
-            let outstanding = self.convert_amount(
-                decimal_from_db(&outstanding)?,
-                &loan_currency,
-                &currency,
-                today,
-            )?;
+            let (loan_type, loan_currency, outstanding, interest_rate, opened_at) = row?;
+            let mut outstanding = decimal_from_db(&outstanding)?;
+            if let Some(rate) = interest_rate.as_deref() {
+                outstanding += calculate_simple_interest(
+                    outstanding,
+                    decimal_from_db(rate)?,
+                    parse_timestamp(&opened_at)?,
+                    Utc::now(),
+                );
+            }
+            let outstanding = self.convert_amount(outstanding, &loan_currency, &currency, today)?;
             match LoanType::from_db(&loan_type)? {
                 LoanType::Lend => total_assets += outstanding,
                 LoanType::Borrow => total_liabilities += outstanding,

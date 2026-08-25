@@ -71,7 +71,7 @@ export function RepayModal({
     <ModalShell eyebrow="REPAYMENT" title={t(loan.loan_type === "lend" ? "modals.repay.titleLend" : "modals.repay.titleBorrow")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
         <div className="deposit-info">
-          <p>{t(loan.loan_type === "lend" ? "modals.repay.infoLend" : "modals.repay.infoBorrow", { name: loan.counterparty, amount: formatMoney(loan.outstanding, loan.currency) })}</p>
+          <p>{t(loan.loan_type === "lend" ? "modals.repay.infoLend" : "modals.repay.infoBorrow", { name: loan.counterparty, amount: formatMoney(loan.outstanding, loan.currency) })}{loan.interest_rate ? ` ${t("modals.repay.interestDue", { interest: formatMoney(loan.accrued_interest, loan.currency), rate: loan.interest_rate })}` : ""}</p>
         </div>
         <div className="form-grid">
           <label><span>{t("common.fundingAccount")}</span>
@@ -82,7 +82,7 @@ export function RepayModal({
               ))}
             </select>
           </label>
-          <label><span>{t("modals.repay.amount", { currency: loan.currency })}</span><input required step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
+          <label><span>{t("modals.repay.amount", { currency: loan.currency })}</span><input required readOnly={loan.interest_rate !== null} step="0.01" inputMode="decimal" max={loan.outstanding} value={amount} onChange={(e) => setAmount(e.target.value)} /></label>
           {crossCurrency && (
             <>
               <label className="span-two"><span>{t("modals.repay.settled", { currency: selectedAccount.currency })}</span>

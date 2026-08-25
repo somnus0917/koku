@@ -7,6 +7,7 @@ export function createLoan(input: {
   counterparty: string;
   currency?: string;
   amount: string;
+  interest_rate?: string;
   account_id: number;
   note?: string;
   due_at?: string;

@@ -225,6 +225,8 @@ export const zh = {
           receivable: "借出应收",
           payable: "借入应付",
           principal: "本金",
+          interest: "年利率 {{rate}}%，应计 {{amount}}",
+          settledInterest: "利息 {{amount}}",
           repay: "还款",
           emptyTitle: "没有进行中的借款",
           emptyDetail: "点击“记一笔借款”借出或借入。"
@@ -519,6 +521,8 @@ export const zh = {
           counterparty: "往来人",
           counterpartyPlaceholder: "例如：张三",
           dueDate: "到期日（可选）",
+          interestRate: "年利率（%，可选）",
+          interestRatePlaceholder: "留空表示无息",
           confirmLend: "确认借出",
           confirmBorrow: "确认借入"
         },
@@ -530,6 +534,7 @@ export const zh = {
           amount: "还款金额（{{currency}}）",
           settled: "计入账户余额 · {{currency}}",
           settledPlaceholder: "按汇率折算成 {{currency}}",
+          interestDue: "按年利率 {{rate}}% 应计利息 {{interest}}，结清时自动计入。",
           submit: "确认还款"
         },
         transaction: {

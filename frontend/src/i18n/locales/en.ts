@@ -225,6 +225,8 @@ export const en = {
           receivable: "Receivable",
           payable: "Payable",
           principal: "principal",
+          interest: "{{rate}}% annual, {{amount}} accrued",
+          settledInterest: "{{amount}} interest",
           repay: "Repay",
           emptyTitle: "No active loans",
           emptyDetail: "Click “Record a loan” to lend or borrow."
@@ -519,6 +521,8 @@ export const en = {
           counterparty: "Counterparty",
           counterpartyPlaceholder: "e.g. Alice",
           dueDate: "Due date (optional)",
+          interestRate: "Annual interest rate (%, optional)",
+          interestRatePlaceholder: "Leave blank for interest-free",
           confirmLend: "Confirm lending",
           confirmBorrow: "Confirm borrowing"
         },
@@ -530,6 +534,7 @@ export const en = {
           amount: "Repayment amount ({{currency}})",
           settled: "Credit to account balance · {{currency}}",
           settledPlaceholder: "Converted to {{currency}}",
+          interestDue: "{{interest}} interest has accrued at {{rate}}% annually and will be posted on settlement.",
           submit: "Confirm repayment"
         },
         transaction: {

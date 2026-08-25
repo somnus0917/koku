@@ -78,7 +78,7 @@ impl BookkeepingService {
         // 借款：未结清、设定了到期日且不晚于 horizon。
         {
             let mut statement = self.conn.prepare(
-                "SELECT id, loan_type, counterparty, currency, outstanding, due_at
+                "SELECT id, loan_type, counterparty, currency, outstanding, due_at, interest_rate, opened_at
                  FROM loans
                  WHERE closed_at IS NULL AND due_at IS NOT NULL AND due_at <= ?1
                  ORDER BY due_at",
@@ -91,12 +91,24 @@ impl BookkeepingService {
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
                 ))
             })?;
             for row in rows {
-                let (id, loan_type, counterparty, currency, outstanding, due_at) = row?;
+                let (id, loan_type, counterparty, currency, outstanding, due_at, rate, opened_at) =
+                    row?;
                 let due_at = parse_timestamp(&due_at)?;
                 let kind = LoanType::from_db(&loan_type)?.as_str();
+                let mut outstanding = decimal_from_db(&outstanding)?;
+                if let Some(rate) = rate.as_deref() {
+                    outstanding += calculate_simple_interest(
+                        outstanding,
+                        decimal_from_db(rate)?,
+                        parse_timestamp(&opened_at)?,
+                        now,
+                    );
+                }
                 items.push(ReminderItem {
                     kind: "loan".to_owned(),
                     id,
@@ -104,7 +116,7 @@ impl BookkeepingService {
                         "lend" => format!("应收 {counterparty}"),
                         _ => format!("应付 {counterparty}"),
                     },
-                    amount: decimal_from_db(&outstanding)?,
+                    amount: outstanding,
                     currency,
                     overdue: due_at < now,
                     days_left: (due_at - now).num_days(),
