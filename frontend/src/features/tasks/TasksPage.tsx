@@ -13,6 +13,7 @@ const laneFor = (item: ReminderItem): Lane => item.overdue || item.days_left <= 
 function iconFor(kind: ReminderItem["kind"]) {
   if (kind === "deposit") return Landmark;
   if (kind === "credit_card") return WalletCards;
+  if (kind === "bill") return CalendarClock;
   return ReceiptText;
 }
 

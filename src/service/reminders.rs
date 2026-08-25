@@ -1,4 +1,4 @@
-//! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款、借款与信用卡账单。
+//! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款、借款、信用卡与固定账单。
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use rust_decimal::Decimal;
@@ -12,7 +12,7 @@ use crate::service::BookkeepingService;
 /// 一条到期提醒。
 #[derive(Debug, Clone, Serialize)]
 pub struct ReminderItem {
-    /// "deposit" | "loan" | "credit_card"
+    /// "deposit" | "loan" | "credit_card" | "bill"
     pub kind: String,
     pub id: i64,
     /// 展示标题：定存为备注（或占位文案），借款为往来方。
@@ -123,7 +123,7 @@ impl BookkeepingService {
             });
         }
 
-        // 固定账单：账单是每月重复提醒，当前月份到期日已过时保留为逾期；否则提示本月即将到期。
+        // 固定账单：选择本月尚未到达的到期日；本月日期已过则进位到下月。
         {
             let mut statement = self.conn.prepare(
                 "SELECT b.id, b.name, b.amount, b.due_day, a.currency
@@ -163,23 +163,38 @@ impl BookkeepingService {
 }
 
 fn bill_due_at(now: DateTime<Utc>, day: u32) -> Result<DateTime<Utc>> {
-    let first = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
-        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid current date".into()))?;
-    let next_month = if now.month() == 12 {
-        NaiveDate::from_ymd_opt(now.year() + 1, 1, 1)
+    let today = now.date_naive();
+    let this_month = monthly_due_date(today.year(), today.month(), day)?;
+    let date = if this_month < today {
+        let (year, month) = if today.month() == 12 {
+            (today.year() + 1, 1)
+        } else {
+            (today.year(), today.month() + 1)
+        };
+        monthly_due_date(year, month, day)?
     } else {
-        NaiveDate::from_ymd_opt(now.year(), now.month() + 1, 1)
-    }
-    .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid current date".into()))?;
-    let last_day = (next_month - Duration::days(1)).day();
-    let date = first
-        .with_day(day.min(last_day))
-        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due day".into()))?;
+        this_month
+    };
     Ok(DateTime::from_naive_utc_and_offset(
         date.and_hms_opt(9, 0, 0)
             .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due time".into()))?,
         Utc,
     ))
+}
+
+fn monthly_due_date(year: i32, month: u32, day: u32) -> Result<NaiveDate> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill month".into()))?;
+    let next_month = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
+    .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill month".into()))?;
+    let last_day = (next_month - Duration::days(1)).day();
+    first
+        .with_day(day.min(last_day))
+        .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due day".into()))
 }
 
 /// 把到期提醒格式化为纯文本摘要（邮件正文用）。
@@ -335,6 +350,69 @@ mod tests {
         assert_eq!(reminders[0].kind, "credit_card");
         assert_eq!(reminders[0].title, "信用卡 信用卡");
         assert_eq!(reminders[0].amount, Decimal::from(200_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn advances_recurring_bill_to_next_month_after_due_day() -> Result<()> {
+        let now = DateTime::parse_from_rfc3339("2026-08-20T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(
+            bill_due_at(now, 10)?.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 9, 10).unwrap()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn clamps_recurring_bill_to_month_end() -> Result<()> {
+        let now = DateTime::parse_from_rfc3339("2026-02-01T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        assert_eq!(
+            bill_due_at(now, 31)?.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn includes_only_active_bills_within_horizon() -> Result<()> {
+        let mut service = test_service()?;
+        let account = service.create_account(
+            "日常账户",
+            AccountType::Cash,
+            "CNY",
+            Decimal::from(1000_u32),
+        )?;
+        let category = service.create_category("住房", crate::domain::CategoryKind::Expense)?;
+        let due_day = Utc::now().day();
+        service.save_bill(
+            None,
+            "房租".into(),
+            account.id,
+            category.id,
+            Decimal::from(3000_u32),
+            due_day,
+            true,
+            String::new(),
+        )?;
+        service.save_bill(
+            None,
+            "停用订阅".into(),
+            account.id,
+            category.id,
+            Decimal::from(30_u32),
+            due_day,
+            false,
+            String::new(),
+        )?;
+
+        let reminders = service.due_reminders(31)?;
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(reminders[0].kind, "bill");
+        assert_eq!(reminders[0].title, "房租");
         Ok(())
     }
 }
