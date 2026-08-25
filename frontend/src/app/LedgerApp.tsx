@@ -1,5 +1,5 @@
 //! 主应用外壳：数据加载、页面路由、弹窗编排与全局通知。
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, CircleDollarSign, RefreshCcw } from "lucide-react";
 import { changeLanguage } from "../i18n";
@@ -42,22 +42,16 @@ import {
   voidTransaction
 } from "../api";
 import { AccountModal } from "../features/accounts/AccountModal";
-import { AccountsPage } from "../features/accounts/AccountsPage";
 import { EditAccountModal } from "../features/accounts/EditAccountModal";
 import { PasswordModal } from "../features/auth/PasswordModal";
 import { TotpModal } from "../features/auth/TotpModal";
 import { LearningSettingsModal } from "../features/settings/LearningSettingsModal";
 import { CategoryModal } from "../features/categories/CategoryModal";
-import { Dashboard } from "../features/dashboard/DashboardPage";
 import { DepositModal } from "../features/deposits/DepositModal";
 import { SettleDepositModal } from "../features/deposits/SettleDepositModal";
 import { TradeModal } from "../features/holdings/TradeModal";
-import { InsightsPage } from "../features/insights/InsightsPage";
-import { ActivityPage } from "../features/activity/ActivityPage";
-import { TasksPage } from "../features/tasks/TasksPage";
 import { LedgerSettingsModal } from "../features/settings/LedgerSettingsModal";
 import { LoanModal } from "../features/loans/LoanModal";
-import { LoansSection } from "../features/loans/LoansSection";
 import { RepayModal } from "../features/loans/RepayModal";
 import { ReimburseModal } from "../features/reimbursements/ReimburseModal";
 import { RefundModal } from "../features/refunds/RefundModal";
@@ -66,9 +60,6 @@ import { RecurringModal } from "../features/recurring/RecurringModal";
 import { EditTransactionModal } from "../features/transactions/EditTransactionModal";
 import { ImportModal } from "../features/transactions/ImportModal";
 import { TransactionModal } from "../features/transactions/TransactionModal";
-import { TransactionsPage } from "../features/transactions/TransactionsPage";
-import { SystemAdminPage } from "../components/system";
-import { UsersAdminPage } from "../components/users";
 import { COMMON_CURRENCIES, availableCurrencies, currentMonthValue } from "../lib";
 import { useTheme } from "../theme";
 import { MobileBottomNav } from "./MobileBottomNav";
@@ -76,6 +67,15 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import type { View } from "./nav";
 import type { Account, AppData, Deposit, Loan, ReminderItem, RecurringRule, Transaction, UserRole } from "../types";
+
+const Dashboard = lazy(() => import("../features/dashboard/DashboardPage").then((module) => ({ default: module.Dashboard })));
+const TasksPage = lazy(() => import("../features/tasks/TasksPage").then((module) => ({ default: module.TasksPage })));
+const AccountsPage = lazy(() => import("../features/accounts/AccountsPage").then((module) => ({ default: module.AccountsPage })));
+const TransactionsPage = lazy(() => import("../features/transactions/TransactionsPage").then((module) => ({ default: module.TransactionsPage })));
+const InsightsPage = lazy(() => import("../features/insights/InsightsPage").then((module) => ({ default: module.InsightsPage })));
+const ActivityPage = lazy(() => import("../features/activity/ActivityPage").then((module) => ({ default: module.ActivityPage })));
+const UsersAdminPage = lazy(() => import("../components/users").then((module) => ({ default: module.UsersAdminPage })));
+const SystemAdminPage = lazy(() => import("../components/system").then((module) => ({ default: module.SystemAdminPage })));
 
 type Modal =
   | "transaction"
@@ -462,7 +462,9 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         />
 
         {error && data && <div className="inline-error">{t("app.syncFailed")}{error}</div>}
-        {content}
+        <Suspense fallback={<div className="page page-enter" aria-hidden="true" />}>
+          {content}
+        </Suspense>
       </main>
       <MobileBottomNav
         activeView={activeView}

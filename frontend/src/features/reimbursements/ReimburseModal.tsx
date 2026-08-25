@@ -3,7 +3,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { LoaderCircle } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
-import { RateHintLine, useRateHint } from "../../components/RateHint";
+import { RateHintLine } from "../../components/RateHint";
+import { useRateHint } from "../../components/rateHintState";
 import { formatMoney } from "../../lib";
 import type { Account, Transaction } from "../../types";
 

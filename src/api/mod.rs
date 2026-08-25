@@ -13,6 +13,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -196,6 +197,8 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
             maintenance_gate,
         ))
         .layer(middleware::from_fn_with_state(state, rate_limit));
+    // 把业务处理中的意外 panic 转成 500，避免连接被直接中断或进程退出。
+    let router = router.layer(CatchPanicLayer::new());
     // 请求级 tracing（方法/路径/状态码/耗时），配合 tracing_subscriber 输出。
     router.layer(TraceLayer::new_for_http())
 }

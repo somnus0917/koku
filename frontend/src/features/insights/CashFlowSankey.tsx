@@ -233,7 +233,7 @@ export function CashFlowSankey({ summary }: { summary: CashFlowSummary }) {
     </details>
   );
 }
-export function sankeyRibbonPath(
+function sankeyRibbonPath(
   sourceX: number,
   sourceY: number,
   sourceHeight: number,

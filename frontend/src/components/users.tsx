@@ -1,6 +1,6 @@
 //! 管理员用户管理页：查看用户、创建成员、重置密码、启用/停用、删除（连带账本）。
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   KeyRound,
@@ -97,17 +97,17 @@ export function UsersAdminPage({ currentUserId }: { currentUserId: number }) {
     successTimer.current = window.setTimeout(() => setSuccess(null), 2600);
   };
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setUsers(await listUsers());
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("users.loadFailed"));
     }
-  };
+  }, [t]);
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [refresh]);
 
   const act = async (action: () => Promise<unknown>, message: string) => {
     try {

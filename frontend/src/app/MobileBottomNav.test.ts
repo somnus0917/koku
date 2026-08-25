@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MOBILE_NAV_ITEMS } from "./MobileBottomNav";
+import { MOBILE_NAV_ITEMS } from "./mobileNavItems";
 
 describe("MOBILE_NAV_ITEMS", () => {
   it("keeps the bottom bar to four high-frequency views", () => {

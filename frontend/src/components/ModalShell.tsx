@@ -1,5 +1,4 @@
 //! 通用弹窗外壳：遮罩、卡片、标题与关闭按钮。
-import type { ReactNode } from "react";
 import { X } from "lucide-react";
 
 export function ModalShell({ title, eyebrow, onClose, children }: { title: string; eyebrow: string; onClose: () => void; children: React.ReactNode }) {

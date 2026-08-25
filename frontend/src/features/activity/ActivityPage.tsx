@@ -1,5 +1,5 @@
 //! 账本活动轨迹：展示已完成操作的简明、不可编辑记录。
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { History, RefreshCcw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { loadActivity } from "../../api";
@@ -13,13 +13,13 @@ export function ActivityPage() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try { setEvents(await loadActivity()); setError(null); }
     catch (reason) { setError(reason instanceof Error ? reason.message : t("activity.loadFailed")); }
     finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, []);
+  }, [t]);
+  useEffect(() => { void load(); }, [load]);
   return <div className="page page-enter">
     <PageTitle eyebrow="ACTIVITY HISTORY" title={t("activity.title")} actions={<button className="text-button" onClick={() => void load()} disabled={loading}><RefreshCcw className={loading ? "spin" : ""} size={16} /> {t("common.refresh")}</button>} />
     <p className="page-hint">{t("activity.hint")}</p>

@@ -8,7 +8,7 @@ import { PageTitle } from "../../components/PageTitle";
 import { accountIcon, convertedMoney, useConversionRates } from "../../components/accountDisplay";
 import { TransactionList } from "../transactions/TransactionList";
 import { CategoryBars } from "../insights/CategoryBars";
-import { formatDate, formatMoney, healthScore } from "../../lib";
+import { buildTransactionTrendPoints, formatDate, formatMoney, healthScore } from "../../lib";
 import type { Account, AppData, Deposit, Loan, SavingsGoal, Transaction } from "../../types";
 
 function ReminderBanner({ deposits, loans }: { deposits: Deposit[]; loans: Loan[] }) {
@@ -160,7 +160,7 @@ function SavingsGoals({ accounts, currency }: { accounts: Account[]; currency: s
   const remove = async (id: number) => { if (!window.confirm("确认删除这个储蓄目标？")) return; await deleteSavingsGoal(id); await load(); };
   return <section className="section-block goals-overview"><div className="section-heading"><div><span>GOALS</span><h2>储蓄目标</h2></div><button className="text-button" onClick={() => setCreating(true)}><Plus size={16} /> 新建目标</button></div><div className="goal-cards">{goals.map((item) => { const progress = Math.min(100, Number(item.current_amount) / Number(item.target_amount) * 100 || 0); const goalCurrency = accountMap.get(item.account_id ?? 0)?.currency ?? currency; return <article className="goal-card" key={item.id}><div className="goal-card-heading"><span><Target size={17} /></span><button className="bare-button" onClick={() => setEditing(item)} aria-label="编辑目标"><MoreHorizontal size={18} /></button></div><h3>{item.name}</h3><strong>{formatMoney(item.current_amount, goalCurrency)} <small>/ {formatMoney(item.target_amount, goalCurrency)}</small></strong><div className="goal-track"><i style={{ width: `${progress}%` }} /></div><footer><span>{progress.toFixed(0)}%</span><span>{item.target_date ?? "未设截止日期"}</span></footer><button className="text-button goal-delete" onClick={() => void remove(item.id)}>删除</button></article>; })}{goals.length === 0 && <article className="goal-empty"><Target size={20} /><div><strong>给未来留一点空间</strong><span>设定旅行、应急金或其他储蓄目标，在这里查看进度。</span></div></article>}</div>{(creating || editing) && <GoalModal goal={editing} accounts={accounts} onClose={() => { setCreating(false); setEditing(null); }} onSaved={() => void load()} />}</section>;
 }
-function GoalModal({ goal, accounts, onClose, onSaved }: { goal: SavingsGoal | null; accounts: Account[]; onClose: () => void; onSaved: () => void }) { const [draft, setDraft] = useState<SavingsGoalInput>(() => goal ? { name: goal.name, account_id: goal.account_id, target_amount: goal.target_amount, current_amount: goal.current_amount, target_date: goal.target_date } : { name: "", account_id: null, target_amount: "", current_amount: "0", target_date: null }); const [busy, setBusy] = useState(false); const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { goal ? await updateSavingsGoal(goal.id, draft) : await createSavingsGoal(draft); onSaved(); onClose(); } finally { setBusy(false); } }; return <ModalShell eyebrow="SAVINGS GOAL" title={goal ? "编辑储蓄目标" : "新建储蓄目标"} onClose={onClose}><form className="entry-form" onSubmit={(event) => void save(event)}><div className="form-grid"><label><span>目标名称</span><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="例如：旅行基金" /></label><label><span>目标金额</span><input required type="number" min="0.01" step="0.01" value={draft.target_amount} onChange={(e) => setDraft({ ...draft, target_amount: e.target.value })} /></label><label><span>当前已存</span><input required type="number" min="0" step="0.01" value={draft.current_amount} onChange={(e) => setDraft({ ...draft, current_amount: e.target.value })} /></label><label><span>关联账户</span><select value={draft.account_id ?? ""} onChange={(e) => setDraft({ ...draft, account_id: e.target.value ? Number(e.target.value) : null })}><option value="">不关联</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="span-two"><span>目标日期</span><input type="date" value={draft.target_date ?? ""} onChange={(e) => setDraft({ ...draft, target_date: e.target.value || null })} /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy}>{busy ? "保存中" : "保存"}</button></div></form></ModalShell>; }
+function GoalModal({ goal, accounts, onClose, onSaved }: { goal: SavingsGoal | null; accounts: Account[]; onClose: () => void; onSaved: () => void }) { const [draft, setDraft] = useState<SavingsGoalInput>(() => goal ? { name: goal.name, account_id: goal.account_id, target_amount: goal.target_amount, current_amount: goal.current_amount, target_date: goal.target_date } : { name: "", account_id: null, target_amount: "", current_amount: "0", target_date: null }); const [busy, setBusy] = useState(false); const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { if (goal) await updateSavingsGoal(goal.id, draft); else await createSavingsGoal(draft); onSaved(); onClose(); } finally { setBusy(false); } }; return <ModalShell eyebrow="SAVINGS GOAL" title={goal ? "编辑储蓄目标" : "新建储蓄目标"} onClose={onClose}><form className="entry-form" onSubmit={(event) => void save(event)}><div className="form-grid"><label><span>目标名称</span><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="例如：旅行基金" /></label><label><span>目标金额</span><input required type="number" min="0.01" step="0.01" value={draft.target_amount} onChange={(e) => setDraft({ ...draft, target_amount: e.target.value })} /></label><label><span>当前已存</span><input required type="number" min="0" step="0.01" value={draft.current_amount} onChange={(e) => setDraft({ ...draft, current_amount: e.target.value })} /></label><label><span>关联账户</span><select value={draft.account_id ?? ""} onChange={(e) => setDraft({ ...draft, account_id: e.target.value ? Number(e.target.value) : null })}><option value="">不关联</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="span-two"><span>目标日期</span><input type="date" value={draft.target_date ?? ""} onChange={(e) => setDraft({ ...draft, target_date: e.target.value || null })} /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy}>{busy ? "保存中" : "保存"}</button></div></form></ModalShell>; }
 export function TrendChart({
   transactions,
   currency,
@@ -171,25 +171,10 @@ export function TrendChart({
   /** 折算汇率表：交易币种 → 1 unit = factor display；缺汇率时跳过该币种。 */
   rates?: Record<string, number>;
 }) {
-  const points = useMemo(() => {
-    const values = Array.from({ length: 12 }, (_, index) => ({ x: index, value: 0 }));
-    for (const item of transactions) {
-      if (item.kind === "transfer" || item.kind === "loan" || item.kind === "adjustment") continue;
-      const factor = item.currency === currency ? 1 : rates[item.currency];
-      if (factor == null) continue; // 无折算汇率时跳过该币种
-      const day = new Date(item.occurred_at).getDate();
-      const bucket = Math.min(11, Math.floor(((day - 1) / 31) * 12));
-      const signed = item.kind === "income"
-        ? Number(item.amount) * factor
-        : -Number(item.amount) * factor;
-      values[bucket].value += signed;
-    }
-    let running = 0;
-    return values.map((item) => {
-      running += item.value;
-      return running;
-    });
-  }, [currency, transactions, rates]);
+  const points = useMemo(
+    () => buildTransactionTrendPoints(transactions, currency, rates),
+    [currency, transactions, rates]
+  );
   const min = Math.min(...points, 0);
   const max = Math.max(...points, 1);
   const range = Math.max(1, max - min);

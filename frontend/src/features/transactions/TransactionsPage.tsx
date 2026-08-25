@@ -8,7 +8,7 @@ import { useConversionRates } from "../../components/accountDisplay";
 import { TransactionRow } from "./TransactionRow";
 import { ReceiptWall } from "./ReceiptWall";
 import { exportTransactions, loadTagSummary } from "../../api";
-import { formatMoney } from "../../lib";
+import { formatMoney, formatTransactionDay, groupTransactionsByDay } from "../../lib";
 import type { AppData, Tag, TagSummary, Transaction, TransactionKind } from "../../types";
 
 type TransactionViewMode = "table" | "timeline" | "receipts";
@@ -23,11 +23,6 @@ function readSavedViews(): SavedTransactionView[] {
   } catch {
     return [];
   }
-}
-
-function dateGroup(value: string): string {
-  const date = new Date(value);
-  return new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", weekday: "short" }).format(date);
 }
 
 /**
@@ -164,7 +159,6 @@ export function TransactionsPage({
     [data.transactions]
   );
   const rates = useConversionRates(txCurrencies, display);
-  const tagFilterKey = tagFilter.join(",");
   const persistSavedViews = (next: SavedTransactionView[]) => {
     setSavedViews(next);
     window.localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(next));
@@ -187,7 +181,7 @@ export function TransactionsPage({
   useEffect(() => {
     const timer = window.setTimeout(() => onFilterChange?.({ search, kind, tags: tagFilter }), 250);
     return () => window.clearTimeout(timer);
-  }, [search, kind, tagFilterKey, onFilterChange]);
+  }, [search, kind, tagFilter, onFilterChange]);
   // 选中标签时拉取对应汇总（月视图按当前月，全部月份视图按全部历史）。
   useEffect(() => {
     if (tagFilter.length === 0) {
@@ -210,8 +204,7 @@ export function TransactionsPage({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tagFilterKey, display, exportYear, exportMonth]);
+  }, [tagFilter, display, exportYear, exportMonth, t]);
   const filtered = data.transactions.filter((item) => {
     const category = item.category_id ? categoriesById.get(item.category_id)?.name ?? "" : "转账";
     const account = accountsById.get(item.account_id)?.name ?? "";
@@ -221,13 +214,7 @@ export function TransactionsPage({
   });
   // 退款收入仍会保留在列表/时间线；票根墙则折叠到它关联的原支出票根。
   const receiptTransactions = filtered.filter((transaction) => transaction.refund_expense_id == null);
-  const timelineGroups = filtered.reduce<Array<{ day: string; items: Transaction[] }>>((groups, item) => {
-    const day = item.occurred_at.slice(0, 10);
-    const current = groups.at(-1);
-    if (current?.day === day) current.items.push(item);
-    else groups.push({ day, items: [item] });
-    return groups;
-  }, []);
+  const timelineGroups = groupTransactionsByDay(filtered);
   const row = (transaction: Transaction) => (
     <TransactionRow
       key={transaction.id}
@@ -340,7 +327,7 @@ export function TransactionsPage({
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </article>}
       {mode === "timeline" && <div className="transaction-timeline panel">
-        {timelineGroups.map((group) => <section key={group.day}><h2>{dateGroup(group.day)}</h2>{group.items.map(row)}</section>)}
+        {timelineGroups.map((group) => <section key={group.day}><h2>{formatTransactionDay(group.day)}</h2>{group.items.map(row)}</section>)}
         {filtered.length === 0 && <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />}
       </div>}
       {mode === "receipts" && (receiptTransactions.length > 0 ? <ReceiptWall transactions={receiptTransactions} accountsById={accountsById} categoriesById={categoriesById} onEdit={onEdit} onRefund={onRefund} /> : <EmptyState title={t("transactions.notFoundTitle")} detail={t("transactions.notFoundDetail")} />)}

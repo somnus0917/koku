@@ -183,6 +183,7 @@ scp .env.production.example YOUR_USER@YOUR_SERVER:koku/.env
 - `KOKU_AUTH_EMAIL` / `KOKU_AUTH_PASSWORD_HASH`：多用户引导凭据。首次启动时以该邮箱+密码创建 **管理员** 账号（应用内改过密码则优先用持久化的哈希）；此后登录全部走 `users` 表，这两个变量只影响全新初始化。`KOKU_AUTH_USERNAME` 仅为旧配置兼容别名。
 - 多用户模型：每个用户拥有**完全独立的账本**（账户/分类/交易/标签/预算/借款/持仓/定期/小票等全部隔离），数据存放在 `data/ledgers/ledger-<id>.db`；共享库 `data/koku.db` 只保存用户与会话。**不开放注册**，新用户只能由管理员在「用户」页以邮箱创建；管理员可重置密码、启用/停用（立即作废其会话）、删除用户（连带其账本文件）。
 - `KOKU_SESSION_TTL_DAYS`：登录会话有效天数，范围为 1–365。
+- 当前登录节流和通用 API 限流状态保存在进程内存中，适用于本部署的单实例 API；重启后计数会清零。若以后横向扩容为多个 API 实例，应先把限流状态迁移到 Redis 等共享存储，避免各实例分别计数导致限制失效。
 - `DEBIAN_MIRROR`：腾讯云建议使用 `http://mirrors.cloud.tencent.com`；Cargo 构建已固定使用 USTC 稀疏索引并启用缓存。
 
 使用 Caddy 自带的 bcrypt 工具生成应用登录密码哈希，并单独保存在数据目录：

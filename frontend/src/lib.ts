@@ -52,7 +52,6 @@ import {
   Tags,
   Ticket,
   TrainFront,
-  TrendingUp,
   Trophy,
   Tv,
   Users,
@@ -212,6 +211,74 @@ export function formatDay(value: string): string {
     month: "long",
     day: "numeric"
   }).format(date);
+}
+
+/** 时间线分组标题；纯日期按本地午夜解析，避免负时区显示成前一天。 */
+export function formatTransactionDay(value: string, locale = uiLocale()): string {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : new Date(value);
+  return new Intl.DateTimeFormat(locale, {
+    month: "long",
+    day: "numeric",
+    weekday: "short"
+  }).format(date);
+}
+
+export interface TransactionDayGroup {
+  day: string;
+  items: Transaction[];
+}
+
+/** 按交易发生日分组，保留日期首次出现的顺序。 */
+export function groupTransactionsByDay(transactions: Transaction[]): TransactionDayGroup[] {
+  const groups: TransactionDayGroup[] = [];
+  const byDay = new Map<string, TransactionDayGroup>();
+  for (const transaction of transactions) {
+    const day = transaction.occurred_at.slice(0, 10);
+    const existing = byDay.get(day);
+    if (existing) {
+      existing.items.push(transaction);
+      continue;
+    }
+    const group = { day, items: [transaction] };
+    byDay.set(day, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
+/**
+ * 月度交易累计趋势：跨币种按给定汇率折算；缺少汇率的交易不计入。
+ * 返回 12 个从月初到月末的累计点。
+ */
+export function buildTransactionTrendPoints(
+  transactions: Transaction[],
+  currency: string,
+  rates: Record<string, number> = {}
+): number[] {
+  const values = Array.from({ length: 12 }, () => 0);
+  for (const transaction of transactions) {
+    if (
+      transaction.kind === "transfer"
+      || transaction.kind === "loan"
+      || transaction.kind === "adjustment"
+    ) {
+      continue;
+    }
+    const factor = transaction.currency === currency ? 1 : rates[transaction.currency];
+    if (factor == null) continue;
+    const day = new Date(transaction.occurred_at).getDate();
+    if (!Number.isFinite(day)) continue;
+    const bucket = Math.min(11, Math.floor(((day - 1) / 31) * 12));
+    const amount = Number(transaction.amount) * factor;
+    values[bucket] += transaction.kind === "income" ? amount : -amount;
+  }
+  let running = 0;
+  return values.map((value) => {
+    running += value;
+    return running;
+  });
 }
 
 const QUICK_ENTRY_KEY = "koku:quick-entry";

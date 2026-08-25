@@ -68,6 +68,9 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev
 
+      - name: Lint frontend
+        run: npm run lint
+
       - name: Run tests
         run: npm test
 
