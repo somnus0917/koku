@@ -147,15 +147,15 @@ export function UsersAdminPage({ currentUserId }: { currentUserId: number }) {
       />
       {success && <div className="users-success" role="status">{success}</div>}
       {error && <div className="inline-error">{error}</div>}
-      <article className="panel transaction-table">
-        <div className="table-header"><span>{t("users.colUser")}</span><span>{t("users.colRole")}</span><span>{t("users.colStatus")}</span><span>{t("common.colCreatedAt")}</span><span /><span /></div>
+      <article className="panel users-table">
+        <div className="users-table-header"><span>{t("users.colUser")}</span><span>{t("users.colRole")}</span><span>{t("users.colStatus")}</span><span>{t("common.colCreatedAt")}</span><span /></div>
         {users === null ? (
           <div className="empty-hint"><LoaderCircle className="spin" size={18} /> {t("common.loading")}</div>
         ) : users.length === 0 ? (
           <div className="empty-hint">{t("users.empty")}</div>
         ) : (
           users.map((item) => (
-            <div className="transaction-row" key={item.id}>
+            <div className="users-table-row" key={item.id}>
               <div className="transaction-main">
                 <span className="transaction-icon transfer"><UserRound size={18} /></span>
                 <div>
@@ -163,10 +163,10 @@ export function UsersAdminPage({ currentUserId }: { currentUserId: number }) {
                   <span className="transaction-meta"><span>{item.role === "admin" ? t("users.admin") : t("users.member")}</span></span>
                 </div>
               </div>
-              <span className="table-account">{item.role === "admin" ? <Shield size={15} /> : <ShieldOff size={15} />}</span>
-              <span className="table-date">{item.enabled ? t("users.enabled") : t("users.disabled")}</span>
-              <span className="table-date">{formatDate(item.created_at)}</span>
-              <div className="row-menu-wrap">
+              <span className="users-role">{item.role === "admin" ? <Shield size={15} /> : <ShieldOff size={15} />}</span>
+              <span className="users-status">{item.enabled ? t("users.enabled") : t("users.disabled")}</span>
+              <span className="users-created">{formatDate(item.created_at)}</span>
+              <div className="users-actions">
                 <button
                   className="row-action"
                   title={item.enabled ? t("users.disableTitle") : t("users.enableTitle")}
@@ -177,13 +177,9 @@ export function UsersAdminPage({ currentUserId }: { currentUserId: number }) {
                     void act(() => setUserEnabled(item.id, !item.enabled), item.enabled ? t("users.disabledFlash", { email: item.email }) : t("users.enabledFlash", { email: item.email })).then(() => setBusyId(null));
                   }}
                 >{busyId === item.id ? <LoaderCircle className="spin" size={16} /> : item.enabled ? <ShieldOff size={16} /> : <Shield size={16} />}</button>
-              </div>
-              <div className="row-menu-wrap">
                 <button className="row-action" title={t("users.resetPassword")} aria-label={t("users.resetPassword")} onClick={() => setPasswordModal({ mode: "reset", user: item })}>
                   <KeyRound size={16} />
                 </button>
-              </div>
-              <div className="row-menu-wrap">
                 <button
                   className="row-action"
                   title={t("users.delete")}

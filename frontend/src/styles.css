@@ -3277,6 +3277,61 @@ button:disabled {
 }
 
 /* 用户管理页 */
+.users-table {
+  padding: 9px 20px;
+}
+
+.users-table-header,
+.users-table-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 32%) minmax(120px, 18%) minmax(90px, 15%) minmax(150px, 1fr) 105px;
+  align-items: center;
+  gap: 16px;
+  padding-right: 5px;
+  padding-left: 5px;
+}
+
+.users-table-header {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.users-table-row {
+  min-height: 72px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.users-table-row:last-child {
+  border-bottom: 0;
+}
+
+.users-role,
+.users-status,
+.users-created {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.users-role {
+  display: inline-flex;
+  align-items: center;
+}
+
+.users-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .users-success {
   margin: 15px 42px 0;
   padding: 10px 13px;
@@ -3286,6 +3341,48 @@ button:disabled {
   color: var(--positive, #2e7d4f);
   font-size: 11px;
   font-weight: 600;
+}
+
+@media (max-width: 1200px) {
+  .users-table-header {
+    display: none;
+  }
+
+  .users-table-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 12px;
+    min-height: 78px;
+  }
+
+  .users-role,
+  .users-created {
+    display: none;
+  }
+
+  .users-status {
+    grid-column: 1;
+    margin-left: 51px;
+  }
+
+  .users-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+@media (max-width: 640px) {
+  .users-table {
+    padding: 7px 11px;
+  }
+
+  .users-table-row {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  .users-actions {
+    gap: 2px;
+  }
 }
 
 .empty-hint {
