@@ -140,7 +140,7 @@ export function Topbar({
                     <button className="reminder-item" type="button" key={`${item.kind}-${item.id}`} onClick={() => onReminderAction(item)}>
                       <div className="reminder-item-main">
                         <strong>{item.title}</strong>
-                        <span>{formatMoney(item.amount, item.currency)} · {formatReminderDay(item.due_at)}</span>
+                        <span>{formatMoney(item.amount, item.currency)} · {formatReminderDay(item.due_at)}{item.progress_percent !== undefined ? ` · ${t("reminders.progress", { percent: item.progress_percent })}` : ""}</span>
                       </div>
                       <span className={`reminder-badge ${item.overdue ? "overdue" : ""}`}>
                         {item.overdue ? t("reminders.overdueDays", { days: Math.abs(item.days_left) }) : t("reminders.daysLeft", { days: item.days_left })}

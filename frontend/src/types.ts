@@ -498,9 +498,9 @@ export interface Reconciliation {
   note: string;
 }
 
-/** 到期提醒项（存款到期 / 借款到期 / 信用卡账单）。 */
+/** 资金提醒项（到期事项、储蓄目标与预算预警）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan" | "credit_card" | "bill";
+  kind: "deposit" | "loan" | "credit_card" | "bill" | "savings_goal";
   id: number;
   title: string;
   amount: string;
@@ -508,4 +508,5 @@ export interface ReminderItem {
   due_at: string;
   overdue: boolean;
   days_left: number;
+  progress_percent?: number;
 }

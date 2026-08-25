@@ -273,6 +273,10 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               return;
             }
           }
+          if (item.kind === "savings_goal") {
+            setActiveView("dashboard");
+            return;
+          }
           setActiveView("accounts");
         }} />;
       case "accounts":
@@ -449,9 +453,9 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           reminderError={reminderError}
           reminderSending={reminderSending}
           onSendDigest={() => void sendDigest()}
-          onReminderAction={() => {
+          onReminderAction={(item) => {
             setReminderOpen(false);
-            setActiveView("accounts");
+            setActiveView(item.kind === "savings_goal" ? "dashboard" : "accounts");
           }}
           onOpenMobileMenu={() => setMobileNavOpen(true)}
           role={role}

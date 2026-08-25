@@ -1,6 +1,7 @@
 //! 到期提醒：汇总未来 N 天内到期（含已逾期）的定期存款、借款、信用卡与固定账单。
 
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -12,7 +13,7 @@ use crate::service::BookkeepingService;
 /// 一条到期提醒。
 #[derive(Debug, Clone, Serialize)]
 pub struct ReminderItem {
-    /// "deposit" | "loan" | "credit_card" | "bill"
+    /// "deposit" | "loan" | "credit_card" | "bill" | "savings_goal"
     pub kind: String,
     pub id: i64,
     /// 展示标题：定存为备注（或占位文案），借款为往来方。
@@ -24,6 +25,9 @@ pub struct ReminderItem {
     pub overdue: bool,
     /// 剩余天数（已逾期为负）。
     pub days_left: i64,
+    /// 储蓄目标等进度型提醒的完成百分比。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<u32>,
 }
 
 impl BookkeepingService {
@@ -66,6 +70,7 @@ impl BookkeepingService {
                     overdue: due_at < now,
                     days_left: (due_at - now).num_days(),
                     due_at,
+                    progress_percent: None,
                 });
             }
         }
@@ -104,6 +109,7 @@ impl BookkeepingService {
                     overdue: due_at < now,
                     days_left: (due_at - now).num_days(),
                     due_at,
+                    progress_percent: None,
                 });
             }
         }
@@ -120,6 +126,7 @@ impl BookkeepingService {
                 overdue: due_at < now,
                 days_left: (due_at - now).num_days(),
                 due_at,
+                progress_percent: None,
             });
         }
 
@@ -152,8 +159,61 @@ impl BookkeepingService {
                         overdue: due_at < now,
                         days_left: (due_at - now).num_days(),
                         due_at,
+                        progress_percent: None,
                     });
                 }
+            }
+        }
+
+        // 储蓄目标：仅提醒窗口内到期且尚未完成的目标。
+        {
+            let mut statement = self.conn.prepare(
+                "SELECT g.id, g.name, g.target_amount, g.current_amount, g.target_date,
+                        COALESCE(a.currency, 'CNY')
+                 FROM savings_goals g
+                 LEFT JOIN accounts a ON a.id = g.account_id
+                 WHERE g.target_date IS NOT NULL AND g.target_date <= ?1
+                 ORDER BY g.target_date, g.name",
+            )?;
+            let rows = statement.query_map([horizon.date_naive().to_string()], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, name, target, current, target_date, currency) = row?;
+                let target = decimal_from_db(&target)?;
+                let current = decimal_from_db(&current)?;
+                if current >= target {
+                    continue;
+                }
+                let target_date =
+                    NaiveDate::parse_from_str(&target_date, "%Y-%m-%d").map_err(|error| {
+                        crate::error::KokuError::InvalidInput(format!(
+                            "invalid savings goal target date: {error}"
+                        ))
+                    })?;
+                let due_at = due_at_on(target_date)?;
+                let progress_percent = ((current / target) * Decimal::from(100_u32))
+                    .round_dp(0)
+                    .to_u32()
+                    .unwrap_or(0);
+                items.push(ReminderItem {
+                    kind: "savings_goal".to_owned(),
+                    id,
+                    title: name,
+                    amount: target - current,
+                    currency,
+                    overdue: due_at < now,
+                    days_left: (due_at - now).num_days(),
+                    due_at,
+                    progress_percent: Some(progress_percent),
+                });
             }
         }
 
@@ -175,9 +235,13 @@ fn bill_due_at(now: DateTime<Utc>, day: u32) -> Result<DateTime<Utc>> {
     } else {
         this_month
     };
+    due_at_on(date)
+}
+
+fn due_at_on(date: NaiveDate) -> Result<DateTime<Utc>> {
     Ok(DateTime::from_naive_utc_and_offset(
         date.and_hms_opt(9, 0, 0)
-            .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid bill due time".into()))?,
+            .ok_or_else(|| crate::error::KokuError::InvalidInput("invalid due time".into()))?,
         Utc,
     ))
 }
@@ -209,13 +273,18 @@ pub fn reminder_digest_text(items: &[ReminderItem]) -> String {
         } else {
             format!("{} 天后", item.days_left)
         };
+        let progress = item
+            .progress_percent
+            .map(|percent| format!("，已完成 {percent}%"))
+            .unwrap_or_default();
         lines.push(format!(
-            "- {} {} {}（{}，{}）",
+            "- {} {} {}（{}，{}{}）",
             item.title,
             item.amount,
             item.currency,
             item.due_at.format("%Y-%m-%d"),
-            when
+            when,
+            progress
         ));
     }
     lines.join("\n")
@@ -413,6 +482,46 @@ mod tests {
         assert_eq!(reminders.len(), 1);
         assert_eq!(reminders[0].kind, "bill");
         assert_eq!(reminders[0].title, "房租");
+        Ok(())
+    }
+
+    #[test]
+    fn includes_only_incomplete_savings_goals_within_horizon() -> Result<()> {
+        let mut service = test_service()?;
+        let account =
+            service.create_account("储蓄", AccountType::Savings, "CNY", Decimal::from(1000_u32))?;
+        let target_date = Utc::now().date_naive() + Duration::days(5);
+        service.save_savings_goal(
+            None,
+            "旅行基金".into(),
+            Some(account.id),
+            Decimal::from(1000_u32),
+            Decimal::from(600_u32),
+            Some(target_date),
+        )?;
+        service.save_savings_goal(
+            None,
+            "已完成目标".into(),
+            Some(account.id),
+            Decimal::from(1000_u32),
+            Decimal::from(1000_u32),
+            Some(target_date),
+        )?;
+        service.save_savings_goal(
+            None,
+            "远期目标".into(),
+            Some(account.id),
+            Decimal::from(1000_u32),
+            Decimal::from(100_u32),
+            Some(target_date + Duration::days(60)),
+        )?;
+
+        let reminders = service.due_reminders(30)?;
+        assert_eq!(reminders.len(), 1);
+        assert_eq!(reminders[0].kind, "savings_goal");
+        assert_eq!(reminders[0].title, "旅行基金");
+        assert_eq!(reminders[0].amount, Decimal::from(400_u32));
+        assert_eq!(reminders[0].progress_percent, Some(60));
         Ok(())
     }
 }
