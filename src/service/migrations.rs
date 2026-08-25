@@ -189,6 +189,14 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
             current_amount TEXT NOT NULL DEFAULT '0', target_date TEXT,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+            snapshot_date TEXT NOT NULL, currency TEXT NOT NULL,
+            total_assets TEXT NOT NULL, total_liabilities TEXT NOT NULL,
+            net_worth TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY(snapshot_date, currency)
+        );
+        CREATE INDEX IF NOT EXISTS idx_net_worth_snapshots_currency_date
+            ON net_worth_snapshots(currency, snapshot_date);
         "#,
     )?;
     migrate_deposit_accounts(conn)?;

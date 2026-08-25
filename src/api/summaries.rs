@@ -7,8 +7,8 @@ use chrono::{Datelike, Utc};
 use serde::Deserialize;
 
 use crate::domain::{
-    BalanceSummary, CashFlowSummary, MonthlySummary, MonthlyTrendPoint, RollingSummary, TagSummary,
-    YearlySummary,
+    BalanceSummary, CashFlowSummary, MonthlySummary, MonthlyTrendPoint, NetWorthSnapshot,
+    RollingSummary, TagSummary, YearlySummary,
 };
 use crate::error::{KokuError, Result};
 use crate::service::normalize_currency;
@@ -50,6 +50,13 @@ struct TrendQueryWithWindow {
 
 #[derive(Debug, Deserialize)]
 struct BalanceQuery {
+    currency: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NetWorthTrendQuery {
+    /// 最近多少天，默认 365，上限 3650。
+    days: Option<u32>,
     currency: Option<String>,
 }
 
@@ -160,6 +167,36 @@ async fn api_balance_summary(
     Ok(Json(ApiResponse::new(summary)))
 }
 
+/// 确保余额折算汇率可用并幂等保存今天的净资产快照。
+pub(crate) async fn snapshot_net_worth(
+    state: &AppState,
+    user_id: i64,
+    currency: &str,
+) -> Result<NetWorthSnapshot> {
+    let display = normalize_currency(currency.to_owned())?;
+    let currencies = lock_ledger(state, user_id).await?.balance_currencies()?;
+    ensure_summary_rates(state, user_id, &display, currencies).await?;
+    lock_ledger(state, user_id)
+        .await?
+        .save_net_worth_snapshot(&display, Utc::now().date_naive())
+}
+
+/// 净资产快照趋势：读取前先刷新今天的快照，因此首次启用也会立即有一个点。
+#[utoipa::path(get, path = "/api/summary/net-worth-trend", tag = "summaries", responses((status = 200, description = "Get net worth snapshot trend")))]
+async fn api_net_worth_trend(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Query(query): Query<NetWorthTrendQuery>,
+) -> Result<Json<ApiResponse<Vec<NetWorthSnapshot>>>> {
+    let days = query.days.unwrap_or(365).clamp(1, 3650);
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    snapshot_net_worth(&state, user.user_id, &display).await?;
+    let snapshots = lock_ledger(&state, user.user_id)
+        .await?
+        .net_worth_snapshots(&display, days)?;
+    Ok(Json(ApiResponse::new(snapshots)))
+}
+
 /// 年度汇总：`?year=`（缺省当前年）与 `?currency=`（缺省 CNY）。
 #[utoipa::path(get, path = "/api/summary/yearly", tag = "summaries", responses((status = 200, description = "Get a yearly summary")))]
 async fn api_yearly_summary(
@@ -250,6 +287,7 @@ pub(super) fn router() -> Router<AppState> {
         .route("/api/summary/yearly", get(api_yearly_summary))
         .route("/api/summary/rolling", get(api_rolling_summary))
         .route("/api/summary/balance", get(api_balance_summary))
+        .route("/api/summary/net-worth-trend", get(api_net_worth_trend))
 }
 
 api_doc!(
@@ -258,6 +296,7 @@ api_doc!(
     api_tag_summary,
     api_monthly_trend,
     api_balance_summary,
+    api_net_worth_trend,
     api_yearly_summary,
     api_rolling_summary,
 );

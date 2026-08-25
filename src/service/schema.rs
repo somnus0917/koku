@@ -45,6 +45,18 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             UNIQUE(category_id, year, month)
         );
 
+        CREATE TABLE IF NOT EXISTS net_worth_snapshots (
+            snapshot_date     TEXT NOT NULL,
+            currency          TEXT NOT NULL,
+            total_assets      TEXT NOT NULL,
+            total_liabilities TEXT NOT NULL,
+            net_worth         TEXT NOT NULL,
+            created_at        TEXT NOT NULL,
+            PRIMARY KEY(snapshot_date, currency)
+        );
+        CREATE INDEX IF NOT EXISTS idx_net_worth_snapshots_currency_date
+            ON net_worth_snapshots(currency, snapshot_date);
+
         CREATE TABLE IF NOT EXISTS recurring_rules (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             kind        TEXT NOT NULL CHECK (kind IN ('expense', 'income')),

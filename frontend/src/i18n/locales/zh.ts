@@ -167,6 +167,8 @@ export const zh = {
         viewAll: "查看全部",
         spending: "支出去向",
         trendAria: "本月现金流趋势图",
+        netWorthTrendAria: "最近一年的净资产快照趋势图",
+        snapshotTrend: "每日快照 · 历史修改不会回溯重算",
         monthStart: "月初",
         monthMiddle: "月中",
         today: "今天"

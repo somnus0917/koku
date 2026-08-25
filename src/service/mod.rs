@@ -27,6 +27,7 @@ mod holdings;
 mod import;
 mod loans;
 mod migrations;
+mod net_worth;
 mod payees;
 mod planning;
 mod rates;

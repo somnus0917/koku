@@ -339,6 +339,15 @@ export interface BalanceSummary {
   net_worth: string;
 }
 
+export interface NetWorthSnapshot {
+  snapshot_date: string;
+  currency: string;
+  total_assets: string;
+  total_liabilities: string;
+  net_worth: string;
+  created_at: string;
+}
+
 export interface RateQuote {
   from: string;
   to: string;
@@ -358,6 +367,7 @@ export interface AppData {
   monthly: MonthlySummary;
   cashFlow: CashFlowSummary;
   balance: BalanceSummary;
+  netWorthTrend: NetWorthSnapshot[];
   loans: Loan[];
   budgets: Budget[];
   recurring: RecurringRule[];

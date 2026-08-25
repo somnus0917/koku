@@ -181,6 +181,9 @@ async fn run_server() -> Result<()> {
                             tracing::error!(target: "jobs", user_id = user.id, error = %error, "could not open ledger for scheduled jobs")
                         }
                     }
+                    if let Err(error) = api::snapshot_net_worth(&jobs_state, user.id, "CNY").await {
+                        tracing::warn!(target: "jobs", user_id = user.id, error = %error, "net worth snapshot failed");
+                    }
                 }
             }
         });

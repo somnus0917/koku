@@ -12,6 +12,7 @@ import type {
   Loan,
   MonthlySummary,
   MonthlyTrendPoint,
+  NetWorthSnapshot,
   RecurringRule,
   RollingSummary,
   Tag,
@@ -34,20 +35,21 @@ export async function loadSummaryData(
   });
   const currencyQuery = new URLSearchParams({ currency });
   const budgetQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  const [accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings, deposits] = await Promise.all([
+  const [accounts, categories, budgets, monthly, cashFlow, balance, netWorthTrend, loans, recurring, tags, holdings, deposits] = await Promise.all([
     request<Account[]>("/api/accounts"),
     request<Category[]>("/api/categories"),
     request<Budget[]>(`/api/budgets?${budgetQuery}`),
     request<MonthlySummary>(`/api/summary/monthly?${query}`),
     request<CashFlowSummary>(`/api/summary/cash-flow?${query}`),
     request<BalanceSummary>(`/api/summary/balance?${currencyQuery}`),
+    request<NetWorthSnapshot[]>(`/api/summary/net-worth-trend?${new URLSearchParams({ currency, days: "365" })}`),
     request<Loan[]>("/api/loans"),
     request<RecurringRule[]>("/api/recurring"),
     request<Tag[]>("/api/tags"),
     request<Holding[]>("/api/holdings"),
     request<Deposit[]>("/api/deposits")
   ]);
-  return { accounts, categories, budgets, monthly, cashFlow, balance, loans, recurring, tags, holdings, deposits };
+  return { accounts, categories, budgets, monthly, cashFlow, balance, netWorthTrend, loans, recurring, tags, holdings, deposits };
 }
 /** 查询最近 `months` 个月的收支趋势（收入/支出/结余逐月折算到显示币种）。 */
 export function loadTrend(months: number, currency: string): Promise<MonthlyTrendPoint[]> {

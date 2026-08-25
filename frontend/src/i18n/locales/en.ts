@@ -167,6 +167,8 @@ export const en = {
         viewAll: "View all",
         spending: "Spending",
         trendAria: "This month's cash flow trend",
+        netWorthTrendAria: "Net worth snapshot trend for the past year",
+        snapshotTrend: "Daily snapshots · historical edits are not recalculated",
         monthStart: "Start",
         monthMiddle: "Mid",
         today: "Today"

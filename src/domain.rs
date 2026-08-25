@@ -730,6 +730,17 @@ pub struct BalanceSummary {
     pub net_worth: Decimal,
 }
 
+/// 某日保存的净资产快照；历史交易修改不会追溯改写旧日期。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetWorthSnapshot {
+    pub snapshot_date: NaiveDate,
+    pub currency: String,
+    pub total_assets: Decimal,
+    pub total_liabilities: Decimal,
+    pub net_worth: Decimal,
+    pub created_at: DateTime<Utc>,
+}
+
 /// 年度汇总：某自然年逐月收支 + 全年合计 + 按分类的收入/支出明细。
 /// 所有币种统一折算到显示币种；无流水的月份补零。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

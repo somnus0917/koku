@@ -8,8 +8,9 @@ import { PageTitle } from "../../components/PageTitle";
 import { accountIcon, convertedMoney, useConversionRates } from "../../components/accountDisplay";
 import { TransactionList } from "../transactions/TransactionList";
 import { CategoryBars } from "../insights/CategoryBars";
-import { buildTransactionTrendPoints, formatDate, formatMoney, healthScore } from "../../lib";
-import type { Account, AppData, Deposit, Loan, SavingsGoal, Transaction } from "../../types";
+import { formatDate, formatMoney, healthScore } from "../../lib";
+import { uiLocale } from "../../i18n";
+import type { Account, AppData, Deposit, Loan, NetWorthSnapshot, SavingsGoal } from "../../types";
 
 function ReminderBanner({ deposits, loans }: { deposits: Deposit[]; loans: Loan[] }) {
   const { t } = useTranslation();
@@ -87,7 +88,7 @@ export function Dashboard({
             </span>
             <span>{t("dashboard.accountsConnected", { count: data.accounts.length })}</span>
           </div>
-          <TrendChart transactions={activeTransactions} currency={display} rates={rates} />
+          <NetWorthTrendChart snapshots={data.netWorthTrend} />
         </article>
 
         <article className="month-card">
@@ -161,20 +162,9 @@ function SavingsGoals({ accounts, currency }: { accounts: Account[]; currency: s
   return <section className="section-block goals-overview"><div className="section-heading"><div><span>GOALS</span><h2>储蓄目标</h2></div><button className="text-button" onClick={() => setCreating(true)}><Plus size={16} /> 新建目标</button></div><div className="goal-cards">{goals.map((item) => { const progress = Math.min(100, Number(item.current_amount) / Number(item.target_amount) * 100 || 0); const goalCurrency = accountMap.get(item.account_id ?? 0)?.currency ?? currency; return <article className="goal-card" key={item.id}><div className="goal-card-heading"><span><Target size={17} /></span><button className="bare-button" onClick={() => setEditing(item)} aria-label="编辑目标"><MoreHorizontal size={18} /></button></div><h3>{item.name}</h3><strong>{formatMoney(item.current_amount, goalCurrency)} <small>/ {formatMoney(item.target_amount, goalCurrency)}</small></strong><div className="goal-track"><i style={{ width: `${progress}%` }} /></div><footer><span>{progress.toFixed(0)}%</span><span>{item.target_date ?? "未设截止日期"}</span></footer><button className="text-button goal-delete" onClick={() => void remove(item.id)}>删除</button></article>; })}{goals.length === 0 && <article className="goal-empty"><Target size={20} /><div><strong>给未来留一点空间</strong><span>设定旅行、应急金或其他储蓄目标，在这里查看进度。</span></div></article>}</div>{(creating || editing) && <GoalModal goal={editing} accounts={accounts} onClose={() => { setCreating(false); setEditing(null); }} onSaved={() => void load()} />}</section>;
 }
 function GoalModal({ goal, accounts, onClose, onSaved }: { goal: SavingsGoal | null; accounts: Account[]; onClose: () => void; onSaved: () => void }) { const [draft, setDraft] = useState<SavingsGoalInput>(() => goal ? { name: goal.name, account_id: goal.account_id, target_amount: goal.target_amount, current_amount: goal.current_amount, target_date: goal.target_date } : { name: "", account_id: null, target_amount: "", current_amount: "0", target_date: null }); const [busy, setBusy] = useState(false); const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { if (goal) await updateSavingsGoal(goal.id, draft); else await createSavingsGoal(draft); onSaved(); onClose(); } finally { setBusy(false); } }; return <ModalShell eyebrow="SAVINGS GOAL" title={goal ? "编辑储蓄目标" : "新建储蓄目标"} onClose={onClose}><form className="entry-form" onSubmit={(event) => void save(event)}><div className="form-grid"><label><span>目标名称</span><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="例如：旅行基金" /></label><label><span>目标金额</span><input required type="number" min="0.01" step="0.01" value={draft.target_amount} onChange={(e) => setDraft({ ...draft, target_amount: e.target.value })} /></label><label><span>当前已存</span><input required type="number" min="0" step="0.01" value={draft.current_amount} onChange={(e) => setDraft({ ...draft, current_amount: e.target.value })} /></label><label><span>关联账户</span><select value={draft.account_id ?? ""} onChange={(e) => setDraft({ ...draft, account_id: e.target.value ? Number(e.target.value) : null })}><option value="">不关联</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="span-two"><span>目标日期</span><input type="date" value={draft.target_date ?? ""} onChange={(e) => setDraft({ ...draft, target_date: e.target.value || null })} /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy}>{busy ? "保存中" : "保存"}</button></div></form></ModalShell>; }
-export function TrendChart({
-  transactions,
-  currency,
-  rates = {}
-}: {
-  transactions: Transaction[];
-  currency: string;
-  /** 折算汇率表：交易币种 → 1 unit = factor display；缺汇率时跳过该币种。 */
-  rates?: Record<string, number>;
-}) {
-  const points = useMemo(
-    () => buildTransactionTrendPoints(transactions, currency, rates),
-    [currency, transactions, rates]
-  );
+function NetWorthTrendChart({ snapshots }: { snapshots: NetWorthSnapshot[] }) {
+  const values = snapshots.map((snapshot) => Number(snapshot.net_worth));
+  const points = values.length === 0 ? [0, 0] : values.length === 1 ? [values[0], values[0]] : values;
   const min = Math.min(...points, 0);
   const max = Math.max(...points, 1);
   const range = Math.max(1, max - min);
@@ -185,8 +175,13 @@ export function TrendChart({
   const line = coords.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
   const area = `${line} L710,205 L10,205 Z`;
   const { t } = useTranslation();
+  const formatDay = (value: string) => new Intl.DateTimeFormat(uiLocale(), { month: "short", day: "numeric" }).format(new Date(`${value}T00:00:00`));
+  const labels = snapshots.length === 0
+    ? [t("dashboard.today"), t("dashboard.today"), t("dashboard.today")]
+    : [snapshots[0], snapshots[Math.floor((snapshots.length - 1) / 2)], snapshots[snapshots.length - 1]].map((snapshot) => formatDay(snapshot.snapshot_date));
   return (
-    <div className="trend-chart" aria-label={t("dashboard.trendAria")}>
+    <div className="trend-chart" aria-label={t("dashboard.netWorthTrendAria")}>
+      <span className="trend-snapshot-note">{t("dashboard.snapshotTrend")}</span>
       <svg viewBox="0 0 720 220" role="img">
         <defs>
           <linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1">
@@ -199,7 +194,7 @@ export function TrendChart({
         <path d={line} className="trend-line" />
         <circle cx={coords.at(-1)?.x} cy={coords.at(-1)?.y} r="4.5" className="trend-dot" />
       </svg>
-      <div className="chart-labels"><span>{t("dashboard.monthStart")}</span><span>{t("dashboard.monthMiddle")}</span><span>{t("dashboard.today")}</span></div>
+      <div className="chart-labels"><span>{labels[0]}</span><span>{labels[1]}</span><span>{labels[2]}</span></div>
     </div>
   );
 }
