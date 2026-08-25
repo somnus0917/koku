@@ -38,6 +38,8 @@ export const en = {
         borrow: "Borrowed",
         monthly: "monthly",
         weekly: "weekly",
+        quarterly: "quarterly",
+        yearly: "yearly",
         opened: "opened",
         settled: "settled",
         settledDone: "Settled",

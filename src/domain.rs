@@ -466,6 +466,10 @@ pub enum RecurrenceFrequency {
     Monthly,
     /// 每周一次（next_due_at + 7 天）
     Weekly,
+    /// 每季度一次（按日历月 +3，月末自动夹取）
+    Quarterly,
+    /// 每年一次（按日历月 +12，闰日自动夹取）
+    Yearly,
 }
 
 impl RecurrenceFrequency {
@@ -473,6 +477,8 @@ impl RecurrenceFrequency {
         match self {
             Self::Monthly => "monthly",
             Self::Weekly => "weekly",
+            Self::Quarterly => "quarterly",
+            Self::Yearly => "yearly",
         }
     }
 
@@ -480,6 +486,8 @@ impl RecurrenceFrequency {
         match value {
             "monthly" => Ok(Self::Monthly),
             "weekly" => Ok(Self::Weekly),
+            "quarterly" => Ok(Self::Quarterly),
+            "yearly" => Ok(Self::Yearly),
             other => Err(KokuError::InvalidInput(format!(
                 "unknown recurrence frequency in database: {other}"
             ))),

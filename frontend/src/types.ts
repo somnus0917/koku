@@ -2,7 +2,7 @@ export type AccountType = "cash" | "credit" | "savings" | "stock";
 export type CategoryKind = "expense" | "income";
 export type TransactionKind = "expense" | "income" | "transfer" | "loan" | "adjustment" | "trade" | "deposit";
 export type LoanType = "lend" | "borrow";
-export type RecurrenceFrequency = "monthly" | "weekly";
+export type RecurrenceFrequency = "monthly" | "weekly" | "quarterly" | "yearly";
 
 export interface Account {
   id: number;

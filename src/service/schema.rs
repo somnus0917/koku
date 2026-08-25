@@ -64,7 +64,7 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
             category_id INTEGER NOT NULL REFERENCES categories(id),
             amount      TEXT NOT NULL,
             note        TEXT NOT NULL DEFAULT '',
-            frequency   TEXT NOT NULL CHECK (frequency IN ('monthly', 'weekly')),
+            frequency   TEXT NOT NULL CHECK (frequency IN ('monthly', 'weekly', 'quarterly', 'yearly')),
             next_due_at TEXT NOT NULL,
             created_at  TEXT NOT NULL,
             paused_at   TEXT

@@ -227,6 +227,12 @@ fn advance_next_due(current: DateTime<Utc>, frequency: RecurrenceFrequency) -> D
         RecurrenceFrequency::Monthly => current
             .checked_add_months(Months::new(1))
             .unwrap_or_else(|| current + Duration::days(30)),
+        RecurrenceFrequency::Quarterly => current
+            .checked_add_months(Months::new(3))
+            .unwrap_or_else(|| current + Duration::days(91)),
+        RecurrenceFrequency::Yearly => current
+            .checked_add_months(Months::new(12))
+            .unwrap_or_else(|| current + Duration::days(365)),
     }
 }
 
@@ -274,6 +280,7 @@ fn recurring_from_row(row: RecurringRow) -> Result<RecurringRule> {
 mod tests {
     use super::*;
     use crate::domain::AccountType;
+    use chrono::TimeZone;
 
     #[test]
     fn recurring_rules_can_be_edited_paused_and_previewed() -> Result<()> {
@@ -319,6 +326,29 @@ mod tests {
             .set_recurring_paused(rule.id, false)?
             .paused_at
             .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn quarterly_and_yearly_frequencies_follow_calendar_boundaries() {
+        let quarter_end = Utc.with_ymd_and_hms(2026, 1, 31, 9, 30, 0).unwrap();
+        assert_eq!(
+            advance_next_due(quarter_end, RecurrenceFrequency::Quarterly),
+            Utc.with_ymd_and_hms(2026, 4, 30, 9, 30, 0).unwrap()
+        );
+
+        let leap_day = Utc.with_ymd_and_hms(2024, 2, 29, 9, 30, 0).unwrap();
+        assert_eq!(
+            advance_next_due(leap_day, RecurrenceFrequency::Yearly),
+            Utc.with_ymd_and_hms(2025, 2, 28, 9, 30, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn quarterly_and_yearly_values_round_trip_through_storage_names() -> Result<()> {
+        for frequency in [RecurrenceFrequency::Quarterly, RecurrenceFrequency::Yearly] {
+            assert_eq!(RecurrenceFrequency::from_db(frequency.as_str())?, frequency);
+        }
         Ok(())
     }
 }

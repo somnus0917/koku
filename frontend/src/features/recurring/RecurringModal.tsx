@@ -86,6 +86,8 @@ export function RecurringModal({
             <select value={frequency} onChange={(event) => setFrequency(event.target.value as RecurrenceFrequency)}>
               <option value="monthly">{t("common.monthly")}</option>
               <option value="weekly">{t("common.weekly")}</option>
+              <option value="quarterly">{t("common.quarterly")}</option>
+              <option value="yearly">{t("common.yearly")}</option>
             </select>
           </label>
           <label><span>{t("modals.recurring.startDate")}</span><input required type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>

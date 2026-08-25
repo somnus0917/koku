@@ -121,6 +121,10 @@ pub(super) fn run(conn: &Connection) -> Result<()> {
     if !table_sql_contains(conn, "transactions", "'deposit'")? {
         rebuild_transactions_table(conn)?;
     }
+    // SQLite 无法原地扩展 CHECK：为旧库保留规则数据并加入季度/年度频率。
+    if !table_sql_contains(conn, "recurring_rules", "'quarterly'")? {
+        rebuild_recurring_rules_table(conn)?;
+    }
     conn.execute_batch(
         r#"
         UPDATE transactions
@@ -495,6 +499,36 @@ fn rebuild_transactions_table(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// 重建 recurring_rules 表，扩展频率 CHECK 并完整保留现有规则和暂停状态。
+fn rebuild_recurring_rules_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE recurring_rules_new (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind        TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+            account_id  INTEGER NOT NULL REFERENCES accounts(id),
+            category_id INTEGER NOT NULL REFERENCES categories(id),
+            amount      TEXT NOT NULL,
+            note        TEXT NOT NULL DEFAULT '',
+            frequency   TEXT NOT NULL CHECK (frequency IN ('monthly', 'weekly', 'quarterly', 'yearly')),
+            next_due_at TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            paused_at   TEXT
+        );
+        INSERT INTO recurring_rules_new(id, kind, account_id, category_id, amount, note,
+                                        frequency, next_due_at, created_at, paused_at)
+            SELECT id, kind, account_id, category_id, amount, note,
+                   frequency, next_due_at, created_at, paused_at
+            FROM recurring_rules;
+        DROP TABLE recurring_rules;
+        ALTER TABLE recurring_rules_new RENAME TO recurring_rules;
+        PRAGMA foreign_keys = ON;
+        "#,
+    )?;
+    Ok(())
+}
+
 /// 把旧的「定期即账户」模型迁移到独立 deposits 表：带利率标记的储蓄账户转为存款记录，
 /// 本金从账户余额移入 deposits，账户归零并清掉利率标记（保留为普通储蓄账户）。
 pub(super) fn migrate_deposit_accounts(conn: &Connection) -> Result<()> {
@@ -547,4 +581,69 @@ pub(super) fn migrate_deposit_accounts(conn: &Connection) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recurring_frequency_migration_preserves_existing_rules() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE accounts (id INTEGER PRIMARY KEY);
+            CREATE TABLE categories (id INTEGER PRIMARY KEY);
+            INSERT INTO accounts(id) VALUES (3);
+            INSERT INTO categories(id) VALUES (5);
+            CREATE TABLE recurring_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL CHECK (kind IN ('expense', 'income')),
+                account_id INTEGER NOT NULL,
+                category_id INTEGER NOT NULL,
+                amount TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                frequency TEXT NOT NULL CHECK (frequency IN ('monthly', 'weekly')),
+                next_due_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                paused_at TEXT
+            );
+            INSERT INTO recurring_rules
+                (id, kind, account_id, category_id, amount, note, frequency,
+                 next_due_at, created_at, paused_at)
+            VALUES
+                (7, 'expense', 3, 5, '88.5', 'legacy rule', 'monthly',
+                 '2026-09-01T00:00:00Z', '2026-08-25T00:00:00Z',
+                 '2026-08-26T00:00:00Z');
+            "#,
+        )?;
+
+        rebuild_recurring_rules_table(&conn)?;
+
+        let row = conn.query_row(
+            "SELECT id, note, frequency, paused_at FROM recurring_rules",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )?;
+        assert_eq!(row.0, 7);
+        assert_eq!(row.1, "legacy rule");
+        assert_eq!(row.2, "monthly");
+        assert_eq!(row.3.as_deref(), Some("2026-08-26T00:00:00Z"));
+        assert!(table_sql_contains(&conn, "recurring_rules", "'quarterly'")?);
+        conn.execute(
+            "INSERT INTO recurring_rules
+             (kind, account_id, category_id, amount, note, frequency, next_due_at, created_at)
+             VALUES ('expense', 3, 5, '99', '', 'yearly',
+                     '2027-01-01T00:00:00Z', '2026-08-25T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    }
 }

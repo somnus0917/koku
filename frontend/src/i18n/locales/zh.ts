@@ -38,6 +38,8 @@ export const zh = {
         borrow: "借入",
         monthly: "每月",
         weekly: "每周",
+        quarterly: "每季度",
+        yearly: "每年",
         opened: "开立",
         settled: "结清",
         settledDone: "已结清",
