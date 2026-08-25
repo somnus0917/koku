@@ -225,10 +225,14 @@ mod tests {
     #[test]
     fn openapi_registers_public_and_protected_routes() {
         let document = openapi();
-        assert_eq!(document.paths.paths.len(), 88);
+        assert_eq!(document.paths.paths.len(), 89);
         assert!(document.paths.paths.contains_key("/api/health"));
         assert!(document.paths.paths.contains_key("/api/auth/login"));
         assert!(document.paths.paths.contains_key("/api/transactions"));
+        assert!(document
+            .paths
+            .paths
+            .contains_key("/api/summary/net-worth-trend"));
         assert!(document.paths.paths.contains_key("/api/admin/backups"));
     }
 }
