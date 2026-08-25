@@ -112,30 +112,34 @@ export const zh = {
         refresh: "刷新数据"
       },
       reminders: {
-        title: "到期提醒",
-        next30Days: "未来 30 天",
-        empty: "暂无到期提醒",
+        title: "资金提醒",
+        next30Days: "未来 30 天与本月预算",
+        empty: "暂无资金提醒",
         overdueDays: "已逾期 {{days}} 天",
         daysLeft: "{{days}} 天后",
         sending: "正在发送…",
         sendDigest: "发送邮件提醒",
         digestSent: "邮件提醒已发送（{{count}} 条）",
         sendFailed: "发送失败",
-        progress: "已完成 {{percent}}%"
+        progress: "已完成 {{percent}}%",
+        budgetNear: "接近预算上限",
+        budgetOver: "已超预算"
       },
       tasks: {
         title: "资金待办",
         hint: "把需要你确认或处理的资金事项集中起来；完成结清、还款或入账后，它们会自动离开这里。",
         emptyTitle: "没有待处理的资金事项",
-        emptyDetail: "定存、借款、信用卡账单、固定账单与储蓄目标接近到期时会显示在这里。",
+        emptyDetail: "到期事项、储蓄目标与预算预警会显示在这里。",
         overdue: "已逾期",
         dueIn: "{{days}} 天后到期",
         lane: { urgent: "现在处理", soon: "本周处理", planned: "计划中" },
         laneLabel: { urgent: "ACTION NOW", soon: "THIS WEEK", planned: "AHEAD" },
         laneEmpty: "当前没有事项",
         progress: "已完成 {{percent}}%",
-        kind: { deposit: "定期存款", loan: "借款", credit_card: "信用卡账单", bill: "固定账单", savings_goal: "储蓄目标" },
-        action: { deposit: "结清", loan: "还款", credit_card: "查看账户", bill: "查看计划", savings_goal: "查看目标" }
+        budgetNear: "接近预算上限",
+        budgetOver: "已超预算",
+        kind: { deposit: "定期存款", loan: "借款", credit_card: "信用卡账单", bill: "固定账单", savings_goal: "储蓄目标", budget: "预算预警" },
+        action: { deposit: "结清", loan: "还款", credit_card: "查看账户", bill: "查看计划", savings_goal: "查看目标", budget: "查看预算" }
       },
       activity: {
         title: "活动轨迹",

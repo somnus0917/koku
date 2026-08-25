@@ -54,6 +54,7 @@ mod state;
 mod summaries;
 mod transactions;
 
+pub(crate) use reminders::load_reminder_items;
 pub use state::AppState;
 pub(crate) use state::{lock_auth, lock_ledger};
 

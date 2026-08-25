@@ -500,7 +500,7 @@ export interface Reconciliation {
 
 /** 资金提醒项（到期事项、储蓄目标与预算预警）。 */
 export interface ReminderItem {
-  kind: "deposit" | "loan" | "credit_card" | "bill" | "savings_goal";
+  kind: "deposit" | "loan" | "credit_card" | "bill" | "savings_goal" | "budget";
   id: number;
   title: string;
   amount: string;

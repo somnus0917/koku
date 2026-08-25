@@ -13,7 +13,7 @@ use crate::service::BookkeepingService;
 /// 一条到期提醒。
 #[derive(Debug, Clone, Serialize)]
 pub struct ReminderItem {
-    /// "deposit" | "loan" | "credit_card" | "bill" | "savings_goal"
+    /// "deposit" | "loan" | "credit_card" | "bill" | "savings_goal" | "budget"
     pub kind: String,
     pub id: i64,
     /// 展示标题：定存为备注（或占位文案），借款为往来方。
@@ -264,11 +264,15 @@ fn monthly_due_date(year: i32, month: u32, day: u32) -> Result<NaiveDate> {
 /// 把到期提醒格式化为纯文本摘要（邮件正文用）。
 pub fn reminder_digest_text(items: &[ReminderItem]) -> String {
     if items.is_empty() {
-        return "当前没有到期提醒。".to_owned();
+        return "当前没有资金提醒。".to_owned();
     }
-    let mut lines = vec![format!("Koku 共 {} 项到期提醒：", items.len())];
+    let mut lines = vec![format!("Koku 共 {} 项资金提醒：", items.len())];
     for item in items {
-        let when = if item.overdue {
+        let when = if item.kind == "budget" && item.overdue {
+            "已超预算".to_owned()
+        } else if item.kind == "budget" {
+            "接近预算上限".to_owned()
+        } else if item.overdue {
             format!("已逾期 {} 天", -item.days_left)
         } else {
             format!("{} 天后", item.days_left)

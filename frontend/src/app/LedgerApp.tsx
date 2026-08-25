@@ -201,7 +201,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   // 提醒铃铛：数据每次刷新完成后重新拉取（未来 30 天到期项），失败静默。
   useEffect(() => {
     let cancelled = false;
-    loadReminders(30)
+    loadReminders(30, currency)
       .then((items) => {
         if (!cancelled) setReminders(items);
       })
@@ -209,7 +209,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
     return () => {
       cancelled = true;
     };
-  }, [data]);
+  }, [data, currency]);
 
   // 点击提醒面板外部时关闭。
   useEffect(() => {
@@ -240,7 +240,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
     setReminderSending(true);
     setReminderError(null);
     try {
-      const result = await sendReminderDigest();
+      const result = await sendReminderDigest(currency);
       setToast(t("reminders.digestSent", { count: result.count }));
       setReminderOpen(false);
     } catch (reason) {
@@ -275,6 +275,10 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           }
           if (item.kind === "savings_goal") {
             setActiveView("dashboard");
+            return;
+          }
+          if (item.kind === "budget") {
+            setActiveView("insights");
             return;
           }
           setActiveView("accounts");
@@ -455,7 +459,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           onSendDigest={() => void sendDigest()}
           onReminderAction={(item) => {
             setReminderOpen(false);
-            setActiveView(item.kind === "savings_goal" ? "dashboard" : "accounts");
+            setActiveView(item.kind === "savings_goal" ? "dashboard" : item.kind === "budget" ? "insights" : "accounts");
           }}
           onOpenMobileMenu={() => setMobileNavOpen(true)}
           role={role}

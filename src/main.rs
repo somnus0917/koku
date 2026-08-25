@@ -274,14 +274,9 @@ async fn run_server() -> Result<()> {
                     }
                 };
                 for user in users.into_iter().filter(|user| user.enabled) {
-                    let items = match lock_ledger(&smtp_state, user.id).await {
-                        Ok(mut ledger) => ledger.due_reminders(30),
-                        Err(error) => {
-                            tracing::error!(target: "koku", user_id = user.id, error = %error, "could not open ledger for reminder digest");
-                            continue;
-                        }
-                    };
-                    let items = match items {
+                    let items = match api::load_reminder_items(&smtp_state, user.id, 30, "CNY")
+                        .await
+                    {
                         Ok(items) if !items.is_empty() => items,
                         Ok(_) => continue,
                         Err(error) => {
@@ -289,7 +284,7 @@ async fn run_server() -> Result<()> {
                             continue;
                         }
                     };
-                    let subject = format!("Koku 到期提醒（{} 项）", items.len());
+                    let subject = format!("Koku 资金提醒（{} 项）", items.len());
                     let body = service::reminder_digest_text(&items);
                     let config = mailer_config.clone();
                     let recipient = user.username.clone();

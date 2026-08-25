@@ -4,12 +4,15 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Datelike, Utc};
 use rusqlite::{params, OptionalExtension};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
 use super::*;
 use crate::domain::{Budget, CategoryKind};
 use crate::error::{KokuError, Result};
 use crate::service::BookkeepingService;
+
+use super::reminders::ReminderItem;
 
 impl BookkeepingService {
     /// 设置某分类某月的预算上限（覆盖已存在的同月上限）。仅支出分类可设预算。
@@ -152,6 +155,51 @@ impl BookkeepingService {
         Ok(copied)
     }
 
+    /// 对比月度分类支出与预算，返回达到 `threshold_percent` 的主动预警。
+    /// 实际支出直接复用 `monthly_summary` 的分类聚合与汇率折算口径。
+    pub fn budget_alerts(
+        &self,
+        year: i32,
+        month: u32,
+        currency: &str,
+        threshold_percent: u32,
+    ) -> Result<Vec<ReminderItem>> {
+        if !(1..=100).contains(&threshold_percent) {
+            return Err(KokuError::InvalidInput(
+                "budget alert threshold must be 1..100".to_owned(),
+            ));
+        }
+        let summary = self.monthly_summary(year, month, currency)?;
+        let now = Utc::now();
+        let threshold = Decimal::from(threshold_percent) / Decimal::from(100_u32);
+        let mut alerts = Vec::new();
+        for expense in summary.expenses_by_category {
+            let Some(limit) = expense.budget_limit else {
+                continue;
+            };
+            if expense.amount < limit * threshold {
+                continue;
+            }
+            let progress_percent = ((expense.amount / limit) * Decimal::from(100_u32))
+                .round_dp(0)
+                .to_u32()
+                .unwrap_or(u32::MAX);
+            alerts.push(ReminderItem {
+                kind: "budget".to_owned(),
+                id: expense.category_id,
+                title: expense.category_name,
+                amount: expense.amount,
+                currency: summary.currency.clone(),
+                due_at: now,
+                overdue: expense.amount > limit,
+                days_left: 0,
+                progress_percent: Some(progress_percent),
+            });
+        }
+        alerts.sort_by_key(|item| std::cmp::Reverse(item.progress_percent));
+        Ok(alerts)
+    }
+
     /// 某月各支出分类的预算上限映射（供月度汇总回填）。
     pub(crate) fn budget_limits(&self, year: i32, month: u32) -> Result<BTreeMap<i64, Decimal>> {
         let mut statement = self.conn.prepare(
@@ -178,4 +226,37 @@ fn budget_from_row(row: (i64, String, String, i32, u32, String)) -> Result<Budge
         month: row.4,
         limit_amount: decimal_from_db(&row.5)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{AccountType, CategoryKind};
+
+    #[test]
+    fn alerts_for_near_and_over_budget_categories() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let cash =
+            service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
+        let near = service.create_category("餐饮", CategoryKind::Expense)?;
+        let over = service.create_category("出行", CategoryKind::Expense)?;
+        let safe = service.create_category("娱乐", CategoryKind::Expense)?;
+        let now = Utc::now();
+        service.record_expense(cash.id, near.id, Decimal::from(90_u32), now, "餐费")?;
+        service.record_expense(cash.id, over.id, Decimal::from(110_u32), now, "车票")?;
+        service.record_expense(cash.id, safe.id, Decimal::from(80_u32), now, "电影")?;
+        for category in [&near, &over, &safe] {
+            service.set_budget(category.id, now.year(), now.month(), Decimal::from(100_u32))?;
+        }
+
+        let alerts = service.budget_alerts(now.year(), now.month(), "CNY", 90)?;
+        assert_eq!(alerts.len(), 2);
+        assert_eq!(alerts[0].title, "出行");
+        assert_eq!(alerts[0].progress_percent, Some(110));
+        assert!(alerts[0].overdue);
+        assert_eq!(alerts[1].title, "餐饮");
+        assert_eq!(alerts[1].progress_percent, Some(90));
+        assert!(!alerts[1].overdue);
+        Ok(())
+    }
 }

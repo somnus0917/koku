@@ -112,30 +112,34 @@ export const en = {
         refresh: "Refresh data"
       },
       reminders: {
-        title: "Upcoming reminders",
-        next30Days: "Next 30 days",
-        empty: "No upcoming reminders",
+        title: "Financial alerts",
+        next30Days: "Next 30 days & this month's budgets",
+        empty: "No financial alerts",
         overdueDays: "{{days}} days overdue",
         daysLeft: "in {{days}} days",
         sending: "Sending…",
         sendDigest: "Send digest email",
         digestSent: "Digest email sent ({{count}} reminders)",
         sendFailed: "Failed to send",
-        progress: "{{percent}}% complete"
+        progress: "{{percent}}% complete",
+        budgetNear: "Near budget limit",
+        budgetOver: "Over budget"
       },
       tasks: {
         title: "Financial tasks",
         hint: "Keep every financial item that needs your confirmation or action in one place. It leaves this board automatically after you settle, repay, or record it.",
         emptyTitle: "No financial tasks to handle",
-        emptyDetail: "Maturing deposits, loans, credit-card statements, recurring bills, and savings goals will appear here.",
+        emptyDetail: "Due items, savings goals, and budget alerts will appear here.",
         overdue: "Overdue",
         dueIn: "due in {{days}} days",
         lane: { urgent: "Act now", soon: "This week", planned: "Planned" },
         laneLabel: { urgent: "ACTION NOW", soon: "THIS WEEK", planned: "AHEAD" },
         laneEmpty: "Nothing here right now",
         progress: "{{percent}}% complete",
-        kind: { deposit: "Fixed deposit", loan: "Loan", credit_card: "Credit card", bill: "Recurring bill", savings_goal: "Savings goal" },
-        action: { deposit: "Settle", loan: "Repay", credit_card: "View account", bill: "View plan", savings_goal: "View goal" }
+        budgetNear: "Near budget limit",
+        budgetOver: "Over budget",
+        kind: { deposit: "Fixed deposit", loan: "Loan", credit_card: "Credit card", bill: "Recurring bill", savings_goal: "Savings goal", budget: "Budget alert" },
+        action: { deposit: "Settle", loan: "Repay", credit_card: "View account", bill: "View plan", savings_goal: "View goal", budget: "View budget" }
       },
       activity: {
         title: "Activity history",

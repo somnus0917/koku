@@ -203,7 +203,7 @@ async fn api_rolling_summary(
 
 /// 确保「账本中出现的各币种 → 显示币种」的折算汇率都可用：缓存缺失或超龄的
 /// 现场拉取并缓存；拉取失败时报错（前端会提示具体缺失的币种对，可重试）。
-async fn ensure_summary_rates(
+pub(super) async fn ensure_summary_rates(
     state: &AppState,
     user_id: i64,
     display: &str,

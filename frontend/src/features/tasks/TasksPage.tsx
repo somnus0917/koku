@@ -1,5 +1,5 @@
 //! 财务待办工作台：将账本中的到期事实按紧急程度组织成可处理的任务卡。
-import { AlertTriangle, CalendarClock, CircleCheck, Landmark, PiggyBank, ReceiptText, WalletCards } from "lucide-react";
+import { AlertTriangle, CalendarClock, CircleCheck, Gauge, Landmark, PiggyBank, ReceiptText, WalletCards } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { EmptyState } from "../../components/EmptyState";
 import { PageTitle } from "../../components/PageTitle";
@@ -15,19 +15,23 @@ function iconFor(kind: ReminderItem["kind"]) {
   if (kind === "credit_card") return WalletCards;
   if (kind === "bill") return CalendarClock;
   if (kind === "savings_goal") return PiggyBank;
+  if (kind === "budget") return Gauge;
   return ReceiptText;
 }
 
 function TaskCard({ item, onOpen }: { item: ReminderItem; onOpen: (item: ReminderItem) => void }) {
   const { t } = useTranslation();
   const Icon = iconFor(item.kind);
+  const status = item.kind === "budget"
+    ? t(item.overdue ? "tasks.budgetOver" : "tasks.budgetNear")
+    : t(item.overdue ? "tasks.overdue" : "tasks.dueIn", { days: item.days_left });
   return (
     <article className={`financial-task-card ${item.overdue ? "overdue" : ""}`}>
       <span className="financial-task-icon"><Icon size={18} /></span>
       <div className="financial-task-copy">
         <small>{t(`tasks.kind.${item.kind}`)}</small>
         <strong>{item.title}</strong>
-        <span>{formatMoney(item.amount, item.currency)} · {t(item.overdue ? "tasks.overdue" : "tasks.dueIn", { days: item.days_left })}{item.progress_percent !== undefined ? ` · ${t("tasks.progress", { percent: item.progress_percent })}` : ""}</span>
+        <span>{formatMoney(item.amount, item.currency)} · {status}{item.progress_percent !== undefined ? ` · ${t("tasks.progress", { percent: item.progress_percent })}` : ""}</span>
       </div>
       <button type="button" className="text-button" onClick={() => onOpen(item)}>{t(`tasks.action.${item.kind}`)}</button>
     </article>
