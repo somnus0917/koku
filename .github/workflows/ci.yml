@@ -17,9 +17,6 @@ jobs:
   rust:
     name: Rust checks
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -33,10 +30,11 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
       - name: Audit Rust dependencies
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit
 
       - name: Check formatting
         run: cargo fmt --all -- --check
