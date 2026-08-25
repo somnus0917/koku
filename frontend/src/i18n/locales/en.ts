@@ -374,7 +374,11 @@ export const en = {
           expense: "Full-year expenses",
           net: "Full-year net",
           chartAria: "{{year}} monthly income and expenses",
-          chartTitle: "{{year}} monthly income and expenses ({{currency}})"
+          chartTitle: "{{year}} monthly income and expenses ({{currency}})",
+          exportPdf: "Export PDF",
+          exporting: "Generating…",
+          exportError: "PDF export failed: ",
+          exportFailed: "Unable to export the yearly PDF"
         },
         rolling: {
           title: "Rolling average",

@@ -7,11 +7,12 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{Datelike, Utc};
 use serde::Deserialize;
 
 use crate::error::{KokuError, Result};
 use crate::importer::{self, ImportFormat, ImportPreview};
-use crate::service::ImportResult;
+use crate::service::{normalize_currency, reports::yearly_summary_pdf, ImportResult};
 
 use super::state::{lock_ledger, ApiResponse, AppState, AuthenticatedUser};
 
@@ -33,6 +34,12 @@ struct ParsedImport {
 struct ExportQuery {
     year: Option<i32>,
     month: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct YearlyReportQuery {
+    year: Option<i32>,
+    currency: Option<String>,
 }
 
 /// 把单个单元格转成 CSV 字段：含逗号/引号/换行时用引号包裹并转义引号。
@@ -159,6 +166,44 @@ async fn api_export_transactions(
     response
         .headers_mut()
         .insert(header::CONTENT_DISPOSITION, disposition);
+    Ok(response)
+}
+
+/// 把年度汇总直接排版为可下载、可打印的 A4 PDF。
+#[utoipa::path(get, path = "/api/reports/yearly.pdf", tag = "import-export", responses((status = 200, description = "Export yearly summary as PDF", content_type = "application/pdf")))]
+async fn api_export_yearly_report(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Query(query): Query<YearlyReportQuery>,
+) -> Result<Response> {
+    let year = query.year.unwrap_or_else(|| Utc::now().year());
+    let display = normalize_currency(query.currency.unwrap_or_else(|| "CNY".to_owned()))?;
+    let currencies = lock_ledger(&state, user.user_id)
+        .await?
+        .yearly_currencies(year)?;
+    super::summaries::ensure_summary_rates(&state, user.user_id, &display, currencies).await?;
+    let summary = lock_ledger(&state, user.user_id)
+        .await?
+        .yearly_summary(year, &display)?;
+    let bytes = tokio::task::spawn_blocking(move || yearly_summary_pdf(&summary))
+        .await
+        .map_err(|error| {
+            KokuError::Io(std::io::Error::other(format!(
+                "yearly report task failed: {error}"
+            )))
+        })??;
+
+    let filename = format!("koku-yearly-summary-{year}-{display}.pdf");
+    let mut response = Response::new(axum::body::Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|error| KokuError::InvalidInput(format!("invalid filename: {error}")))?,
+    );
     Ok(response)
 }
 
@@ -305,6 +350,7 @@ async fn api_undo_import_batch(
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/transactions/export", get(api_export_transactions))
+        .route("/api/reports/yearly.pdf", get(api_export_yearly_report))
         .route(
             "/api/transactions/import/preview",
             post(api_preview_import_transactions).layer(DefaultBodyLimit::max(MAX_IMPORT_BYTES)),
@@ -321,6 +367,7 @@ pub(super) fn router() -> Router<AppState> {
 
 api_doc!(
     ImportExportApi: api_export_transactions,
+    api_export_yearly_report,
     api_preview_import_transactions,
     api_import_transactions,
     api_undo_import_batch,

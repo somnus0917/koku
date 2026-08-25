@@ -36,6 +36,7 @@ mod reconciliations;
 mod recurring;
 mod reimbursements;
 mod reminders;
+pub(crate) mod reports;
 mod rows;
 pub(crate) mod rules;
 mod schema;

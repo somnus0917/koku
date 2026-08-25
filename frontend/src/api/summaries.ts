@@ -1,5 +1,6 @@
 //! 汇总 API：首屏汇总数据与月度/趋势/标签/年度/滚动汇总。
-import { request } from "./client";
+import i18n from "../i18n";
+import { API_BASE, ApiError, request } from "./client";
 import type {
   Account,
   AppData,
@@ -77,6 +78,27 @@ export function loadTagSummary(
 export function loadYearlySummary(year: number, currency: string): Promise<YearlySummary> {
   const query = new URLSearchParams({ year: String(year), currency });
   return request<YearlySummary>(`/api/summary/yearly?${query.toString()}`);
+}
+/** 下载后端排版的年度汇总 PDF。 */
+export async function exportYearlyReport(year: number, currency: string): Promise<void> {
+  const query = new URLSearchParams({ year: String(year), currency });
+  const response = await fetch(`${API_BASE}/api/reports/yearly.pdf?${query.toString()}`, {
+    credentials: "same-origin"
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(payload.error ?? i18n.t("api.downloadFailed", { status: response.status }), response.status);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  link.download = disposition.match(/filename="?([^";]+)"?/)?.[1] ?? `koku-yearly-summary-${year}-${currency}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 /** 滚动平均：最近 `months` 个月的收支趋势 + trailing window 均值。 */
 export function loadRollingSummary(

@@ -374,7 +374,11 @@ export const zh = {
           expense: "全年支出",
           net: "全年结余",
           chartAria: "{{year}} 年逐月收支",
-          chartTitle: "{{year}} 年逐月收支（{{currency}}）"
+          chartTitle: "{{year}} 年逐月收支（{{currency}}）",
+          exportPdf: "导出 PDF",
+          exporting: "生成中…",
+          exportError: "PDF 导出失败：",
+          exportFailed: "无法导出年度 PDF"
         },
         rolling: {
           title: "滚动平均",

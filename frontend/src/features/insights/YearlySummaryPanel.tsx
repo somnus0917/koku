@@ -1,10 +1,10 @@
 //! 年度汇总面板：逐月柱状图与分类明细（自加载）。
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, ChevronRight, RefreshCcw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, LoaderCircle, RefreshCcw } from "lucide-react";
 import { SummaryCard } from "../../components/SummaryCard";
 import { CategoryAvatar } from "../../components/avatar";
-import { loadYearlySummary } from "../../api";
+import { exportYearlyReport, loadYearlySummary } from "../../api";
 import { formatMoney } from "../../lib";
 import type { CashFlowItem, YearlySummary } from "../../types";
 
@@ -14,7 +14,20 @@ export function YearlySummaryPanel({ currency }: { currency: string }) {
   const [summary, setSummary] = useState<YearlySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const { t } = useTranslation();
+  const downloadReport = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportYearlyReport(year, currency);
+    } catch (reason) {
+      setExportError(reason instanceof Error ? reason.message : t("insights.yearly.exportFailed"));
+    } finally {
+      setExporting(false);
+    }
+  };
   useEffect(() => {
     let cancelled = false;
     setSummary(null);
@@ -41,8 +54,13 @@ export function YearlySummaryPanel({ currency }: { currency: string }) {
           <button type="button" className="icon-button" onClick={() => setYear((value) => value - 1)} aria-label={t("insights.yearly.prevYear")} title={t("insights.yearly.prevYear")}><ChevronLeft size={16} /></button>
           <strong>{t("insights.yearly.yearLabel", { year })}</strong>
           <button type="button" className="icon-button" onClick={() => setYear((value) => value + 1)} aria-label={t("insights.yearly.nextYear")} title={t("insights.yearly.nextYear")}><ChevronRight size={16} /></button>
+          <button type="button" className="secondary-button compact" disabled={!summary || exporting} onClick={() => void downloadReport()}>
+            {exporting ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+            {exporting ? t("insights.yearly.exporting") : t("insights.yearly.exportPdf")}
+          </button>
         </div>
       </div>
+      {exportError && <div className="trend-note panel-error">{t("insights.yearly.exportError")}{exportError}</div>}
       {error && (
         <div className="trend-note panel-error">
           <span>{t("insights.yearly.error")}{error}</span>
