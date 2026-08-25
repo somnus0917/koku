@@ -39,7 +39,7 @@ impl BookkeepingService {
                 data.len()
             )));
         }
-        let content_type = normalize_receipt_content_type(&content_type)?;
+        let content_type = normalize_receipt_content_type(&content_type);
         validate_receipt_content(&content_type, &data)?;
         self.transaction(transaction_id)?;
         self.conn.execute(
@@ -100,8 +100,10 @@ impl BookkeepingService {
     }
 }
 
-/// 归一化并校验小票的 Content-Type：去参数、转小写后命中白名单才放行。
-fn normalize_receipt_content_type(value: &str) -> Result<String> {
+/// 归一化小票的 Content-Type：白名单外的声明降级为普通二进制附件。
+///
+/// 不拒绝用户保存文件，但绝不允许未知类型以可执行、可渲染 MIME 同源返回。
+fn normalize_receipt_content_type(value: &str) -> String {
     let mime = value
         .split(';')
         .next()
@@ -109,11 +111,9 @@ fn normalize_receipt_content_type(value: &str) -> Result<String> {
         .trim()
         .to_ascii_lowercase();
     if ALLOWED_RECEIPT_CONTENT_TYPES.contains(&mime.as_str()) {
-        Ok(mime)
+        mime
     } else {
-        Err(KokuError::InvalidInput(format!(
-            "unsupported receipt content type: {value}"
-        )))
+        "application/octet-stream".to_owned()
     }
 }
 
@@ -127,6 +127,8 @@ fn validate_receipt_content(content_type: &str, data: &[u8]) -> Result<()> {
         // HEIC 属于 ISO Base Media File Format；文件类型盒必须位于文件开头。
         "image/heic" => data.len() >= 12 && &data[4..8] == b"ftyp",
         "application/pdf" => data.starts_with(b"%PDF-"),
+        // 未知类型已被降级；响应端会强制以 attachment 下载，不在浏览器内渲染。
+        "application/octet-stream" => true,
         _ => false,
     };
     if matches_type {
@@ -150,5 +152,21 @@ mod tests {
         assert!(validate_receipt_content("image/heic", b"0000ftypheic").is_ok());
         assert!(validate_receipt_content("image/jpeg", b"<script>alert(1)</script>").is_err());
         assert!(validate_receipt_content("application/pdf", b"<html></html>").is_err());
+    }
+
+    #[test]
+    fn downgrades_untrusted_content_types_to_binary() {
+        assert_eq!(
+            normalize_receipt_content_type("text/html"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            normalize_receipt_content_type("image/svg+xml"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            normalize_receipt_content_type("IMAGE/PNG; charset=binary"),
+            "image/png"
+        );
     }
 }

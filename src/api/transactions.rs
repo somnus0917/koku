@@ -419,6 +419,10 @@ async fn api_get_receipt(
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, header_value);
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        receipt_content_disposition(&content_type),
+    );
     // 即使 API 被独立暴露、没有经过生产 Caddy 的安全响应头，也不允许浏览器
     // 对用户上传的附件进行 MIME 嗅探或缓存敏感票据。
     response.headers_mut().insert(
@@ -430,6 +434,15 @@ async fn api_get_receipt(
         HeaderValue::from_static("private, no-store"),
     );
     Ok(response)
+}
+
+/// 只有已校验的图片/PDF 可以在浏览器内查看；降级类型必须作为附件下载。
+fn receipt_content_disposition(content_type: &str) -> HeaderValue {
+    if content_type.starts_with("image/") || content_type == "application/pdf" {
+        HeaderValue::from_static("inline")
+    } else {
+        HeaderValue::from_static("attachment")
+    }
 }
 
 pub(super) fn router() -> Router<AppState> {
@@ -479,3 +492,19 @@ api_doc!(
     api_upload_receipt,
     api_get_receipt,
 );
+
+#[cfg(test)]
+mod tests {
+    use super::receipt_content_disposition;
+
+    #[test]
+    fn receipt_disposition_is_inline_only_for_safe_renderable_types() {
+        assert_eq!(receipt_content_disposition("image/png"), "inline");
+        assert_eq!(receipt_content_disposition("application/pdf"), "inline");
+        assert_eq!(
+            receipt_content_disposition("application/octet-stream"),
+            "attachment"
+        );
+        assert_eq!(receipt_content_disposition("text/html"), "attachment");
+    }
+}

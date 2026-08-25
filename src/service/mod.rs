@@ -1170,7 +1170,7 @@ mod tests {
     }
 
     #[test]
-    fn receipts_reject_untrusted_content_types() -> Result<()> {
+    fn receipts_validate_safe_types_and_downgrade_untrusted_types() -> Result<()> {
         let mut service = test_service()?;
         let cash =
             service.create_account("零钱", AccountType::Cash, "CNY", Decimal::from(1000_u32))?;
@@ -1199,19 +1199,15 @@ mod tests {
             .attach_receipt(expense.id, "image/jpeg".to_owned(), png.clone())
             .is_err());
 
-        // 可携带脚本的类型与未知类型一律拒绝。
+        // 可携带脚本的类型与未知类型允许保存，但必须降级为普通二进制附件。
         for bad in [
             "text/html",
             "image/svg+xml",
             "application/octet-stream",
             "text/plain",
         ] {
-            assert!(
-                service
-                    .attach_receipt(expense.id, bad.to_owned(), png.clone())
-                    .is_err(),
-                "should reject {bad}"
-            );
+            let receipt = service.attach_receipt(expense.id, bad.to_owned(), png.clone())?;
+            assert_eq!(receipt.content_type, "application/octet-stream");
         }
         Ok(())
     }
