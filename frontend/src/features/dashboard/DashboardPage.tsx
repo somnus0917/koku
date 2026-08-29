@@ -155,13 +155,91 @@ function SavingsGoals({ accounts, currency }: { accounts: Account[]; currency: s
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [editing, setEditing] = useState<SavingsGoal | null>(null);
   const [creating, setCreating] = useState(false);
-  const load = useCallback(async () => { try { setGoals(await getSavingsGoals()); } catch { /* 总览其他信息仍可显示 */ } }, []);
+  const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
+  const load = useCallback(async () => {
+    try {
+      setGoals(await getSavingsGoals());
+      setError(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("goals.loadFailed"));
+    }
+  }, [t]);
   useEffect(() => { void load(); }, [load]);
   const accountMap = useMemo(() => new Map(accounts.map((item) => [item.id, item])), [accounts]);
-  const remove = async (id: number) => { if (!window.confirm("确认删除这个储蓄目标？")) return; await deleteSavingsGoal(id); await load(); };
-  return <section className="section-block goals-overview"><div className="section-heading"><div><span>GOALS</span><h2>储蓄目标</h2></div><button className="text-button" onClick={() => setCreating(true)}><Plus size={16} /> 新建目标</button></div><div className="goal-cards">{goals.map((item) => { const progress = Math.min(100, Number(item.current_amount) / Number(item.target_amount) * 100 || 0); const goalCurrency = accountMap.get(item.account_id ?? 0)?.currency ?? currency; return <article className="goal-card" key={item.id}><div className="goal-card-heading"><span><Target size={17} /></span><button className="bare-button" onClick={() => setEditing(item)} aria-label="编辑目标"><MoreHorizontal size={18} /></button></div><h3>{item.name}</h3><strong>{formatMoney(item.current_amount, goalCurrency)} <small>/ {formatMoney(item.target_amount, goalCurrency)}</small></strong><div className="goal-track"><i style={{ width: `${progress}%` }} /></div><footer><span>{progress.toFixed(0)}%</span><span>{item.target_date ?? "未设截止日期"}</span></footer><button className="text-button goal-delete" onClick={() => void remove(item.id)}>删除</button></article>; })}{goals.length === 0 && <article className="goal-empty"><Target size={20} /><div><strong>给未来留一点空间</strong><span>设定旅行、应急金或其他储蓄目标，在这里查看进度。</span></div></article>}</div>{(creating || editing) && <GoalModal goal={editing} accounts={accounts} onClose={() => { setCreating(false); setEditing(null); }} onSaved={() => void load()} />}</section>;
+  const remove = async (id: number) => {
+    if (!window.confirm(t("goals.confirmDelete"))) return;
+    try {
+      await deleteSavingsGoal(id);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("goals.deleteFailed"));
+    }
+  };
+  return (
+    <section className="section-block goals-overview">
+      <div className="section-heading">
+        <div><span>GOALS</span><h2>{t("goals.title")}</h2></div>
+        <button className="text-button" onClick={() => setCreating(true)}><Plus size={16} /> {t("goals.new")}</button>
+      </div>
+      {error && <div className="inline-error" role="alert">{error}</div>}
+      <div className="goal-cards">
+        {goals.map((item) => {
+          const progress = Math.min(100, Number(item.current_amount) / Number(item.target_amount) * 100 || 0);
+          const goalCurrency = accountMap.get(item.account_id ?? 0)?.currency ?? currency;
+          return (
+            <article className="goal-card" key={item.id}>
+              <div className="goal-card-heading"><span><Target size={17} /></span><button className="bare-button" onClick={() => setEditing(item)} aria-label={t("goals.edit")}><MoreHorizontal size={18} /></button></div>
+              <h3>{item.name}</h3>
+              <strong>{formatMoney(item.current_amount, goalCurrency)} <small>/ {formatMoney(item.target_amount, goalCurrency)}</small></strong>
+              <div className="goal-track"><i style={{ width: `${progress}%` }} /></div>
+              <footer><span>{progress.toFixed(0)}%</span><span>{item.target_date ?? t("goals.noDeadline")}</span></footer>
+              <button className="text-button goal-delete" onClick={() => void remove(item.id)}>{t("goals.delete")}</button>
+            </article>
+          );
+        })}
+        {goals.length === 0 && <article className="goal-empty"><Target size={20} /><div><strong>{t("goals.emptyTitle")}</strong><span>{t("goals.emptyDetail")}</span></div></article>}
+      </div>
+      {(creating || editing) && <GoalModal goal={editing} accounts={accounts} onClose={() => { setCreating(false); setEditing(null); }} onSaved={() => void load()} />}
+    </section>
+  );
 }
-function GoalModal({ goal, accounts, onClose, onSaved }: { goal: SavingsGoal | null; accounts: Account[]; onClose: () => void; onSaved: () => void }) { const [draft, setDraft] = useState<SavingsGoalInput>(() => goal ? { name: goal.name, account_id: goal.account_id, target_amount: goal.target_amount, current_amount: goal.current_amount, target_date: goal.target_date } : { name: "", account_id: null, target_amount: "", current_amount: "0", target_date: null }); const [busy, setBusy] = useState(false); const save = async (event: FormEvent) => { event.preventDefault(); setBusy(true); try { if (goal) await updateSavingsGoal(goal.id, draft); else await createSavingsGoal(draft); onSaved(); onClose(); } finally { setBusy(false); } }; return <ModalShell eyebrow="SAVINGS GOAL" title={goal ? "编辑储蓄目标" : "新建储蓄目标"} onClose={onClose}><form className="entry-form" onSubmit={(event) => void save(event)}><div className="form-grid"><label><span>目标名称</span><input required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="例如：旅行基金" /></label><label><span>目标金额</span><input required type="number" min="0.01" step="0.01" value={draft.target_amount} onChange={(e) => setDraft({ ...draft, target_amount: e.target.value })} /></label><label><span>当前已存</span><input required type="number" min="0" step="0.01" value={draft.current_amount} onChange={(e) => setDraft({ ...draft, current_amount: e.target.value })} /></label><label><span>关联账户</span><select value={draft.account_id ?? ""} onChange={(e) => setDraft({ ...draft, account_id: e.target.value ? Number(e.target.value) : null })}><option value="">不关联</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label className="span-two"><span>目标日期</span><input type="date" value={draft.target_date ?? ""} onChange={(e) => setDraft({ ...draft, target_date: e.target.value || null })} /></label></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={busy}>{busy ? "保存中" : "保存"}</button></div></form></ModalShell>; }
+function GoalModal({ goal, accounts, onClose, onSaved }: { goal: SavingsGoal | null; accounts: Account[]; onClose: () => void; onSaved: () => void }) {
+  const [draft, setDraft] = useState<SavingsGoalInput>(() => goal ? { name: goal.name, account_id: goal.account_id, target_amount: goal.target_amount, current_amount: goal.current_amount, target_date: goal.target_date } : { name: "", account_id: null, target_amount: "", current_amount: "0", target_date: null });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { t } = useTranslation();
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      if (goal) await updateSavingsGoal(goal.id, draft);
+      else await createSavingsGoal(draft);
+      onSaved();
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : t("goals.saveFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ModalShell eyebrow="SAVINGS GOAL" title={t(goal ? "goals.editTitle" : "goals.newTitle")} onClose={onClose}>
+      <form className="entry-form" onSubmit={(event) => void save(event)}>
+        <div className="form-grid">
+          <label><span>{t("goals.name")}</span><input required maxLength={80} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder={t("goals.namePlaceholder")} /></label>
+          <label><span>{t("goals.targetAmount")}</span><input required type="number" min="0.01" step="0.01" value={draft.target_amount} onChange={(event) => setDraft({ ...draft, target_amount: event.target.value })} /></label>
+          <label><span>{t("goals.currentAmount")}</span><input required type="number" min="0" step="0.01" value={draft.current_amount} onChange={(event) => setDraft({ ...draft, current_amount: event.target.value })} /></label>
+          <label><span>{t("goals.account")}</span><select value={draft.account_id ?? ""} onChange={(event) => setDraft({ ...draft, account_id: event.target.value ? Number(event.target.value) : null })}><option value="">{t("goals.noAccount")}</option>{accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <label className="span-two"><span>{t("goals.targetDate")}</span><input type="date" value={draft.target_date ?? ""} onChange={(event) => setDraft({ ...draft, target_date: event.target.value || null })} /></label>
+        </div>
+        {error && <div className="inline-error" role="alert">{error}</div>}
+        <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={busy}>{busy ? t("common.saving") : t("common.save")}</button></div>
+      </form>
+    </ModalShell>
+  );
+}
 function NetWorthTrendChart({ snapshots }: { snapshots: NetWorthSnapshot[] }) {
   const values = snapshots.map((snapshot) => Number(snapshot.net_worth));
   const points = values.length === 0 ? [0, 0] : values.length === 1 ? [values[0], values[0]] : values;

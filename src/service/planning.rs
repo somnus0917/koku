@@ -36,11 +36,23 @@ impl BookkeepingService {
         let now = timestamp(Utc::now());
         let id = match id {
             Some(id) => {
-                if self.conn.execute("UPDATE import_profiles SET name=?1,format=?2,account_id=?3,category_id=?4,currency=?5,updated_at=?6 WHERE id=?7",params![name.trim(),format,account,category,currency.as_deref().map(str::trim),now,id])?!=1{return Err(KokuError::NotFound{entity:"import profile",id})};
+                let updated = self.conn.execute(
+                    "UPDATE import_profiles SET name=?1,format=?2,account_id=?3,category_id=?4,currency=?5,updated_at=?6 WHERE id=?7",
+                    params![name.trim(), format, account, category, currency.as_deref().map(str::trim), now, id],
+                )?;
+                if updated != 1 {
+                    return Err(KokuError::NotFound {
+                        entity: "import profile",
+                        id,
+                    });
+                }
                 id
             }
             None => {
-                self.conn.execute("INSERT INTO import_profiles(name,format,account_id,category_id,currency,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![name.trim(),format,account,category,currency.as_deref().map(str::trim),now])?;
+                self.conn.execute(
+                    "INSERT INTO import_profiles(name,format,account_id,category_id,currency,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",
+                    params![name.trim(), format, account, category, currency.as_deref().map(str::trim), now],
+                )?;
                 self.conn.last_insert_rowid()
             }
         };
@@ -60,7 +72,16 @@ impl BookkeepingService {
         Ok(())
     }
     fn import_profile(&self, id: i64) -> Result<ImportProfile> {
-        self.conn.query_row("SELECT id,name,format,account_id,category_id,currency,created_at,updated_at FROM import_profiles WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?.map(profile_from_row).transpose()?.ok_or(KokuError::NotFound{entity:"import profile",id})
+        self.conn
+            .query_row(
+                "SELECT id,name,format,account_id,category_id,currency,created_at,updated_at FROM import_profiles WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
+            )
+            .optional()?
+            .map(profile_from_row)
+            .transpose()?
+            .ok_or(KokuError::NotFound { entity: "import profile", id })
     }
     pub fn bills(&self) -> Result<Vec<Bill>> {
         let mut s=self.conn.prepare("SELECT id,name,account_id,category_id,amount,due_day,active,note,created_at,updated_at FROM bills ORDER BY active DESC,due_day,name")?;
@@ -92,6 +113,7 @@ impl BookkeepingService {
         active: bool,
         note: String,
     ) -> Result<Bill> {
+        let name = required_planning_name(name, "bill")?;
         positive_amount(amount)?;
         if !(1..=31).contains(&due_day) {
             return Err(KokuError::InvalidInput("due day must be 1..31".into()));
@@ -107,11 +129,11 @@ impl BookkeepingService {
         let now = timestamp(Utc::now());
         let id = match id {
             Some(id) => {
-                if self.conn.execute("UPDATE bills SET name=?1,account_id=?2,category_id=?3,amount=?4,due_day=?5,active=?6,note=?7,updated_at=?8 WHERE id=?9",params![name.trim(),account,category,decimal_to_db(amount),due_day,active,note,now,id])?!=1{return Err(KokuError::NotFound{entity:"bill",id})};
+                if self.conn.execute("UPDATE bills SET name=?1,account_id=?2,category_id=?3,amount=?4,due_day=?5,active=?6,note=?7,updated_at=?8 WHERE id=?9",params![name,account,category,decimal_to_db(amount),due_day,active,note,now,id])?!=1{return Err(KokuError::NotFound{entity:"bill",id})};
                 id
             }
             None => {
-                self.conn.execute("INSERT INTO bills(name,account_id,category_id,amount,due_day,active,note,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",params![name.trim(),account,category,decimal_to_db(amount),due_day,active,note,now])?;
+                self.conn.execute("INSERT INTO bills(name,account_id,category_id,amount,due_day,active,note,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8)",params![name,account,category,decimal_to_db(amount),due_day,active,note,now])?;
                 self.conn.last_insert_rowid()
             }
         };
@@ -124,7 +146,16 @@ impl BookkeepingService {
         Ok(())
     }
     fn bill(&self, id: i64) -> Result<Bill> {
-        self.conn.query_row("SELECT id,name,account_id,category_id,amount,due_day,active,note,created_at,updated_at FROM bills WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?,r.get(8)?,r.get(9)?))).optional()?.map(bill_from_row).transpose()?.ok_or(KokuError::NotFound{entity:"bill",id})
+        self.conn
+            .query_row(
+                "SELECT id,name,account_id,category_id,amount,due_day,active,note,created_at,updated_at FROM bills WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
+            )
+            .optional()?
+            .map(bill_from_row)
+            .transpose()?
+            .ok_or(KokuError::NotFound { entity: "bill", id })
     }
     pub fn savings_goals(&self) -> Result<Vec<SavingsGoal>> {
         let mut s=self.conn.prepare("SELECT id,name,account_id,target_amount,current_amount,target_date,created_at,updated_at FROM savings_goals ORDER BY target_date,name")?;
@@ -151,6 +182,7 @@ impl BookkeepingService {
         current: Decimal,
         target_date: Option<NaiveDate>,
     ) -> Result<SavingsGoal> {
+        let name = required_planning_name(name, "savings goal")?;
         positive_amount(target)?;
         if current < Decimal::ZERO {
             return Err(KokuError::InvalidInput(
@@ -164,11 +196,11 @@ impl BookkeepingService {
         let date = target_date.map(|v| v.to_string());
         let id = match id {
             Some(id) => {
-                if self.conn.execute("UPDATE savings_goals SET name=?1,account_id=?2,target_amount=?3,current_amount=?4,target_date=?5,updated_at=?6 WHERE id=?7",params![name.trim(),account,decimal_to_db(target),decimal_to_db(current),date,now,id])?!=1{return Err(KokuError::NotFound{entity:"savings goal",id})};
+                if self.conn.execute("UPDATE savings_goals SET name=?1,account_id=?2,target_amount=?3,current_amount=?4,target_date=?5,updated_at=?6 WHERE id=?7",params![name,account,decimal_to_db(target),decimal_to_db(current),date,now,id])?!=1{return Err(KokuError::NotFound{entity:"savings goal",id})};
                 id
             }
             None => {
-                self.conn.execute("INSERT INTO savings_goals(name,account_id,target_amount,current_amount,target_date,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![name.trim(),account,decimal_to_db(target),decimal_to_db(current),date,now])?;
+                self.conn.execute("INSERT INTO savings_goals(name,account_id,target_amount,current_amount,target_date,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?6)",params![name,account,decimal_to_db(target),decimal_to_db(current),date,now])?;
                 self.conn.last_insert_rowid()
             }
         };
@@ -188,8 +220,32 @@ impl BookkeepingService {
         Ok(())
     }
     fn savings_goal(&self, id: i64) -> Result<SavingsGoal> {
-        self.conn.query_row("SELECT id,name,account_id,target_amount,current_amount,target_date,created_at,updated_at FROM savings_goals WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?,r.get(7)?))).optional()?.map(goal_from_row).transpose()?.ok_or(KokuError::NotFound{entity:"savings goal",id})
+        self.conn
+            .query_row(
+                "SELECT id,name,account_id,target_amount,current_amount,target_date,created_at,updated_at FROM savings_goals WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?)),
+            )
+            .optional()?
+            .map(goal_from_row)
+            .transpose()?
+            .ok_or(KokuError::NotFound { entity: "savings goal", id })
     }
+}
+
+fn required_planning_name(value: String, entity: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(KokuError::InvalidInput(format!(
+            "{entity} name cannot be empty"
+        )));
+    }
+    if value.chars().count() > 80 {
+        return Err(KokuError::InvalidInput(format!(
+            "{entity} name must be 80 characters or fewer"
+        )));
+    }
+    Ok(value.to_owned())
 }
 fn validate_profile(
     s: &BookkeepingService,
@@ -294,4 +350,53 @@ fn goal_from_row(
         created_at: parse_timestamp(&r.6)?,
         updated_at: parse_timestamp(&r.7)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{AccountType, CategoryKind};
+
+    #[test]
+    fn bill_and_goal_names_are_trimmed_and_bounded() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account = service.create_account("Cash", AccountType::Cash, "CNY", Decimal::ZERO)?;
+        let category = service.create_category("Housing", CategoryKind::Expense)?;
+
+        assert!(service
+            .save_bill(
+                None,
+                "   ".to_owned(),
+                account.id,
+                category.id,
+                Decimal::TEN,
+                1,
+                true,
+                String::new(),
+            )
+            .is_err());
+        assert!(service
+            .save_savings_goal(
+                None,
+                "x".repeat(81),
+                Some(account.id),
+                Decimal::TEN,
+                Decimal::ZERO,
+                None,
+            )
+            .is_err());
+
+        let bill = service.save_bill(
+            None,
+            "  Rent  ".to_owned(),
+            account.id,
+            category.id,
+            Decimal::TEN,
+            1,
+            true,
+            String::new(),
+        )?;
+        assert_eq!(bill.name, "Rent");
+        Ok(())
+    }
 }
