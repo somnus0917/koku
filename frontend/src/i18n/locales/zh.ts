@@ -48,6 +48,7 @@ export const zh = {
         selectAccount: "选择账户",
         fundingAccount: "资金账户",
         opFailed: "操作失败",
+        opInProgress: "另一项操作仍在进行中",
         countItems: "{{count}} 项",
         quickAdd: "记一笔",
         refresh: "刷新",

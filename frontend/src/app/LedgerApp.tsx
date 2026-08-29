@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { Check, CircleDollarSign, RefreshCcw } from "lucide-react";
 import { changeLanguage } from "../i18n";
 import {
-  adjustBalance,
   buyStock,
   changePassword,
   clearBudget,
@@ -104,6 +103,13 @@ const TRANSACTIONS_PAGE_SIZE = 200;
 const MONTH_TRANSACTIONS_LIMIT = 1000;
 type TransactionFilters = { search: string; kind: string; tags: string[] };
 
+function sameTransactionFilters(left: TransactionFilters, right: TransactionFilters) {
+  return left.search === right.search
+    && left.kind === right.kind
+    && left.tags.length === right.tags.length
+    && left.tags.every((tag, index) => tag === right.tags[index]);
+}
+
 export function LedgerApp({ username, role, userId, onLogout }: { username: string; role: UserRole; userId: number; onLogout: () => Promise<void> }) {
   const [activeView, setActiveView] = useState<View>("dashboard");
   const [monthValue, setMonthValue] = useState(currentMonthValue);
@@ -137,6 +143,13 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   const [txHasMore, setTxHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [txFilters, setTxFilters] = useState<TransactionFilters>({ search: "", kind: "all", tags: [] });
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [ledgerRevision, setLedgerRevision] = useState(0);
+  const txFiltersRef = useRef(txFilters);
+  const summaryRequestRef = useRef(0);
+  const transactionRequestRef = useRef(0);
+  const mutationInFlightRef = useRef(false);
+  txFiltersRef.current = txFilters;
 
   // monthValue 为空字符串表示「全部月份」；此时 year/month 为 undefined。
   const monthParts = monthValue ? monthValue.split("-").map(Number) : [];
@@ -145,6 +158,8 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
 
   const refresh = useCallback(
     async (quiet = false) => {
+      const summaryRequest = ++summaryRequestRef.current;
+      const transactionRequest = ++transactionRequestRef.current;
       if (quiet) setRefreshing(true);
       else setLoading(true);
       try {
@@ -155,34 +170,67 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         const limit = month === undefined ? TRANSACTIONS_PAGE_SIZE : MONTH_TRANSACTIONS_LIMIT;
         const [summary, transactions] = await Promise.all([
           loadSummaryData(summaryYear, summaryMonth, currency),
-          loadTransactions(0, limit, year, month, txFilters)
+          loadTransactions(0, limit, year, month, txFiltersRef.current)
         ]);
-        setData({ ...summary, transactions });
-        setTxOffset(transactions.length);
-        setTxHasMore(month === undefined && transactions.length === TRANSACTIONS_PAGE_SIZE);
+        if (summaryRequest !== summaryRequestRef.current) return;
+        const transactionsAreCurrent = transactionRequest === transactionRequestRef.current;
+        setData((current) => ({
+          ...summary,
+          transactions: transactionsAreCurrent ? transactions : current?.transactions ?? transactions
+        }));
+        if (transactionsAreCurrent) {
+          setTxOffset(transactions.length);
+          setTxHasMore(month === undefined && transactions.length === TRANSACTIONS_PAGE_SIZE);
+        }
+        setLedgerRevision((revision) => revision + 1);
         setError(null);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : t("app.apiUnreachable"));
+        if (summaryRequest === summaryRequestRef.current) {
+          setError(reason instanceof Error ? reason.message : t("app.apiUnreachable"));
+        }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (summaryRequest === summaryRequestRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
-    [currency, month, year, t, txFilters]
+    [currency, month, year, t]
   );
+
+  const refreshTransactions = useCallback(async () => {
+    const request = ++transactionRequestRef.current;
+    const limit = month === undefined ? TRANSACTIONS_PAGE_SIZE : MONTH_TRANSACTIONS_LIMIT;
+    try {
+      const transactions = await loadTransactions(0, limit, year, month, txFilters);
+      if (request !== transactionRequestRef.current) return;
+      setData((current) => current ? { ...current, transactions } : current);
+      setTxOffset(transactions.length);
+      setTxHasMore(month === undefined && transactions.length === TRANSACTIONS_PAGE_SIZE);
+      setError(null);
+    } catch (reason) {
+      if (request === transactionRequestRef.current) {
+        setError(reason instanceof Error ? reason.message : t("app.apiUnreachable"));
+      }
+    }
+  }, [month, t, txFilters, year]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !txHasMore) return;
+    const request = transactionRequestRef.current;
     setLoadingMore(true);
     try {
       const page = await loadTransactions(txOffset, TRANSACTIONS_PAGE_SIZE, year, month, txFilters);
+      if (request !== transactionRequestRef.current) return;
       setData((current) =>
         current ? { ...current, transactions: [...current.transactions, ...page] } : current
       );
       setTxOffset((offset) => offset + page.length);
       setTxHasMore(page.length === TRANSACTIONS_PAGE_SIZE);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : t("app.loadMoreFailed"));
+      if (request === transactionRequestRef.current) {
+        setError(reason instanceof Error ? reason.message : t("app.loadMoreFailed"));
+      }
     } finally {
       setLoadingMore(false);
     }
@@ -191,6 +239,13 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const previousFilters = useRef(txFilters);
+  useEffect(() => {
+    if (sameTransactionFilters(previousFilters.current, txFilters)) return;
+    previousFilters.current = txFilters;
+    void refreshTransactions();
+  }, [refreshTransactions, txFilters]);
 
   useEffect(() => {
     if (!toast) return;
@@ -209,7 +264,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
     return () => {
       cancelled = true;
     };
-  }, [data, currency]);
+  }, [ledgerRevision, currency]);
 
   // 点击提醒面板外部时关闭。
   useEffect(() => {
@@ -230,10 +285,27 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   }, [currency, data]);
 
   const mutate = async (action: () => Promise<unknown>, successMessage: string) => {
-    await action();
-    setModal(null);
-    setToast(successMessage);
-    await refresh(true);
+    if (mutationInFlightRef.current) {
+      throw new Error(t("common.opInProgress"));
+    }
+    mutationInFlightRef.current = true;
+    setMutationError(null);
+    try {
+      await action();
+      setModal(null);
+      setToast(successMessage);
+      await refresh(true);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : t("common.opFailed");
+      setMutationError(message);
+      throw reason instanceof Error ? reason : new Error(message);
+    } finally {
+      mutationInFlightRef.current = false;
+    }
+  };
+
+  const runMutation = (action: () => Promise<unknown>, successMessage: string) => {
+    void mutate(action, successMessage).catch(() => undefined);
   };
 
   const sendDigest = async () => {
@@ -308,11 +380,11 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             onCreateRecurring={() => { setEditRecurring(null); setModal("recurring"); }}
             onOpenLedgerSettings={() => setModal("ledger-settings")}
             onDeleteRecurring={(id) =>
-              void mutate(() => deleteRecurringRule(id), t("accounts.recurringDeleted"))
+              runMutation(() => deleteRecurringRule(id), t("accounts.recurringDeleted"))
             }
             onEditRecurring={(rule) => { setEditRecurring(rule); setModal("recurring"); }}
             onToggleRecurringPaused={(rule) =>
-              void mutate(() => setRecurringPaused(rule.id, !rule.paused_at), rule.paused_at ? t("accounts.recurringResumed") : t("accounts.recurringPaused"))
+              runMutation(() => setRecurringPaused(rule.id, !rule.paused_at), rule.paused_at ? t("accounts.recurringResumed") : t("accounts.recurringPaused"))
             }
             onBuyStock={(symbol = "") => {
               setTradeSide("buy");
@@ -325,7 +397,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               setModal("trade");
             }}
             onSetHoldingPrice={(holdingId, price) =>
-              void mutate(() => setHoldingPrice(holdingId, price), t("holdings.updated"))
+              runMutation(() => setHoldingPrice(holdingId, price), t("holdings.updated"))
             }
             onReconcile={(account) => {
               setReconcileAccount(account);
@@ -342,21 +414,21 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             onAdd={() => setModal("transaction")}
             onImport={() => setModal("import")}
             onVoid={(transaction) =>
-              void mutate(() => voidTransaction(transaction.id), t("transactions.voided"))
+              runMutation(() => voidTransaction(transaction.id), t("transactions.voided"))
             }
             onRestore={(transaction) =>
-              void mutate(() => restoreTransaction(transaction.id), t("transactions.restored"))
+              runMutation(() => restoreTransaction(transaction.id), t("transactions.restored"))
             }
             onDeletePermanently={(transaction) => {
               const label = transaction.note || transaction.kind;
               if (!window.confirm(t("transactions.confirmDeletePermanent", { label }))) return;
-              void mutate(() => deleteTransactionPermanently(transaction.id), t("transactions.deletedPermanently"));
+              runMutation(() => deleteTransactionPermanently(transaction.id), t("transactions.deletedPermanently"));
             }}
             onMarkReimbursable={(transaction) =>
-              void mutate(() => markReimbursable(transaction.id), t("transactions.markedReimbursable"))
+              runMutation(() => markReimbursable(transaction.id), t("transactions.markedReimbursable"))
             }
             onUnmarkReimbursable={(transaction) =>
-              void mutate(() => unmarkReimbursable(transaction.id), t("transactions.unmarkedReimbursable"))
+              runMutation(() => unmarkReimbursable(transaction.id), t("transactions.unmarkedReimbursable"))
             }
             onReimburse={(transaction) => {
               setReimburseTarget(transaction);
@@ -371,12 +443,14 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               setModal("edit-transaction");
             }}
             onUploadReceipt={(transaction, file) =>
-              void mutate(() => uploadReceipt(transaction.id, file), t("transactions.receiptUploaded"))
+              runMutation(() => uploadReceipt(transaction.id, file), t("transactions.receiptUploaded"))
             }
             onLoadMore={loadMore}
             loadingMore={loadingMore}
             hasMore={txHasMore}
-            onFilterChange={setTxFilters}
+            onFilterChange={(filters) => setTxFilters((current) =>
+              sameTransactionFilters(current, filters) ? current : filters
+            )}
             exportYear={year}
             exportMonth={month}
           />
@@ -389,13 +463,13 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
             categories={data.categories}
             budgets={data.budgets}
             onSetBudget={(categoryId, limit) =>
-              void mutate(
+              runMutation(
                 () => setBudget(categoryId, data.monthly.year, data.monthly.month, limit),
                 t("insights.budget.updated")
               )
             }
             onClearBudget={(categoryId) =>
-              void mutate(
+              runMutation(
                 () => clearBudget(categoryId, data.monthly.year, data.monthly.month),
                 t("insights.budget.cleared")
               )
@@ -470,6 +544,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         />
 
         {error && data && <div className="inline-error">{t("app.syncFailed")}{error}</div>}
+        {mutationError && <div className="inline-error" role="alert">{mutationError}</div>}
         <Suspense fallback={<div className="page page-enter" aria-hidden="true" />}>
           {content}
         </Suspense>
@@ -515,10 +590,11 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           onSubmit={(input) =>
             mutate(
               async () => {
-                await updateAccount(editAccount.id, input.details);
-                if (input.adjustment !== undefined) {
-                  await adjustBalance(editAccount.id, { amount: input.adjustment, note: t("accounts.balanceAdjustment") });
-                }
+                await updateAccount(editAccount.id, {
+                  ...input.details,
+                  balance_adjustment: input.adjustment,
+                  adjustment_note: input.adjustment === undefined ? undefined : t("accounts.balanceAdjustment")
+                });
               },
               t("accounts.updated")
             )
@@ -656,7 +732,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
         <ReconciliationModal
           account={reconcileAccount}
           onClose={() => setModal(null)}
-          onChanged={() => void mutate(async () => undefined, t("reconcile.done"))}
+          onChanged={() => runMutation(async () => undefined, t("reconcile.done"))}
         />
       )}
       {modal === "import" && data && (
@@ -664,7 +740,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           accounts={data.accounts}
           categories={data.categories}
           onClose={() => setModal(null)}
-          onComplete={() => void mutate(async () => undefined, t("modals.import.done"))}
+          onComplete={() => runMutation(async () => undefined, t("modals.import.done"))}
         />
       )}
       {modal === "edit-transaction" && data && editTransaction && (

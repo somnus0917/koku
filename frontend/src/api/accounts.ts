@@ -25,6 +25,8 @@ export function updateAccount(
     credit_limit?: string | null;
     statement_day?: number | null;
     due_day?: number | null;
+    balance_adjustment?: string;
+    adjustment_note?: string;
   }
 ): Promise<Account> {
   return request(`/api/accounts/${id}`, {

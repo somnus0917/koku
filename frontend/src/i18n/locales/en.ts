@@ -48,6 +48,7 @@ export const en = {
         selectAccount: "Select account",
         fundingAccount: "Funding account",
         opFailed: "Operation failed",
+        opInProgress: "Another operation is still in progress",
         countItems: "{{count}} items",
         quickAdd: "Add entry",
         refresh: "Refresh",

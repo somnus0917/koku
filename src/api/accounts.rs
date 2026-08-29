@@ -43,6 +43,11 @@ struct UpdateAccountRequest {
     /// 还款日（1~31）；null 清除；不提供保持不变。
     #[serde(default)]
     due_day: Option<Option<u32>>,
+    /// 与账户字段在同一事务内写入的可选余额增量。
+    #[serde(default)]
+    balance_adjustment: Option<Decimal>,
+    #[serde(default)]
+    adjustment_note: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +104,7 @@ async fn api_update_account(
     let mut service = lock_ledger(&state, user.user_id).await?;
     // 名称/类型/币种/额度/账单日/还款日在同一个 SQLite 事务内原子提交，
     // 任一步校验失败全部回滚。
-    let account = service.update_account_edit(
+    let account = service.update_account_with_adjustment(
         account_id,
         request.name,
         request.account_type,
@@ -107,6 +112,8 @@ async fn api_update_account(
         request.credit_limit,
         request.statement_day,
         request.due_day,
+        request.balance_adjustment,
+        request.adjustment_note,
     )?;
     Ok(Json(ApiResponse::new(account)))
 }

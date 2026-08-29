@@ -140,7 +140,83 @@ impl BookkeepingService {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = Self::account_in_tx(&tx, id)?;
+        Self::update_account_in_tx(
+            &tx,
+            id,
+            name,
+            account_type,
+            currency,
+            credit_limit,
+            statement_day,
+            due_day,
+        )?;
+        tx.commit()?;
+        self.account(id)
+    }
+
+    /// 编辑账户字段并可选写入一笔余额调整；两部分在同一个事务内提交。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_account_with_adjustment(
+        &mut self,
+        id: i64,
+        name: Option<String>,
+        account_type: Option<AccountType>,
+        currency: Option<String>,
+        credit_limit: Option<Option<Decimal>>,
+        statement_day: Option<Option<u32>>,
+        due_day: Option<Option<u32>>,
+        adjustment: Option<Decimal>,
+        adjustment_note: String,
+    ) -> Result<Account> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::update_account_in_tx(
+            &tx,
+            id,
+            name,
+            account_type,
+            currency,
+            credit_limit,
+            statement_day,
+            due_day,
+        )?;
+        if let Some(amount) = adjustment {
+            if amount.is_zero() {
+                return Err(KokuError::InvalidInput(
+                    "balance adjustment amount cannot be zero".to_owned(),
+                ));
+            }
+            let account = Self::account_in_tx(&tx, id)?;
+            Self::set_balance(&tx, id, account.balance + amount)?;
+            tx.execute(
+                "INSERT INTO transactions(kind, account_id, amount, currency, settled_amount, occurred_at, note) VALUES ('adjustment', ?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id,
+                    decimal_to_db(amount),
+                    account.currency,
+                    decimal_to_db(amount),
+                    timestamp(Utc::now()),
+                    adjustment_note
+                ],
+            )?;
+        }
+        tx.commit()?;
+        self.account(id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update_account_in_tx(
+        tx: &SqlTransaction<'_>,
+        id: i64,
+        name: Option<String>,
+        account_type: Option<AccountType>,
+        currency: Option<String>,
+        credit_limit: Option<Option<Decimal>>,
+        statement_day: Option<Option<u32>>,
+        due_day: Option<Option<u32>>,
+    ) -> Result<()> {
+        let current = Self::account_in_tx(tx, id)?;
         let name = match name {
             Some(value) => required_text(value, "account name")?,
             None => current.name,
@@ -250,8 +326,7 @@ impl BookkeepingService {
                 id
             ],
         )?;
-        tx.commit()?;
-        self.account(id)
+        Ok(())
     }
 
     /// 调整账户余额：`amount` 为带符号增量（正数增加、负数减少，按账户方向生效），
@@ -672,4 +747,59 @@ fn validate_credit_day(day: Option<u32>, field: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod atomic_account_edit_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_adjustment_rolls_back_account_field_changes() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("Original", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+
+        let result = service.update_account_with_adjustment(
+            account.id,
+            Some("Changed".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Decimal::ZERO),
+            "adjust".to_owned(),
+        );
+
+        assert!(result.is_err());
+        let stored = service.account(account.id)?;
+        assert_eq!(stored.name, "Original");
+        assert_eq!(stored.balance, Decimal::from(100_u32));
+        assert!(service.transactions(100, 0)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn account_fields_and_adjustment_commit_together() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("Original", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+
+        let stored = service.update_account_with_adjustment(
+            account.id,
+            Some("Changed".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(Decimal::TEN),
+            "adjust".to_owned(),
+        )?;
+
+        assert_eq!(stored.name, "Changed");
+        assert_eq!(stored.balance, Decimal::from(110_u32));
+        assert_eq!(service.transactions(100, 0)?.len(), 1);
+        Ok(())
+    }
 }
