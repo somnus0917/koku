@@ -226,8 +226,16 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_transactions_month
             ON transactions(occurred_at, voided_at);
+        CREATE INDEX IF NOT EXISTS idx_transactions_timeline
+            ON transactions(occurred_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_transactions_kind_timeline
+            ON transactions(kind, occurred_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_transactions_account
             ON transactions(account_id, to_account_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_to_account
+            ON transactions(to_account_id);
+        CREATE INDEX IF NOT EXISTS idx_transaction_tags_tag_transaction
+            ON transaction_tags(tag_id, transaction_id);
         CREATE TABLE IF NOT EXISTS import_batches (
             id         TEXT PRIMARY KEY,
             created_at TEXT NOT NULL,
@@ -364,4 +372,37 @@ pub(super) fn initialize(conn: &Connection) -> Result<()> {
         "#,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_indexes_used_by_transaction_filters_and_pagination() {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize(&conn).unwrap();
+        let mut statement = conn.prepare("PRAGMA index_list(transactions)").unwrap();
+        let indexes = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert!(indexes
+            .iter()
+            .any(|name| name == "idx_transactions_timeline"));
+        assert!(indexes
+            .iter()
+            .any(|name| name == "idx_transactions_kind_timeline"));
+
+        let plan = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN SELECT id FROM transactions WHERE kind = 'expense' ORDER BY occurred_at DESC, id DESC LIMIT 100",
+                [],
+                |row| row.get::<_, String>(3),
+            )
+            .unwrap();
+        assert!(plan.contains("idx_transactions_kind_timeline"), "{plan}");
+    }
 }
