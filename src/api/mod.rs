@@ -207,7 +207,57 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
 
 #[cfg(test)]
 mod tests {
-    use super::{maintenance_operation, openapi};
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::{header, Request, StatusCode};
+    use rust_decimal::Decimal;
+    use tempfile::TempDir;
+    use tower::ServiceExt;
+
+    use super::{api_router, lock_ledger, maintenance_operation, openapi, AppState};
+    use crate::auth::AuthConfig;
+    use crate::domain::{AccountType, CategoryKind, UserRole};
+    use crate::quotes::QuoteClient;
+    use crate::ratelimit::ApiRateLimiter;
+    use crate::rates::RateClient;
+    use crate::service::BookkeepingService;
+    use crate::throttle::LoginThrottle;
+
+    fn integration_state(temp: &TempDir) -> (AppState, i64, String) {
+        let mut auth = BookkeepingService::in_memory().unwrap();
+        let user = auth
+            .create_user("api-test@example.com", "unused-test-hash", UserRole::Admin)
+            .unwrap();
+        let token = auth
+            .create_auth_session(user.id, &user.username, 3_600)
+            .unwrap();
+        let ledger_dir = temp.path().join("ledgers");
+        std::fs::create_dir_all(&ledger_dir).unwrap();
+        let state = AppState {
+            maintenance: Arc::new(tokio::sync::RwLock::new(())),
+            auth: Arc::new(Mutex::new(auth)),
+            ledgers: Arc::new(Mutex::new(HashMap::new())),
+            ledger_dir,
+            db_path: temp.path().join("auth.db"),
+            auth_config: Arc::new(AuthConfig {
+                username: user.username,
+                password_hash: "unused-test-hash".to_owned(),
+                session_ttl_seconds: 3_600,
+                cookie_secure: false,
+            }),
+            login_throttle: Arc::new(Mutex::new(LoginThrottle::default())),
+            rate_limiter: Arc::new(Mutex::new(ApiRateLimiter::default())),
+            pending_totp: Arc::new(Mutex::new(HashMap::new())),
+            rates: Arc::new(RateClient::new()),
+            quotes: Arc::new(QuoteClient::new()),
+            r2: None,
+        };
+        (state, user.id, token)
+    }
 
     #[test]
     fn maintenance_gate_skips_only_operations_that_take_the_write_lock() {
@@ -235,5 +285,51 @@ mod tests {
             .paths
             .contains_key("/api/summary/net-worth-trend"));
         assert!(document.paths.paths.contains_key("/api/admin/backups"));
+    }
+
+    #[tokio::test]
+    async fn transaction_endpoint_rolls_back_when_metadata_is_invalid() {
+        let temp = TempDir::new().unwrap();
+        let (state, user_id, token) = integration_state(&temp);
+        let (account_id, category_id) = {
+            let mut ledger = lock_ledger(&state, user_id).await.unwrap();
+            let account = ledger
+                .create_account("Cash", AccountType::Cash, "CNY", Decimal::new(1_000, 0))
+                .unwrap();
+            let category = ledger
+                .create_category("Food", CategoryKind::Expense)
+                .unwrap();
+            (account.id, category.id)
+        };
+        let body = serde_json::json!({
+            "kind": "expense",
+            "account_id": account_id,
+            "category_id": category_id,
+            "amount": "12.50",
+            "tag_names": ["invalid,tag"]
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/transactions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, format!("koku_session={token}"))
+            .extension(ConnectInfo(
+                "127.0.0.1:34567".parse::<SocketAddr>().unwrap(),
+            ))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+
+        let response = api_router(state.clone(), None)
+            .oneshot(request)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let ledger = lock_ledger(&state, user_id).await.unwrap();
+        assert!(ledger.transactions(100, 0).unwrap().is_empty());
+        assert_eq!(
+            ledger.account(account_id).unwrap().balance,
+            Decimal::new(1_000, 0)
+        );
     }
 }

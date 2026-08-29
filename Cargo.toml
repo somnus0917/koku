@@ -34,6 +34,10 @@ utoipa = "5.5"
 utoipa-swagger-ui = { version = "9.0", features = ["axum", "debug-embed", "vendored"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
 # bundled SQLite 是 C 代码，dev 模式默认 opt-level=0 会让 SQL 慢数倍；
 # 这里对依赖开 O2，让本地 `cargo run` 预览也有接近生产的性能。
 [profile.dev.package."*"]
