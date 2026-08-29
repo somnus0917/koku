@@ -8,7 +8,7 @@
 //! 4. 安装全局 middleware（鉴权 / CORS / 限流 / Trace）
 
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -97,6 +97,20 @@ async fn require_auth(State(state): State<AppState>, mut request: Request, next:
     next.run(request).await
 }
 
+/// rusqlite 是同步驱动。把包含账本查询/写入的整条 handler future 放到
+/// Tokio 阻塞线程池执行，使慢查询和 SQLite 写锁等待不占住异步 worker。
+/// handler 内部仍可正常 `.await`（例如行情请求），由运行时 handle 驱动。
+async fn run_database_handler(request: Request, next: Next) -> Response {
+    let runtime = tokio::runtime::Handle::current();
+    match tokio::task::spawn_blocking(move || runtime.block_on(next.run(request))).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(target: "koku", %error, "database handler task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 #[utoipa::path(
     get,
     path = "/api/health",
@@ -168,10 +182,12 @@ pub fn api_router(state: AppState, allowed_origin: Option<HeaderValue>) -> Route
         .merge(rates::router())
         .merge(auth::router())
         .merge(admin::router())
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
+        .route_layer(middleware::from_fn(run_database_handler));
+    let public_auth = auth::public_router().route_layer(middleware::from_fn(run_database_handler));
     let router = Router::new()
         .route("/api/health", get(api_health))
-        .merge(auth::public_router())
+        .merge(public_auth)
         .merge(protected)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi()))
         .with_state(state.clone());

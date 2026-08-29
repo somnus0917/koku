@@ -118,7 +118,9 @@ async fn run_server() -> Result<()> {
             loop {
                 interval.tick().await;
                 let _maintenance = jobs_state.maintenance.read().await;
-                let users = match lock_auth(&jobs_state).and_then(|service| service.users()) {
+                let users = match tokio::task::block_in_place(|| {
+                    lock_auth(&jobs_state).and_then(|service| service.users())
+                }) {
                     Ok(users) => users,
                     Err(error) => {
                         tracing::error!(target: "jobs", error = %error, "could not list users for scheduled jobs");
@@ -128,15 +130,19 @@ async fn run_server() -> Result<()> {
                 for user in users.into_iter().filter(|user| user.enabled) {
                     match lock_ledger(&jobs_state, user.id).await {
                         Ok(mut ledger) => {
-                            if let Err(error) = ledger.run_recurring() {
-                                tracing::error!(target: "jobs", user_id = user.id, error = %error, "recurring job failed");
-                            }
-                            if let Err(error) = ledger.rollover_budgets_once(chrono::Utc::now()) {
-                                tracing::error!(target: "jobs", user_id = user.id, error = %error, "budget rollover failed");
-                            }
-                            if quote_auto_refresh {
+                            let due = tokio::task::block_in_place(|| {
+                                if let Err(error) = ledger.run_recurring() {
+                                    tracing::error!(target: "jobs", user_id = user.id, error = %error, "recurring job failed");
+                                }
+                                if let Err(error) = ledger.rollover_budgets_once(chrono::Utc::now())
+                                {
+                                    tracing::error!(target: "jobs", user_id = user.id, error = %error, "budget rollover failed");
+                                }
+                                if !quote_auto_refresh {
+                                    return Vec::new();
+                                }
                                 let now = chrono::Utc::now();
-                                let due = match ledger.holdings() {
+                                match ledger.holdings() {
                                     Ok(holdings) => holdings
                                         .into_iter()
                                         .filter(|holding| {
@@ -152,16 +158,19 @@ async fn run_server() -> Result<()> {
                                         tracing::error!(target: "jobs", user_id = user.id, error = %error, "could not list holdings for quote refresh");
                                         Vec::new()
                                     }
-                                };
+                                }
+                            });
+                            if quote_auto_refresh {
                                 drop(ledger);
                                 for (holding_id, symbol) in due {
                                     match jobs_state.quotes.fetch(&symbol).await {
                                         Ok(quote) => {
                                             match lock_ledger(&jobs_state, user.id).await {
                                                 Ok(mut ledger) => {
-                                                    if let Err(error) =
+                                                    let saved = tokio::task::block_in_place(|| {
                                                         ledger.set_holding_quote(holding_id, &quote)
-                                                    {
+                                                    });
+                                                    if let Err(error) = saved {
                                                         tracing::warn!(target: "jobs", user_id = user.id, holding_id, error = %error, "could not save scheduled quote")
                                                     }
                                                 }
@@ -181,7 +190,18 @@ async fn run_server() -> Result<()> {
                             tracing::error!(target: "jobs", user_id = user.id, error = %error, "could not open ledger for scheduled jobs")
                         }
                     }
-                    if let Err(error) = api::snapshot_net_worth(&jobs_state, user.id, "CNY").await {
+                    let snapshot_state = jobs_state.clone();
+                    let runtime = tokio::runtime::Handle::current();
+                    let snapshot = tokio::task::spawn_blocking(move || {
+                        runtime.block_on(api::snapshot_net_worth(&snapshot_state, user.id, "CNY"))
+                    })
+                    .await;
+                    if let Err(error) = snapshot
+                        .map_err(|error| {
+                            KokuError::InvalidInput(format!("snapshot task failed: {error}"))
+                        })
+                        .and_then(|result| result)
+                    {
                         tracing::warn!(target: "jobs", user_id = user.id, error = %error, "net worth snapshot failed");
                     }
                 }
@@ -218,7 +238,16 @@ async fn run_server() -> Result<()> {
                 interval.tick().await;
                 let created = {
                     let _maintenance = backup_maintenance.write().await;
-                    backup::create_backup(&backup_db_path, &backup_ledger_dir, backup_keep)
+                    let db_path = backup_db_path.clone();
+                    let ledger_dir = backup_ledger_dir.clone();
+                    tokio::task::spawn_blocking(move || {
+                        backup::create_backup(&db_path, &ledger_dir, backup_keep)
+                    })
+                    .await
+                    .map_err(|error| {
+                        KokuError::InvalidInput(format!("backup task failed: {error}"))
+                    })
+                    .and_then(|result| result)
                 };
                 match created {
                     Ok(meta) => {
@@ -269,7 +298,9 @@ async fn run_server() -> Result<()> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let users = match lock_auth(&smtp_state).and_then(|service| service.users()) {
+                let users = match tokio::task::block_in_place(|| {
+                    lock_auth(&smtp_state).and_then(|service| service.users())
+                }) {
                     Ok(users) => users,
                     Err(error) => {
                         tracing::error!(target: "koku", error = %error, "could not list users for reminder digest");
@@ -277,8 +308,21 @@ async fn run_server() -> Result<()> {
                     }
                 };
                 for user in users.into_iter().filter(|user| user.enabled) {
-                    let items = match api::load_reminder_items(&smtp_state, user.id, 30, "CNY")
-                        .await
+                    let reminder_state = smtp_state.clone();
+                    let runtime = tokio::runtime::Handle::current();
+                    let items = match tokio::task::spawn_blocking(move || {
+                        runtime.block_on(api::load_reminder_items(
+                            &reminder_state,
+                            user.id,
+                            30,
+                            "CNY",
+                        ))
+                    })
+                    .await
+                    .map_err(|error| {
+                        KokuError::InvalidInput(format!("reminder task failed: {error}"))
+                    })
+                    .and_then(|result| result)
                     {
                         Ok(items) if !items.is_empty() => items,
                         Ok(_) => continue,
