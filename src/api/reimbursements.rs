@@ -31,12 +31,12 @@ async fn api_mark_reimbursable(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.mark_reimbursable(transaction_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reimbursement.marked",
         "transaction",
         transaction.id,
         "标记了一笔待报销支出",
-    )?;
+    );
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -48,12 +48,12 @@ async fn api_unmark_reimbursable(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.unmark_reimbursable(transaction_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reimbursement.unmarked",
         "transaction",
         transaction.id,
         "取消了一笔待报销标记",
-    )?;
+    );
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -74,12 +74,12 @@ async fn api_reimburse(
         request.settled_amount,
         request.note,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reimbursement.created",
         "reimbursement",
         income.id,
         format!("记录了报销收入：{} {}", income.amount, income.currency),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(income))))
 }
 

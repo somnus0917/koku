@@ -133,24 +133,19 @@ async fn api_create_transaction(
         }
     };
     let transaction = match request.kind {
-        TransactionKind::Expense => service.record_expense_in_currency(
-            request.account_id,
-            request.category_id,
-            request.amount,
-            currency,
-            settled_amount,
-            occurred_at,
-            request.note,
-        )?,
-        TransactionKind::Income => service.record_income_in_currency(
-            request.account_id,
-            request.category_id,
-            request.amount,
-            currency,
-            settled_amount,
-            occurred_at,
-            request.note,
-        )?,
+        TransactionKind::Expense | TransactionKind::Income => service
+            .record_categorized_with_metadata(
+                request.kind,
+                request.account_id,
+                request.category_id,
+                request.amount,
+                currency,
+                settled_amount,
+                occurred_at,
+                request.note,
+                &request.tag_names,
+                request.payee_name.as_deref(),
+            )?,
         TransactionKind::Transfer => {
             return Err(KokuError::InvalidInput(
                 "use /api/transfers for transfer transactions".to_owned(),
@@ -177,29 +172,6 @@ async fn api_create_transaction(
             ))
         }
     };
-    if !request.tag_names.is_empty() {
-        service.set_transaction_tags(transaction.id, request.tag_names)?;
-    }
-    // 手动记账带 Payee：设置商户；仅当用户显式提供 Payee 时确认学习样本
-    // （没有 Payee 本就无法形成 Payee → Category 样本）。
-    if let Some(payee_name) = request.payee_name {
-        if !payee_name.trim().is_empty() {
-            service.set_transaction_payee(transaction.id, Some(&payee_name))?;
-        }
-        service.confirm_transaction_learning(transaction.id)?;
-    }
-    let transaction = service.transaction(transaction.id)?;
-    service.record_activity(
-        "transaction.created",
-        "transaction",
-        transaction.id,
-        format!(
-            "记录了{}：{} {}",
-            transaction.kind.as_str(),
-            transaction.amount,
-            transaction.currency
-        ),
-    )?;
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -218,7 +190,7 @@ async fn api_create_transfer(
         request.occurred_at.unwrap_or_else(Utc::now),
         request.note,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "transfer.created",
         "transaction",
         transaction.id,
@@ -226,7 +198,7 @@ async fn api_create_transfer(
             "记录了转账：{} {}",
             transaction.amount, transaction.currency
         ),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(transaction))))
 }
 
@@ -238,7 +210,7 @@ async fn api_void_transaction(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.void_transaction(transaction_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "transaction.voided",
         "transaction",
         transaction.id,
@@ -246,7 +218,7 @@ async fn api_void_transaction(
             "撤销了流水：{} {}",
             transaction.amount, transaction.currency
         ),
-    )?;
+    );
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -258,7 +230,7 @@ async fn api_restore_transaction(
 ) -> Result<Json<ApiResponse<Transaction>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let transaction = service.restore_transaction(transaction_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "transaction.restored",
         "transaction",
         transaction.id,
@@ -266,7 +238,7 @@ async fn api_restore_transaction(
             "恢复了流水：{} {}",
             transaction.amount, transaction.currency
         ),
-    )?;
+    );
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -278,12 +250,12 @@ async fn api_delete_transaction(
 ) -> Result<StatusCode> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     service.delete_transaction(transaction_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "transaction.deleted",
         "transaction",
         transaction_id,
         "永久删除了一笔已撤销流水",
-    )?;
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -313,7 +285,7 @@ async fn api_update_transaction(
         request.tag_names.as_deref(),
         confirm_learning,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "transaction.updated",
         "transaction",
         transaction.id,
@@ -321,7 +293,7 @@ async fn api_update_transaction(
             "修改了流水：{} {}",
             transaction.amount, transaction.currency
         ),
-    )?;
+    );
     Ok(Json(ApiResponse::new(transaction)))
 }
 
@@ -395,12 +367,12 @@ async fn api_upload_receipt(
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_owned());
     let mut service = lock_ledger(&state, user.user_id).await?;
     let receipt = service.attach_receipt(transaction_id, content_type, data)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "receipt.attached",
         "transaction",
         transaction_id,
         "添加了交易凭证",
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(receipt))))
 }
 

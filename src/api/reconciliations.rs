@@ -53,12 +53,12 @@ async fn api_create_reconciliation(
         request.statement_balance,
         &request.note,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reconciliation.created",
         "reconciliation",
         reconciliation.id,
         format!("发起了 {} 的账户对账", reconciliation.statement_date),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(reconciliation))))
 }
 
@@ -76,12 +76,12 @@ async fn api_complete_reconciliation(
 ) -> Result<Json<ApiResponse<Reconciliation>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let reconciliation = service.complete_reconciliation(reconciliation_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reconciliation.completed",
         "reconciliation",
         reconciliation.id,
         "完成了账户对账",
-    )?;
+    );
     Ok(Json(ApiResponse::new(reconciliation)))
 }
 
@@ -99,12 +99,12 @@ async fn api_cancel_reconciliation(
 ) -> Result<Json<ApiResponse<Reconciliation>>> {
     let mut service = lock_ledger(&state, user.user_id).await?;
     let reconciliation = service.cancel_reconciliation(reconciliation_id)?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "reconciliation.cancelled",
         "reconciliation",
         reconciliation.id,
         "取消了账户对账",
-    )?;
+    );
     Ok(Json(ApiResponse::new(reconciliation)))
 }
 

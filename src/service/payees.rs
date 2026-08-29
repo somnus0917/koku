@@ -143,6 +143,7 @@ impl BookkeepingService {
     /// - 仅当 Payee 真正变化时才更新交易并学习 alias（防止改 note/金额反复累加）。
     /// - 分类学习不在此处进行：保存完成后由调用方统一调用
     ///   [`BookkeepingService::confirm_transaction_learning`]（可追踪、幂等）。
+    #[cfg(test)]
     pub fn set_transaction_payee(
         &mut self,
         transaction_id: i64,
@@ -288,6 +289,7 @@ impl BookkeepingService {
     /// - 描述不可归一化（为空）时忽略，不产生 alias。
     /// - 已存在同一归一化描述时视为纠正：目标 Payee 改为最新确认值，
     ///   同时 `confirmed_count` +1、`last_used_at` 更新。
+    #[cfg(test)]
     pub fn learn_alias(&mut self, raw_description: &str, payee_id: i64) -> Result<()> {
         let normalized = normalize_description(raw_description);
         if normalized.is_empty() {
@@ -394,6 +396,7 @@ impl BookkeepingService {
     /// 有拆分的交易不参与单一 Payee → Category 学习（分类归属以拆分为准，
     /// 父分类不能代表整笔交易）：先撤销旧贡献、不新增样本，直接返回。
     /// 判断使用提交后最终状态：任何带 splits 的请求都不会产生学习样本。
+    #[cfg(test)]
     pub fn confirm_transaction_learning(&mut self, transaction_id: i64) -> Result<()> {
         let tx = self
             .conn

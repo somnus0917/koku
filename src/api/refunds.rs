@@ -40,12 +40,12 @@ async fn api_refund(
         request.settled_amount,
         request.note,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "refund.created",
         "refund",
         income.id,
         format!("记录了退款收入：{} {}", income.amount, income.currency),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(income))))
 }
 

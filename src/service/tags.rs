@@ -11,6 +11,7 @@ use crate::service::BookkeepingService;
 impl BookkeepingService {
     /// 设置某笔交易的标签（整体替换）：自动创建不存在的标签、解除已移除的关联。
     /// 返回按输入顺序去重后的标签列表。
+    #[cfg(test)]
     pub fn set_transaction_tags(
         &mut self,
         transaction_id: i64,

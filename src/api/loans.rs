@@ -64,12 +64,12 @@ async fn api_create_loan(
         request.due_at,
         request.interest_rate,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "loan.created",
         "loan",
         loan.id,
         format!("记录了与 {} 的借款", loan.counterparty),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(loan))))
 }
 
@@ -97,12 +97,12 @@ async fn api_repay_loan(
         request.settled_amount,
         request.note,
     )?;
-    service.record_activity(
+    service.record_activity_best_effort(
         "loan.repaid",
         "loan",
         updated.id,
         format!("记录了与 {} 的还款", updated.counterparty),
-    )?;
+    );
     Ok((StatusCode::CREATED, Json(ApiResponse::new(updated))))
 }
 

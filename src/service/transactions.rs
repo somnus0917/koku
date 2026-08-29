@@ -108,6 +108,89 @@ impl BookkeepingService {
         occurred_at: DateTime<Utc>,
         note: String,
     ) -> Result<Transaction> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction_id = Self::record_categorized_in_tx(
+            &tx,
+            kind,
+            account_id,
+            category_id,
+            amount,
+            currency,
+            settled_amount,
+            occurred_at,
+            note,
+        )?;
+        tx.commit()?;
+        self.transaction(transaction_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_categorized_with_metadata(
+        &mut self,
+        kind: TransactionKind,
+        account_id: i64,
+        category_id: i64,
+        amount: Decimal,
+        currency: String,
+        settled_amount: Decimal,
+        occurred_at: DateTime<Utc>,
+        note: String,
+        tag_names: &[String],
+        payee_name: Option<&str>,
+    ) -> Result<Transaction> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let transaction_id = Self::record_categorized_in_tx(
+            &tx,
+            kind,
+            account_id,
+            category_id,
+            amount,
+            currency,
+            settled_amount,
+            occurred_at,
+            note,
+        )?;
+        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+        if !tag_names.is_empty() {
+            Self::set_transaction_tags_in_tx(&tx, transaction_id, tag_names)?;
+        }
+        if payee_name.is_some() {
+            Self::set_transaction_payee_in_tx(&tx, &transaction, payee_name)?;
+            Self::confirm_transaction_learning_in_tx(&tx, transaction_id)?;
+        }
+        let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+        Self::record_activity_in_tx(
+            &tx,
+            "transaction.created",
+            "transaction",
+            transaction.id,
+            format!(
+                "记录了{}：{} {}",
+                transaction.kind.as_str(),
+                transaction.amount,
+                transaction.currency
+            ),
+        )?;
+        tx.commit()?;
+        self.transaction(transaction_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_categorized_in_tx(
+        tx: &SqlTransaction<'_>,
+        kind: TransactionKind,
+        account_id: i64,
+        category_id: i64,
+        amount: Decimal,
+        currency: String,
+        settled_amount: Decimal,
+        occurred_at: DateTime<Utc>,
+        note: String,
+    ) -> Result<i64> {
         positive_amount(amount)?;
         positive_amount(settled_amount)?;
         let currency = normalize_currency(currency)?;
@@ -129,16 +212,13 @@ impl BookkeepingService {
                 )),
             };
 
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let account = Self::account_in_tx(&tx, account_id)?;
+        let account = Self::account_in_tx(tx, account_id)?;
         if currency == account.currency && amount != settled_amount {
             return Err(KokuError::InvalidInput(
                 "same-currency transactions must settle for the original amount".to_owned(),
             ));
         }
-        let category = Self::category_in_tx(&tx, category_id)?;
+        let category = Self::category_in_tx(tx, category_id)?;
         if category.kind != expected_category_kind {
             return Err(KokuError::CategoryKindMismatch {
                 expected: expected_category_kind.as_str(),
@@ -162,14 +242,12 @@ impl BookkeepingService {
                 unreachable!("validated above")
             }
         };
-        Self::set_balance(&tx, account_id, new_balance)?;
+        Self::set_balance(tx, account_id, new_balance)?;
         tx.execute(
             "INSERT INTO transactions(kind, account_id, category_id, amount, currency, settled_amount, occurred_at, note) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![kind.as_str(), account_id, category_id, decimal_to_db(amount), currency, decimal_to_db(settled_amount), timestamp(occurred_at), note],
         )?;
-        let transaction_id = tx.last_insert_rowid();
-        tx.commit()?;
-        self.transaction(transaction_id)
+        Ok(tx.last_insert_rowid())
     }
 
     pub fn record_transfer(
@@ -897,5 +975,65 @@ impl BookkeepingService {
         rows.into_iter()
             .map(|row| transaction_from_row(row?))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    use crate::domain::{AccountType, CategoryKind};
+
+    #[test]
+    fn create_with_invalid_metadata_rolls_back_balance_and_transaction() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("Cash", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let category = service.create_category("Food", CategoryKind::Expense)?;
+
+        let result = service.record_categorized_with_metadata(
+            TransactionKind::Expense,
+            account.id,
+            category.id,
+            Decimal::TEN,
+            "CNY".to_owned(),
+            Decimal::TEN,
+            Utc::now(),
+            "Lunch".to_owned(),
+            &["invalid,tag".to_owned()],
+            Some("Cafe"),
+        );
+
+        assert!(result.is_err());
+        assert!(service.transactions(100, 0)?.is_empty());
+        assert!(service.activity_events(100)?.is_empty());
+        assert_eq!(service.account(account.id)?.balance, Decimal::from(100_u32));
+        Ok(())
+    }
+
+    #[test]
+    fn create_commits_metadata_and_activity_together() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("Cash", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let category = service.create_category("Food", CategoryKind::Expense)?;
+
+        let transaction = service.record_categorized_with_metadata(
+            TransactionKind::Expense,
+            account.id,
+            category.id,
+            Decimal::TEN,
+            "CNY".to_owned(),
+            Decimal::TEN,
+            Utc::now(),
+            "Lunch".to_owned(),
+            &["work".to_owned()],
+            Some("Cafe"),
+        )?;
+
+        assert_eq!(transaction.tags, vec!["work"]);
+        assert_eq!(transaction.payee_name.as_deref(), Some("Cafe"));
+        assert_eq!(service.activity_events(100)?.len(), 1);
+        assert_eq!(service.account(account.id)?.balance, Decimal::from(90_u32));
+        Ok(())
     }
 }

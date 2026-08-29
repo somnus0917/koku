@@ -9,6 +9,20 @@ use crate::error::Result;
 use crate::service::BookkeepingService;
 
 impl BookkeepingService {
+    pub(super) fn record_activity_in_tx(
+        tx: &SqlTransaction<'_>,
+        action: impl Into<String>,
+        entity_type: impl Into<String>,
+        entity_id: i64,
+        summary: impl Into<String>,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT INTO activity_events(action, entity_type, entity_id, summary, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![action.into(), entity_type.into(), entity_id, summary.into(), timestamp(Utc::now())],
+        )?;
+        Ok(())
+    }
+
     /// 记录一次已经完成的账本操作。实体允许后续删除，轨迹仍保留其摘要。
     pub fn record_activity(
         &mut self,
@@ -22,6 +36,20 @@ impl BookkeepingService {
             params![action.into(), entity_type.into(), entity_id, summary.into(), timestamp(Utc::now())],
         )?;
         Ok(())
+    }
+
+    /// 活动轨迹是辅助审计信息，不应让已经提交的账务操作对客户端表现为失败。
+    /// 需要与账务操作强一致的路径应改用 `record_activity_in_tx`。
+    pub fn record_activity_best_effort(
+        &mut self,
+        action: impl Into<String>,
+        entity_type: impl Into<String>,
+        entity_id: i64,
+        summary: impl Into<String>,
+    ) {
+        if let Err(error) = self.record_activity(action, entity_type, entity_id, summary) {
+            tracing::warn!(target: "activity", entity_id, error = %error, "could not record activity event");
+        }
     }
 
     pub fn activity_events(&self, limit: u32) -> Result<Vec<ActivityEvent>> {
