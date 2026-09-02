@@ -543,26 +543,174 @@ impl BookkeepingService {
         rows.map(|row| account_from_row(row?)).collect()
     }
 
-    /// 永久删除一个未被任何账务记录或配置引用的账户。
+    /// 永久删除账户及其专属数据。
     ///
-    /// 账户一旦有流水、转账、持仓、定期、借款、周期规则等关联数据就拒绝
-    /// 删除，避免破坏历史账本的完整性。调用方可先删除相关记录，再重试。
+    /// 流水、持仓、定期、借款、周期规则等随账户删除。跨账户转账只删除该笔
+    /// 流水，并撤销它对仍保留账户的余额影响；进入被删账户的报销/退款收入会
+    /// 回写原支出的累计金额。全部操作在同一个事务内完成。
     pub fn delete_account(&mut self, id: i64) -> Result<Account> {
-        let account = self.account(id)?;
-        match self
+        let tx = self
             .conn
-            .execute("DELETE FROM accounts WHERE id = ?1", [id])
-        {
-            Ok(_) => Ok(account),
-            Err(rusqlite::Error::SqliteFailure(code, _))
-                if code.code == rusqlite::ErrorCode::ConstraintViolation =>
-            {
-                Err(KokuError::InvalidInput(
-                    "cannot delete an account with related transactions or records".to_owned(),
-                ))
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let account = Self::account_in_tx(&tx, id)?;
+
+        // 活跃跨账户转账已改变另一端余额。删除其中一端时，只撤销仍保留端的
+        // 余额影响；被删账户本身无需再维护余额。
+        let transfer_ids = {
+            let mut statement = tx.prepare(
+                "SELECT id FROM transactions
+                 WHERE kind = 'transfer' AND voided_at IS NULL
+                   AND (account_id = ?1 OR to_account_id = ?1)",
+            )?;
+            let rows = statement
+                .query_map([id], |row| row.get::<_, i64>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        for transaction_id in transfer_ids {
+            let transaction = Self::transaction_in_tx(&tx, transaction_id)?;
+            let target_id = transaction.to_account_id.ok_or_else(|| {
+                KokuError::InvalidInput("transfer is missing its target account".to_owned())
+            })?;
+            if transaction.account_id == id && target_id != id {
+                let target = Self::account_in_tx(&tx, target_id)?;
+                let amount = transaction.target_amount.ok_or_else(|| {
+                    KokuError::InvalidInput("transfer is missing its target amount".to_owned())
+                })?;
+                Self::set_balance(
+                    &tx,
+                    target_id,
+                    target.account_type.apply_outflow(target.balance, amount),
+                )?;
+            } else if target_id == id && transaction.account_id != id {
+                let source = Self::account_in_tx(&tx, transaction.account_id)?;
+                Self::set_balance(
+                    &tx,
+                    transaction.account_id,
+                    source
+                        .account_type
+                        .apply_inflow(source.balance, transaction.settled_amount),
+                )?;
             }
-            Err(error) => Err(error.into()),
         }
+
+        // 若被删账户接收过报销/退款，保留其他账户中的原支出，并回退其累计值。
+        let reimbursement_links = {
+            let mut statement = tx.prepare(
+                "SELECT r.expense_id, r.amount
+                 FROM reimbursements r
+                 JOIN transactions income ON income.id = r.income_id
+                 JOIN transactions expense ON expense.id = r.expense_id
+                 WHERE income.account_id = ?1 AND income.voided_at IS NULL
+                   AND expense.account_id <> ?1",
+            )?;
+            let rows = statement
+                .query_map([id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (expense_id, amount) in reimbursement_links {
+            let expense = Self::transaction_in_tx(&tx, expense_id)?;
+            let new_amount =
+                (expense.reimbursed_amount - decimal_from_db(&amount)?).max(Decimal::ZERO);
+            let reimbursed_at = (new_amount >= expense.amount)
+                .then(|| expense.reimbursed_at.map(timestamp))
+                .flatten();
+            tx.execute(
+                "UPDATE transactions SET reimbursed_amount = ?1, reimbursed_at = ?2 WHERE id = ?3",
+                params![decimal_to_db(new_amount), reimbursed_at, expense_id],
+            )?;
+        }
+        let refund_links = {
+            let mut statement = tx.prepare(
+                "SELECT r.expense_id, r.amount
+                 FROM refunds r
+                 JOIN transactions income ON income.id = r.income_id
+                 JOIN transactions expense ON expense.id = r.expense_id
+                 WHERE income.account_id = ?1 AND income.voided_at IS NULL
+                   AND expense.account_id <> ?1",
+            )?;
+            let rows = statement
+                .query_map([id], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (expense_id, amount) in refund_links {
+            let expense = Self::transaction_in_tx(&tx, expense_id)?;
+            let new_amount =
+                (expense.refunded_amount - decimal_from_db(&amount)?).max(Decimal::ZERO);
+            tx.execute(
+                "UPDATE transactions SET refunded_amount = ?1 WHERE id = ?2",
+                params![decimal_to_db(new_amount), expense_id],
+            )?;
+        }
+
+        // 删除引用账户/流水的叶子记录，再删流水、借款与账户本身。
+        tx.execute("DELETE FROM recurring_rules WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM holdings WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM deposits WHERE source_account_id = ?1", [id])?;
+        tx.execute("DELETE FROM reconciliations WHERE account_id = ?1", [id])?;
+        tx.execute(
+            "DELETE FROM credit_card_statements WHERE account_id = ?1",
+            [id],
+        )?;
+        tx.execute("DELETE FROM transaction_rules WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM import_profiles WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM bills WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM savings_goals WHERE account_id = ?1", [id])?;
+
+        let related_transaction_ids = {
+            let mut statement = tx.prepare(
+                "SELECT id FROM transactions WHERE account_id = ?1 OR to_account_id = ?1",
+            )?;
+            let rows = statement
+                .query_map([id], |row| row.get::<_, i64>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        for transaction_id in &related_transaction_ids {
+            Self::revoke_transaction_learning_in_tx(&tx, *transaction_id)?;
+        }
+
+        let related = "SELECT id FROM transactions WHERE account_id = ?1 OR to_account_id = ?1";
+        tx.execute(
+            &format!("DELETE FROM receipts WHERE transaction_id IN ({related})"),
+            [id],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM transaction_tags WHERE transaction_id IN ({related})"),
+            [id],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM transaction_splits WHERE transaction_id IN ({related})"),
+            [id],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM reimbursements
+                 WHERE expense_id IN ({related}) OR income_id IN ({related})"
+            ),
+            params![id],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM refunds
+                 WHERE expense_id IN ({related}) OR income_id IN ({related})"
+            ),
+            params![id],
+        )?;
+        tx.execute(
+            "DELETE FROM transactions WHERE account_id = ?1 OR to_account_id = ?1",
+            [id],
+        )?;
+        tx.execute("DELETE FROM loans WHERE account_id = ?1", [id])?;
+        tx.execute("DELETE FROM accounts WHERE id = ?1", [id])?;
+        tx.commit()?;
+        Ok(account)
     }
 
     /// 资产负债汇总：`currency` 为显示币种，所有币种的账户余额与未结借款统一折算。
@@ -842,16 +990,47 @@ mod atomic_account_edit_tests {
     }
 
     #[test]
-    fn account_with_transaction_history_cannot_be_deleted() -> Result<()> {
+    fn account_with_transaction_history_is_deleted_with_its_rows() -> Result<()> {
         let mut service = BookkeepingService::in_memory()?;
         let account =
             service.create_account("WeChat", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
         service.adjust_balance(account.id, Decimal::TEN, "adjust")?;
 
-        let result = service.delete_account(account.id);
+        service.delete_account(account.id)?;
 
-        assert!(matches!(result, Err(KokuError::InvalidInput(_))));
-        assert_eq!(service.account(account.id)?.name, "WeChat");
+        assert!(matches!(
+            service.account(account.id),
+            Err(KokuError::NotFound { .. })
+        ));
+        assert!(service.transactions(100, 0)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_account_reverses_active_transfer_on_surviving_account() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let wallet =
+            service.create_account("WeChat", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        let campus = service.create_account(
+            "Campus card",
+            AccountType::Cash,
+            "CNY",
+            Decimal::from(50_u32),
+        )?;
+        service.record_transfer(
+            wallet.id,
+            campus.id,
+            Decimal::TEN,
+            Decimal::TEN,
+            Utc::now(),
+            "top up",
+        )?;
+        assert_eq!(service.account(campus.id)?.balance, Decimal::from(60_u32));
+
+        service.delete_account(wallet.id)?;
+
+        assert_eq!(service.account(campus.id)?.balance, Decimal::from(50_u32));
+        assert!(service.transactions(100, 0)?.is_empty());
         Ok(())
     }
 }

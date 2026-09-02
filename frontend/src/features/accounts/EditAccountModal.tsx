@@ -37,6 +37,8 @@ export function EditAccountModal({
   const [dueDay, setDueDay] = useState(account.due_day ? String(account.due_day) : "");
   const [adjustment, setAdjustment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [error, setError] = useState<string | null>(null);
   const { t } = useTranslation();
   const isCredit = type === "credit";
@@ -81,16 +83,12 @@ export function EditAccountModal({
     }
   };
   const remove = async () => {
-    if (!window.confirm(t("modals.editAccount.confirmDelete", { name: account.name }))) return;
     setSubmitting(true);
     setError(null);
     try {
       await onDelete();
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "";
-      setError(message.includes("cannot delete an account with related")
-        ? t("modals.editAccount.hasRelatedRecords")
-        : message || t("modals.editAccount.deleteFailed"));
+      setError(reason instanceof Error ? reason.message : t("modals.editAccount.deleteFailed"));
       setSubmitting(false);
     }
   };
@@ -129,12 +127,38 @@ export function EditAccountModal({
           </label>
         </div>
         <p className="category-delete-note">{t("modals.editAccount.adjustmentNote")}</p>
+        {confirmingDelete && (
+          <section className="account-delete-confirm" aria-label={t("modals.editAccount.confirmTitle")}>
+            <div>
+              <strong>{t("modals.editAccount.confirmTitle")}</strong>
+              <p>{t("modals.editAccount.confirmDelete", { name: account.name })}</p>
+            </div>
+            <label>
+              <span>{t("modals.editAccount.confirmLabel", { name: account.name })}</span>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+              />
+            </label>
+            <div>
+              <button type="button" className="secondary-button" disabled={submitting} onClick={() => { setConfirmingDelete(false); setDeleteConfirmation(""); }}>{t("common.cancel")}</button>
+              <button type="button" className="danger-button" disabled={submitting || deleteConfirmation !== account.name} onClick={() => void remove()}>
+                {submitting && <LoaderCircle className="spin" size={17} />}
+                {t("modals.editAccount.confirmSubmit")}
+              </button>
+            </div>
+          </section>
+        )}
         {error && <div className="form-error">{error}</div>}
-        <div className="modal-actions">
-          <button type="button" className="danger-button" disabled={submitting} onClick={() => void remove()}><Trash2 size={16} />{t("modals.editAccount.delete")}</button>
-          <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.save")}</button>
-        </div>
+        {!confirmingDelete && (
+          <div className="modal-actions">
+            <button type="button" className="danger-button" disabled={submitting} onClick={() => { setConfirmingDelete(true); setError(null); }}><Trash2 size={16} />{t("modals.editAccount.delete")}</button>
+            <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
+            <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.save")}</button>
+          </div>
+        )}
       </form>
     </ModalShell>
   );

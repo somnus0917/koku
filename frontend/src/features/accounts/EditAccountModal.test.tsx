@@ -22,8 +22,7 @@ describe("EditAccountModal", () => {
     await changeLanguage("en");
   });
 
-  it("requires confirmation before deleting the account", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("requires the exact account name before permanently deleting", async () => {
     const onDelete = vi.fn().mockResolvedValue(undefined);
     render(
       <EditAccountModal
@@ -36,8 +35,12 @@ describe("EditAccountModal", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Delete account" }));
+    const permanentDelete = screen.getByRole("button", { name: "Permanently delete" });
+    expect(permanentDelete).toBeDisabled();
 
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Campus card"));
+    await userEvent.type(screen.getByLabelText("Type “Campus card” to confirm"), "Campus card");
+    await userEvent.click(permanentDelete);
+
     await waitFor(() => expect(onDelete).toHaveBeenCalledOnce());
   });
 });

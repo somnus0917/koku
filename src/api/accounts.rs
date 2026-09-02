@@ -123,7 +123,7 @@ async fn api_update_account(
     path = "/api/accounts/{account_id}",
     tag = "accounts",
     params(("account_id" = i64, Path)),
-    responses((status = 200, description = "Delete an unreferenced account"))
+    responses((status = 200, description = "Permanently delete an account and its related data"))
 )]
 async fn api_delete_account(
     Extension(user): Extension<AuthenticatedUser>,

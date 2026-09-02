@@ -700,8 +700,10 @@ export const zh = {
           dueDayPlaceholder: "例如 25",
           adjustmentNote: "余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。",
           delete: "删除账户",
-          confirmDelete: "永久删除账户“{{name}}”？此操作不可恢复。已有流水、持仓、定期或其他关联记录的账户不能删除。",
-          hasRelatedRecords: "该账户仍有流水、转账、持仓、定期、借款或其他关联记录，暂时不能删除。请先处理相关记录。",
+          confirmTitle: "确认永久删除",
+          confirmDelete: "账户“{{name}}”以及它的流水、持仓、定期、借款和自动规则将被永久删除。跨账户转账会从另一端撤销，且此操作无法恢复。",
+          confirmLabel: "输入“{{name}}”以确认",
+          confirmSubmit: "永久删除",
           deleteFailed: "删除账户失败"
         },
         account: {

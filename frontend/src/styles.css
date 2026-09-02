@@ -818,6 +818,60 @@ button:disabled {
   border-color: var(--expense);
 }
 
+.account-delete-confirm {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--expense) 34%, transparent);
+  border-radius: 13px;
+  background: var(--expense-soft);
+}
+
+.account-delete-confirm strong,
+.account-delete-confirm label > span {
+  display: block;
+  color: var(--expense);
+}
+
+.account-delete-confirm strong {
+  font-size: 13px;
+}
+
+.account-delete-confirm p {
+  margin: 5px 0 0;
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.65;
+}
+
+.account-delete-confirm label > span {
+  margin-bottom: 7px;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.account-delete-confirm input {
+  width: 100%;
+  height: 43px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--expense) 30%, var(--border));
+  border-radius: 10px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.account-delete-confirm > div:last-child {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.account-delete-confirm .danger-button {
+  margin-right: 0;
+}
+
 .page {
   width: min(1220px, calc(100% - 84px));
   margin: 0 auto;

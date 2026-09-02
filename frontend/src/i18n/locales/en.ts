@@ -700,8 +700,10 @@ export const en = {
           dueDayPlaceholder: "e.g. 25",
           adjustmentNote: "A balance adjustment creates a “Balance adjustment” entry for traceability; you can void it in the transaction list.",
           delete: "Delete account",
-          confirmDelete: "Permanently delete “{{name}}”? This cannot be undone. Accounts with transactions, holdings, deposits, or other linked records cannot be deleted.",
-          hasRelatedRecords: "This account still has transactions, transfers, holdings, deposits, loans, or other linked records. Remove those records first.",
+          confirmTitle: "Confirm permanent deletion",
+          confirmDelete: "“{{name}}” and its transactions, holdings, deposits, loans, and automation rules will be permanently deleted. Cross-account transfers will be reversed on the other account. This cannot be undone.",
+          confirmLabel: "Type “{{name}}” to confirm",
+          confirmSubmit: "Permanently delete",
           deleteFailed: "Failed to delete account"
         },
         account: {
