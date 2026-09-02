@@ -319,6 +319,7 @@ export const zh = {
         balanceAdjustment: "余额调整",
         created: "账户已创建",
         updated: "账户已更新",
+        deleted: "账户“{{name}}”已删除",
         loanRecorded: "借款已记录",
         repaid: "还款已入账",
         recurringCreated: "周期交易已创建",
@@ -697,7 +698,11 @@ export const zh = {
           statementDayPlaceholder: "例如 10",
           dueDay: "还款日（每月第几日）",
           dueDayPlaceholder: "例如 25",
-          adjustmentNote: "余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。"
+          adjustmentNote: "余额调整会生成一条“余额调整”流水用于追溯，可在交易列表撤销。",
+          delete: "删除账户",
+          confirmDelete: "永久删除账户“{{name}}”？此操作不可恢复。已有流水、持仓、定期或其他关联记录的账户不能删除。",
+          hasRelatedRecords: "该账户仍有流水、转账、持仓、定期、借款或其他关联记录，暂时不能删除。请先处理相关记录。",
+          deleteFailed: "删除账户失败"
         },
         account: {
           name: "账户名称",

@@ -34,6 +34,9 @@ export function updateAccount(
     body: JSON.stringify(input)
   });
 }
+export function deleteAccount(id: number): Promise<Account> {
+  return request(`/api/accounts/${id}`, { method: "DELETE" });
+}
 /** 信用卡账单摘要（额度/出账/未出账/账单与还款日）；仅对信用账户有效。 */
 export function getCreditCardSummary(accountId: number): Promise<CreditCardSummary> {
   return request(`/api/accounts/${accountId}/credit-card-summary`);

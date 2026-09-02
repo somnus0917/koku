@@ -319,6 +319,7 @@ export const en = {
         balanceAdjustment: "Balance adjustment",
         created: "Account created",
         updated: "Account updated",
+        deleted: "Account “{{name}}” deleted",
         loanRecorded: "Loan recorded",
         repaid: "Repayment recorded",
         recurringCreated: "Recurring rule created",
@@ -697,7 +698,11 @@ export const en = {
           statementDayPlaceholder: "e.g. 10",
           dueDay: "Due day (day of month)",
           dueDayPlaceholder: "e.g. 25",
-          adjustmentNote: "A balance adjustment creates a “Balance adjustment” entry for traceability; you can void it in the transaction list."
+          adjustmentNote: "A balance adjustment creates a “Balance adjustment” entry for traceability; you can void it in the transaction list.",
+          delete: "Delete account",
+          confirmDelete: "Permanently delete “{{name}}”? This cannot be undone. Accounts with transactions, holdings, deposits, or other linked records cannot be deleted.",
+          hasRelatedRecords: "This account still has transactions, transfers, holdings, deposits, loans, or other linked records. Remove those records first.",
+          deleteFailed: "Failed to delete account"
         },
         account: {
           name: "Account name",

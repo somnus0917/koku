@@ -1,7 +1,7 @@
 //! 编辑账户弹窗（改名/类型/币种/额度/账单日/还款日/余额调整）。
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, Trash2 } from "lucide-react";
 import { ModalShell } from "../../components/ModalShell";
 import { formatMoney } from "../../lib";
 import type { Account, AccountType } from "../../types";
@@ -10,7 +10,8 @@ export function EditAccountModal({
   account,
   currencies,
   onClose,
-  onSubmit
+  onSubmit,
+  onDelete
 }: {
   account: Account;
   currencies: string[];
@@ -26,6 +27,7 @@ export function EditAccountModal({
     };
     adjustment?: string;
   }) => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
   const [name, setName] = useState(account.name);
   const [type, setType] = useState<AccountType>(account.account_type);
@@ -78,6 +80,20 @@ export function EditAccountModal({
       setSubmitting(false);
     }
   };
+  const remove = async () => {
+    if (!window.confirm(t("modals.editAccount.confirmDelete", { name: account.name }))) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onDelete();
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "";
+      setError(message.includes("cannot delete an account with related")
+        ? t("modals.editAccount.hasRelatedRecords")
+        : message || t("modals.editAccount.deleteFailed"));
+      setSubmitting(false);
+    }
+  };
   return (
     <ModalShell eyebrow="EDIT ACCOUNT" title={t("accounts.editTitle")} onClose={onClose}>
       <form className="entry-form" onSubmit={submit}>
@@ -115,6 +131,7 @@ export function EditAccountModal({
         <p className="category-delete-note">{t("modals.editAccount.adjustmentNote")}</p>
         {error && <div className="form-error">{error}</div>}
         <div className="modal-actions">
+          <button type="button" className="danger-button" disabled={submitting} onClick={() => void remove()}><Trash2 size={16} />{t("modals.editAccount.delete")}</button>
           <button type="button" className="secondary-button" onClick={onClose}>{t("common.cancel")}</button>
           <button className="primary-button" disabled={submitting}>{submitting && <LoaderCircle className="spin" size={17} />}{t("common.save")}</button>
         </div>

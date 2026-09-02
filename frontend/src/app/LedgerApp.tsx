@@ -15,6 +15,7 @@ import {
   createTransaction,
   createTransfer,
   deleteCategory,
+  deleteAccount,
   deleteRecurringRule,
   deleteTransactionPermanently,
   loadReminders,
@@ -587,6 +588,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
           account={editAccount}
           currencies={currencies}
           onClose={() => setModal(null)}
+          onDelete={() => mutate(() => deleteAccount(editAccount.id), t("accounts.deleted", { name: editAccount.name }))}
           onSubmit={(input) =>
             mutate(
               async () => {

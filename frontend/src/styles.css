@@ -798,6 +798,26 @@ button:disabled {
   color: var(--text);
 }
 
+.danger-button {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-right: auto;
+  padding: 0 17px;
+  border: 1px solid color-mix(in srgb, var(--expense) 36%, transparent);
+  border-radius: 11px;
+  background: var(--expense-soft);
+  color: var(--expense);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: var(--expense);
+}
+
 .page {
   width: min(1220px, calc(100% - 84px));
   margin: 0 auto;
@@ -3129,6 +3149,7 @@ button:disabled {
   .form-grid label.span-two { grid-column: auto; }
   .primary-button,
   .secondary-button,
+  .danger-button,
   .icon-button { min-height: 44px; }
   .category-library {
     max-height: 34vh;

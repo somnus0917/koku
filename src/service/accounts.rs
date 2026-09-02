@@ -543,6 +543,28 @@ impl BookkeepingService {
         rows.map(|row| account_from_row(row?)).collect()
     }
 
+    /// 永久删除一个未被任何账务记录或配置引用的账户。
+    ///
+    /// 账户一旦有流水、转账、持仓、定期、借款、周期规则等关联数据就拒绝
+    /// 删除，避免破坏历史账本的完整性。调用方可先删除相关记录，再重试。
+    pub fn delete_account(&mut self, id: i64) -> Result<Account> {
+        let account = self.account(id)?;
+        match self
+            .conn
+            .execute("DELETE FROM accounts WHERE id = ?1", [id])
+        {
+            Ok(_) => Ok(account),
+            Err(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(KokuError::InvalidInput(
+                    "cannot delete an account with related transactions or records".to_owned(),
+                ))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// 资产负债汇总：`currency` 为显示币种，所有币种的账户余额与未结借款统一折算。
     pub fn balance_summary(&self, currency: &str) -> Result<BalanceSummary> {
         let currency = normalize_currency(currency.to_owned())?;
@@ -800,6 +822,36 @@ mod atomic_account_edit_tests {
         assert_eq!(stored.name, "Changed");
         assert_eq!(stored.balance, Decimal::from(110_u32));
         assert_eq!(service.transactions(100, 0)?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_account_can_be_deleted() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("Campus card", AccountType::Cash, "CNY", Decimal::ZERO)?;
+
+        let deleted = service.delete_account(account.id)?;
+
+        assert_eq!(deleted.id, account.id);
+        assert!(matches!(
+            service.account(account.id),
+            Err(KokuError::NotFound { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn account_with_transaction_history_cannot_be_deleted() -> Result<()> {
+        let mut service = BookkeepingService::in_memory()?;
+        let account =
+            service.create_account("WeChat", AccountType::Cash, "CNY", Decimal::from(100_u32))?;
+        service.adjust_balance(account.id, Decimal::TEN, "adjust")?;
+
+        let result = service.delete_account(account.id);
+
+        assert!(matches!(result, Err(KokuError::InvalidInput(_))));
+        assert_eq!(service.account(account.id)?.name, "WeChat");
         Ok(())
     }
 }

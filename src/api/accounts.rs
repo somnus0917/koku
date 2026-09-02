@@ -118,6 +118,24 @@ async fn api_update_account(
     Ok(Json(ApiResponse::new(account)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/accounts/{account_id}",
+    tag = "accounts",
+    params(("account_id" = i64, Path)),
+    responses((status = 200, description = "Delete an unreferenced account"))
+)]
+async fn api_delete_account(
+    Extension(user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    AxumPath(account_id): AxumPath<i64>,
+) -> Result<Json<ApiResponse<Account>>> {
+    let account = lock_ledger(&state, user.user_id)
+        .await?
+        .delete_account(account_id)?;
+    Ok(Json(ApiResponse::new(account)))
+}
+
 /// 信用卡账单摘要（额度/出账/未出账/账单与还款日）；仅对 Credit 账户有效。
 #[utoipa::path(
     get,
@@ -179,7 +197,10 @@ async fn api_adjust_balance(
 pub(super) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/accounts", get(api_accounts).post(api_create_account))
-        .route("/api/accounts/{account_id}", patch(api_update_account))
+        .route(
+            "/api/accounts/{account_id}",
+            patch(api_update_account).delete(api_delete_account),
+        )
         .route(
             "/api/accounts/{account_id}/credit-card-summary",
             get(api_credit_card_summary),
@@ -198,6 +219,7 @@ api_doc!(
     AccountsApi: api_accounts,
     api_create_account,
     api_update_account,
+    api_delete_account,
     api_credit_card_summary,
     api_credit_card_statements,
     api_adjust_balance,
