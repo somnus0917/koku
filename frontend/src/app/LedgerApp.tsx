@@ -58,6 +58,7 @@ import { RefundModal } from "../features/refunds/RefundModal";
 import { ReconciliationModal } from "../features/reconciliation/ReconciliationModal";
 import { RecurringModal } from "../features/recurring/RecurringModal";
 import { EditTransactionModal } from "../features/transactions/EditTransactionModal";
+import { DeleteTransactionModal } from "../features/transactions/DeleteTransactionModal";
 import { ImportModal } from "../features/transactions/ImportModal";
 import { TransactionModal } from "../features/transactions/TransactionModal";
 import { COMMON_CURRENCIES, availableCurrencies, currentMonthValue } from "../lib";
@@ -89,6 +90,7 @@ type Modal =
   | "repay"
   | "edit-account"
   | "edit-transaction"
+  | "delete-transaction"
   | "recurring"
   | "trade"
   | "password"
@@ -122,6 +124,7 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
   const [modal, setModal] = useState<Modal>(null);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   const [editTransaction, setEditTransaction] = useState<Transaction | null>(null);
+  const [deleteTransactionTarget, setDeleteTransactionTarget] = useState<Transaction | null>(null);
   const [depositFrom, setDepositFrom] = useState<Account | null>(null);
   const [settleTarget, setSettleTarget] = useState<Deposit | null>(null);
   const [reimburseTarget, setReimburseTarget] = useState<Transaction | null>(null);
@@ -421,9 +424,8 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               runMutation(() => restoreTransaction(transaction.id), t("transactions.restored"))
             }
             onDeletePermanently={(transaction) => {
-              const label = transaction.note || transaction.kind;
-              if (!window.confirm(t("transactions.confirmDeletePermanent", { label }))) return;
-              runMutation(() => deleteTransactionPermanently(transaction.id), t("transactions.deletedPermanently"));
+              setDeleteTransactionTarget(transaction);
+              setModal("delete-transaction");
             }}
             onMarkReimbursable={(transaction) =>
               runMutation(() => markReimbursable(transaction.id), t("transactions.markedReimbursable"))
@@ -758,6 +760,16 @@ export function LedgerApp({ username, role, userId, onLogout }: { username: stri
               t("transactions.updated")
             )
           }
+        />
+      )}
+      {modal === "delete-transaction" && deleteTransactionTarget && (
+        <DeleteTransactionModal
+          transaction={deleteTransactionTarget}
+          onClose={() => { setModal(null); setDeleteTransactionTarget(null); }}
+          onConfirm={() => mutate(
+            () => deleteTransactionPermanently(deleteTransactionTarget.id),
+            t("transactions.deletedPermanently")
+          )}
         />
       )}
       {toast && (

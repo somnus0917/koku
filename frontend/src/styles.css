@@ -804,7 +804,6 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin-right: auto;
   padding: 0 17px;
   border: 1px solid color-mix(in srgb, var(--expense) 36%, transparent);
   border-radius: 11px;
@@ -812,6 +811,10 @@ button:disabled {
   color: var(--expense);
   font-size: 13px;
   font-weight: 700;
+}
+
+.modal-actions > .danger-button:first-child {
+  margin-right: auto;
 }
 
 .danger-button:hover:not(:disabled) {
@@ -1719,12 +1722,54 @@ button:disabled {
   background: color-mix(in srgb, var(--danger, #d64545) 12%, transparent);
 }
 
-.transaction-row.voided {
+.transaction-row.voided > :not(.row-menu-wrap) {
   opacity: 0.45;
 }
 
 .transaction-row.voided strong {
   text-decoration: line-through;
+}
+
+.transaction-row.voided .row-menu strong,
+.transaction-row.voided .row-menu button {
+  text-decoration: none;
+}
+
+.permanent-delete-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid color-mix(in srgb, var(--expense) 34%, transparent);
+  border-radius: 13px;
+  background: var(--expense-soft);
+  color: var(--expense);
+}
+
+.permanent-delete-warning svg {
+  flex: 0 0 auto;
+}
+
+.permanent-delete-warning strong,
+.permanent-delete-warning span {
+  display: block;
+}
+
+.permanent-delete-warning strong {
+  font-size: 13px;
+}
+
+.permanent-delete-warning span {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.permanent-delete-warning p {
+  margin: 9px 0 0;
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.65;
 }
 
 .category-bars {

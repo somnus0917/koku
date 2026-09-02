@@ -770,6 +770,11 @@ export const en = {
           note: "All sessions will be invalidated after the change; you will need to sign in again.",
           submit: "Save and sign in again"
         },
+        deleteTransaction: {
+          title: "Permanently delete transaction",
+          warning: "This voided transaction and its receipt, tags, splits, reimbursement, and refund links will be permanently deleted and cannot be recovered.",
+          failed: "Failed to permanently delete the transaction"
+        },
         import: {
           title: "Import transactions",
           imported: "{{count}} imported",

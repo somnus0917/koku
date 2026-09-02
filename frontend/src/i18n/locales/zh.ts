@@ -770,6 +770,11 @@ export const zh = {
           note: "修改后所有登录会话将失效，需要重新登录。",
           submit: "保存并重新登录"
         },
+        deleteTransaction: {
+          title: "永久删除流水",
+          warning: "这笔已撤销流水及其小票、标签、拆分、报销与退款关联将被永久删除，之后无法恢复。",
+          failed: "永久删除流水失败"
+        },
         import: {
           title: "导入交易",
           imported: "{{count}}成功导入",
